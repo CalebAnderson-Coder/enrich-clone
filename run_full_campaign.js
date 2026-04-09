@@ -48,7 +48,8 @@ const NICHE = nicheRow.en; // We use English for mapping/scraping effectiveness
 INSTRUCCIONES PARA MANAGER:
 1. Delega a 'scout' que busque EXACTAMENTE 1 negocio TOTALMENTE REAL para este nicho en la ciudad indicada, usando sus capacidades nativas de Búsqueda en Google (Google Search Grounding).
 2. Scout debe usar búsquedas reales para extraer y confirmar el nombre exacto de la empresa, su sitio web real, su teléfono de contacto auténtico, rating y cantidad de reviews. NADA DE DATOS FICTICIOS.
-3. Devuelve la respuesta en formato JSON estrictamente (dentro de un bloque de código \`\`\`json y \`\`\`).
+3. ADEMÁS: Busca y extrae el link exacto de Google Maps de la empresa, su URL de Facebook, su URL de Instagram y su URL de LinkedIn (si las tiene, de lo contrario devuelve null).
+4. Devuelve la respuesta en formato JSON estrictamente (dentro de un bloque de código \`\`\`json y \`\`\`).
 El formato debe ser EXACTAMENTE este:
 {
   "business_name": "Nombre de la empresa",
@@ -56,6 +57,10 @@ El formato debe ser EXACTAMENTE este:
   "phone": "telefono",
   "rating": 4.5,
   "review_count": 100,
+  "google_maps_url": "https://maps.google.com/...",
+  "facebook_url": "https://facebook.com/...",
+  "instagram_url": "https://instagram.com/...",
+  "linkedin_url": "https://linkedin.com/...",
   "radar_summary": "Resumen general"
 }`;
 
@@ -101,24 +106,48 @@ El formato debe ser EXACTAMENTE este:
 "${radarResult.response.slice(0, 300)}... (Resumen del radar)"
 
 INSTRUCCIONES DE DELEGACIÓN ESTRICTA EN ORDEN:
-1. Delega a 'Helena', 'Sam' y 'Kai' para hacer una radiografía técnica de este lead.
-2. Con los hallazgos, delega a 'Carlos Empirika' para armar el 'Attack Angle' estratégico enfocado en el mercado hispano.
-3. Con el Angle de Carlos listo, delega a 'Angela' para crear el copy de multi-contacto.
-4. Devuélveme a mí todo consolidado (Radiografía, Approach Carlos, y mensajes de Angela) en español.`;
+1. Usa tus herramientas de búsqueda web (o delega a scout) para buscar la presencia real exhaustiva online de esta empresa.
+2. Delega a 'Helena', 'Sam' y 'Kai' para hacer una radiografía técnica de este lead basada en los resultados de la web.
+3. Con los hallazgos, delega a 'Carlos Empirika' para armar el 'Attack Angle' estratégico enfocado en el mercado hispano.
+4. Con el Angle de Carlos listo, delega a 'Angela' para crear el copy de multi-contacto.
+5. Devuelve todo consolidado estrictamente en formato JSON usando este esquema (usando un bloque de código \`\`\`json y \`\`\`):
+{
+  "radiography_technical": "1-2 Párrafos reales de la evaluación técnica web, redes, y presencia local",
+  "attack_angle": "El ángulo de ventas de Carlos en 1 párrafo directo",
+  "outreach_copy": "El asunto y cuerpo original creado por Angela"
+}`;
 
     const enrichResult = await runtime.run('Manager', enrichPrompt, { currentAgent: 'Manager', maxIterations: 30 });
     console.log(`\n✅ [Fase 2 Completada] Mega Perfil y Estrategia:\n${enrichResult.response}`);
+
+    let enrichData = {
+        radiography_technical: "Análisis no extraído del JSON pero agente lo analizó",
+        attack_angle: enrichResult.response,
+        outreach_copy: "Delegado"
+    };
+
+    try {
+        const jsonMatch = enrichResult.response.match(/```(?:json)?\s*(\{[\s\S]*?\})\s*```/);
+        if (jsonMatch) {
+            enrichData = JSON.parse(jsonMatch[1]);
+        } else {
+            const fallbackMatch = enrichResult.response.match(/\{[\s\S]*?\}/);
+            if (fallbackMatch) enrichData = JSON.parse(fallbackMatch[0]);
+        }
+    } catch(e) {
+        console.log("Error parsing JSON result from Francotirador", e);
+    }
 
     // Guardar los datos del atacante
     if (prospect) {
         await saveCampaignData({
             prospect_id: prospect.id,
-            radiography_technical: "Ver raw data (Agentes combinados en respuesta final)",
-            attack_angle: enrichResult.response, // Saving the full response temporarily, future update will parse this
-            outreach_copy: "Delegado a Angela",
+            radiography_technical: enrichData.radiography_technical || "Sin Radiografía.",
+            attack_angle: enrichData.attack_angle || "Sin Ángulo.",
+            outreach_copy: enrichData.outreach_copy || "Sin Copy.",
             status: 'PENDING'
         });
-        console.log(`\n💾 Ángulo de ataque y copies asociados al prospecto en Supabase.`);
+        console.log(`\n💾 Ángulo de ataque y copies asociados al prospecto en Supabase almacenados limpiamente.`);
     }
 
     process.exit(0);

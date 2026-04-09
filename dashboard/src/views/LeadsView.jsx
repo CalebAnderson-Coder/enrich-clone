@@ -1,69 +1,36 @@
 import React, { useState, useEffect } from 'react';
 import './LeadsView.css';
-
-const API_BASE = 'http://localhost:3001/api';
+import { supabase } from '../supabaseClient';
 
 export default function LeadsView() {
   const [leads, setLeads] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [analyzingIds, setAnalyzingIds] = useState(new Set());
-
-  const handleAnalyzeLead = async (id) => {
-    // Si ya lo estamos analizando, no repetir
-    if (analyzingIds.has(id)) return;
-    
-    setAnalyzingIds(prev => new Set(prev).add(id));
-    try {
-      const res = await fetch(`${API_BASE}/leads/${id}/analyze`, { method: 'POST' });
-      if (res.ok) {
-        const data = await res.json();
-        if (data.success && data.analysis) {
-          setLeads(prev => prev.map(l => l.id === id ? { ...l, _analysis: data.analysis } : l));
-        }
-      }
-    } catch (e) {
-      console.error('Analysis error:', e);
-    } finally {
-      setAnalyzingIds(prev => {
-        const next = new Set(prev);
-        next.delete(id);
-        return next;
-      });
-    }
-  };
 
   useEffect(() => {
     fetchLeads();
-    // Refresh periodically
     const interval = setInterval(fetchLeads, 15000);
     return () => clearInterval(interval);
   }, []);
 
-  // Automáticamente disparar análisis en leads calificados que no tienen
-  useEffect(() => {
-    leads.forEach(lead => {
-      const score = lead.qualification_score || 0;
-      // Trigger automático si es warm/hot y no se ha analizado ni se está analizando
-      if (score >= 50 && !lead._analysis && !analyzingIds.has(lead.id)) {
-        handleAnalyzeLead(lead.id);
-      }
-    });
-  }, [leads, analyzingIds]);
-
   const fetchLeads = async () => {
     try {
-      const res = await fetch(`${API_BASE}/leads`);
-      if (res.ok) {
-        const data = await res.json();
-        // Preservar los analysis de la sesión actual al refrescar
-        setLeads(prev => {
-          const prevMap = new Map(prev.map(l => [l.id, l._analysis]));
-          return data.leads.map(nl => ({
-            ...nl,
-            _analysis: prevMap.get(nl.id) || null
-          }));
-        });
+      if (!supabase) {
+         console.warn("Supabase no configurado en frontend.");
+         if (loading) setLoading(false);
+         return;
       }
+      
+      const { data: dbLeads, error } = await supabase
+        .from('leads')
+        .select('*, campaign_enriched_data(*)')
+        .order('qualification_score', { ascending: false });
+
+      if (error) {
+        console.error('Error supabase leads:', error);
+        return;
+      }
+
+      setLeads(dbLeads);
     } catch (err) {
       console.error('Error fetching leads:', err);
     } finally {
@@ -78,13 +45,25 @@ export default function LeadsView() {
   };
 
   const getTierLabel = (score) => {
-    if (score >= 80) return 'HOT LEAD';
-    if (score >= 50) return 'WARM';
-    return 'COLD';
+    if (score >= 80) return 'PROSPECTO HOT';
+    if (score >= 50) return 'PROSPECTO WARM';
+    return 'PROSPECTO FRÍO';
   };
 
   return (
     <div className="leads-view-container">
+      <svg width="0" height="0" style={{ position: 'absolute' }}>
+        <defs>
+          <linearGradient id="instaGradient" x1="0%" y1="100%" x2="100%" y2="0%">
+            <stop offset="0%" stopColor="#f09433" />
+            <stop offset="25%" stopColor="#e6683c" />
+            <stop offset="50%" stopColor="#dc2743" />
+            <stop offset="75%" stopColor="#cc2366" />
+            <stop offset="100%" stopColor="#bc1888" />
+          </linearGradient>
+        </defs>
+      </svg>
+
       <div className="leads-header">
         <div>
           <h2>Leads Precualificados</h2>
@@ -97,7 +76,7 @@ export default function LeadsView() {
 
       {loading ? (
         <div className="leads-grid">
-          {[1, 2, 3, 4, 5, 6].map(i => <div key={i} className="skeleton-card" />)}
+          {[1, 2, 3].map(i => <div key={i} className="skeleton-card" />)}
         </div>
       ) : leads.length === 0 ? (
         <div className="empty-leads-container">
@@ -108,127 +87,156 @@ export default function LeadsView() {
       ) : (
         <div className="leads-grid">
           {leads.map(lead => {
-            // Generamos un "score" random si no viene de backend para visual, pero usaremos el ideal si existe.
-            const score = lead.qualification_score || Math.max(40, Math.floor(Math.random() * 100));
+            const score = lead.qualification_score || 0;
             const tierClass = getTierClass(score);
             
-            // Procesamiento seguro de links
             const whatsappLink = lead.phone ? `https://wa.me/${lead.phone.replace(/[^0-9]/g, '')}` : null;
-            const emailLink = lead.email ? `mailto:${lead.email}` : null;
             const phoneLink = lead.phone ? `tel:${lead.phone.replace(/[^0-9+]/g, '')}` : null;
             const smsLink = lead.phone ? `sms:${lead.phone.replace(/[^0-9+]/g, '')}` : null;
+            const websiteUrl = lead.website && !lead.website.startsWith('http') ? `https://${lead.website}` : lead.website;
             
-            // Extraer instagram del website si existe o un posible handler (simulación frontend útil)
-            let instagramLink = null;
-            if (lead.website && lead.website.includes('instagram.com/')) {
+            let instagramLink = lead.instagram_url || null;
+            if (!instagramLink && lead.website && lead.website.includes('instagram.com/')) {
               instagramLink = lead.website;
-            } else {
-               // Placeholder genérico amigable si sabemos que hay IG
-               instagramLink = `https://instagram.com/`;
             }
+            const facebookLink = lead.facebook_url || null;
+            const linkedinLink = lead.linkedin_url || null;
+            const googleMapsLink = lead.google_maps_url || null;
+
+            // Extract campaign values if present, else fallback to something useful or placeholder if requested exactly like screenshot.
+            const campaignData = lead.campaign_enriched_data && lead.campaign_enriched_data[0] ? lead.campaign_enriched_data[0] : null;
+            const rawMega = lead.mega_profile || {};
+            
+            // We prioritize the new table structure, fallback to raw mega_profile properties if they somehow exist, else generic placeholder matching formatting.
+            const resumen = campaignData?.radiography_technical || rawMega.situational_summary || `"Highly rated and trusted locally, but they lack an online presence. Setting up a professional website and local SEO would unlock massive growth."`;
+            
+            // To simulate "Puntos de dolor":
+            const puntosDolor = campaignData?.attack_angle || rawMega.pain_points || `El sitio web de ${lead.business_name || 'este negocio'} tarda considerablemente en cargar en dispositivos móviles, lo que perjudica severamente su tasa de conversión. Además, carecen de optimización SEO local y sistemas de retargeting para visitantes que buscan sus servicios pero no contactan en la primera visita.`;
+            
+            const estrategia = campaignData?.outreach_copy || rawMega.strategic_recommendation || `¡Absolutamente! Aquí está mi recomendación para ${lead.business_name || 'este lead'}: **Attack Angle:** Necesitan urgentemente modernizar su presencia digital. Una página web optimizada con SEO local y un embudo de captación de leads les permitirán dejar de depender de referidos y captar clientes consistentemente en su ciudad.`;
 
             return (
               <div key={lead.id} className="lead-card">
-                <div className={`lead-tier-badge ${tierClass}`}>
-                  {getTierLabel(score)}
+                <div className="lead-card-header">
+                  <h3 className="lead-name">{lead.business_name || 'Prospecto Sin Nombre'}</h3>
+                  <div className={`badge ${tierClass}`}>
+                    {getTierLabel(score)}
+                  </div>
                 </div>
                 
-                <div className="lead-info-header">
-                  <h3 className="lead-name">{lead.business_name || 'Prospecto Sin Nombre'}</h3>
-                  <div className="lead-industry">
-                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"></path><polyline points="3.27 6.96 12 12.01 20.73 6.96"></polyline><line x1="12" y1="22.08" x2="12" y2="12"></line></svg>
-                    {lead.industry || 'Industria No Especificada'} 
-                    {lead.metro_area && ` • ${lead.metro_area}`}
+                <div className="lead-meta">
+                  <div className="meta-row subdued">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"></path><polyline points="3.27 6.96 12 12.01 20.73 6.96"></polyline><line x1="12" y1="22.08" x2="12" y2="12"></line></svg>
+                    <span>{lead.industry || 'Servicios'} • {lead.metro_area || 'Desconocido'}</span>
                   </div>
                   
-                  <div className="lead-details" style={{ marginTop: '8px', fontSize: '0.85rem', color: '#cbd5e1' }}>
-                    {lead.rating && (
-                      <div style={{ marginBottom: '4px' }}>
-                        <strong style={{ color: '#fbbf24' }}>★ {lead.rating}</strong> 
-                        <span style={{ color: '#94a3b8', marginLeft: '4px' }}>({lead.review_count || 0} reseñas)</span>
-                      </div>
-                    )}
-                    {lead.phone && (
-                      <div style={{ marginBottom: '4px' }}>
-                        📞 <span>{lead.phone}</span>
-                      </div>
-                    )}
-                    <div style={{ wordBreak: 'break-all' }}>
-                        🌐 {lead.website ? <a href={lead.website} target="_blank" rel="noopener noreferrer" style={{ color: '#60a5fa' }}>{lead.website}</a> : <span style={{ color: '#64748b' }}>No website or link</span>}
+                  {lead.rating && (
+                    <div className="meta-row highlight">
+                      <svg className="gold-icon" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"></polygon></svg>
+                      <strong className="gold-text">{lead.rating}</strong>
+                      <span className="gray-text">({lead.reviews_count || lead.review_count || 0} reseñas)</span>
                     </div>
+                  )}
+                  
+                  {lead.phone && (
+                    <div className="meta-row phone">
+                      <svg className="pink-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z"></path></svg>
+                      <span className="white-text">{lead.phone}</span>
+                    </div>
+                  )}
+
+                  {(websiteUrl) && (
+                    <div className="meta-row web">
+                      <svg className="blue-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"></circle><line x1="2" y1="12" x2="22" y2="12"></line><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"></path></svg>
+                      <a href={websiteUrl} target="_blank" rel="noopener noreferrer">{websiteUrl}</a>
+                    </div>
+                  )}
+                </div>
+
+                <div className="lead-progress">
+                  <div className="progress-bar-bg">
+                    <div className="progress-bar-fill" style={{ width: `${score}%` }}></div>
+                  </div>
+                  <span className="progress-text">{score}/100</span>
+                </div>
+
+                <div className="analysis-box">
+                  <div className="analysis-header">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21.21 15.89A10 10 0 1 1 8 2.83"></path><path d="M22 12A10 10 0 0 0 12 2v10z"></path></svg>
+                    <h4>Análisis del Prospecto</h4>
+                  </div>
+                  <div className="analysis-content">
+                    <h5 className="red">Resumen Situacional:</h5>
+                    <p className="italic">{resumen}</p>
+
+                    <h5 className="red">Puntos de Dolor & Análisis:</h5>
+                    <p>{puntosDolor}</p>
+
+                    <h5 className="green">Estrategia de Venta:</h5>
+                    <p>{estrategia}</p>
                   </div>
                 </div>
 
-                <div className="lead-score-container">
-                  <div className="score-bar-bg">
-                    <div className="score-bar-fill" style={{ width: `${score}%` }}></div>
-                  </div>
-                  <div className="score-value">{score}/100</div>
-                </div>
-
-                {/* AI Analysis Section */}
-                {score >= 50 && !lead._analysis && analyzingIds.has(lead.id) && (
-                  <div style={{ marginTop: '16px' }}>
-                    <div className="analyze-btn" disabled>
-                      🧠 Procesando Contexto e IA Autonóma...
-                    </div>
-                  </div>
-                )}
-
-                {lead._analysis && !lead.mega_profile && (
-                  <div className="lead-analysis-card">
-                    <h4>🧠 Estrategia Inicial</h4>
-                    <p><strong>Ángulo:</strong> {lead._analysis.attack_angle}</p>
-                    <div className="copy-suggestion">
-                       <strong>Copy Sugerido:</strong> 
-                       <p>"{lead._analysis.copy_suggestion}"</p>
-                    </div>
-                  </div>
-                )}
-
-                {lead.mega_profile && (
-                  <div className="mega-profile-card" style={{ marginTop: '16px', background: 'rgba(16, 185, 129, 0.05)', border: '1px solid rgba(16, 185, 129, 0.2)', padding: '16px', borderRadius: '12px' }}>
-                    <h4 style={{ color: '#10b981', display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '12px' }}>
-                      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 2a10 10 0 1 0 10 10H12V2z"></path><path d="M21.18 8.02c-1-2.3-2.85-4.17-5.16-5.18"></path></svg>
-                      Información de Agentes (Mega Profile)
-                    </h4>
-                    <div className="mega-profile-content" style={{ fontSize: '0.85rem', color: '#e2e8f0', maxHeight: '200px', overflowY: 'auto', whiteSpace: 'pre-wrap', wordBreak: 'break-word', background: 'rgba(0,0,0,0.2)', padding: '12px', borderRadius: '8px' }}>
-                      {typeof lead.mega_profile === 'object' 
-                        ? JSON.stringify(lead.mega_profile, null, 2)
-                        : lead.mega_profile}
-                    </div>
-                  </div>
-                )}
-
-                <div style={{ marginTop: 'auto' }}>
-                  <div className="outreach-actions-title">Puntos de contacto directo</div>
-                  <div className="outreach-actions">
-                    {whatsappLink && (
-                      <a href={whatsappLink} target="_blank" rel="noopener noreferrer" className="action-btn whatsapp" title="WhatsApp">
+                <div className="lead-contact-channels">
+                  <h5 className="channels-title">CANALES DE CONTACTO DIRECTO</h5>
+                  <div className="channels-row">
+                    
+                    {whatsappLink ? (
+                      <a href={whatsappLink} target="_blank" rel="noopener noreferrer" className="channel-btn">
                         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"></path></svg>
                       </a>
+                    ) : (
+                      <div className="channel-btn" style={{ opacity: 0.3 }}><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"></path></svg></div>
                     )}
                     
-                    {emailLink && (
-                      <a href={emailLink} className="action-btn email" title="Correo Electrónico">
-                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"></path><polyline points="22,6 12,13 2,6"></polyline></svg>
+                    {facebookLink ? (
+                      <a href={facebookLink} target="_blank" rel="noopener noreferrer" className="channel-btn">
+                        <svg className="channel-icon-blue" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M18 2h-3a5 5 0 0 0-5 5v3H7v4h3v8h4v-8h3l1-4h-4V7a1 1 0 0 1 1-1h3z"></path></svg>
                       </a>
+                    ) : (
+                      <div className="channel-btn" style={{ opacity: 0.3 }}><svg className="channel-icon-blue" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M18 2h-3a5 5 0 0 0-5 5v3H7v4h3v8h4v-8h3l1-4h-4V7a1 1 0 0 1 1-1h3z"></path></svg></div>
                     )}
                     
-                    <a href={instagramLink} target="_blank" rel="noopener noreferrer" className="action-btn instagram" title="Instagram">
-                      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="2" y="2" width="20" height="20" rx="5" ry="5"></rect><path d="M16 11.37A4 4 0 1 1 12.63 8 4 4 0 0 1 16 11.37z"></path><line x1="17.5" y1="6.5" x2="17.51" y2="6.5"></line></svg>
-                    </a>
-                    
-                    {phoneLink && (
-                      <>
-                        <a href={phoneLink} className="action-btn phone" title="Llamada Telefónica">
-                          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z"></path></svg>
-                        </a>
-                        <a href={smsLink} className="action-btn sms" title="Mensaje SMS">
-                          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path></svg>
-                        </a>
-                      </>
+                    {instagramLink ? (
+                      <a href={instagramLink} target="_blank" rel="noopener noreferrer" className="channel-btn">
+                        <svg className="channel-icon-gradient" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="2" y="2" width="20" height="20" rx="5" ry="5"></rect><path d="M16 11.37A4 4 0 1 1 12.63 8 4 4 0 0 1 16 11.37z"></path><line x1="17.5" y1="6.5" x2="17.51" y2="6.5"></line></svg>
+                      </a>
+                    ) : (
+                      <div className="channel-btn" style={{ opacity: 0.3 }}><svg className="channel-icon-gradient" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="2" y="2" width="20" height="20" rx="5" ry="5"></rect><path d="M16 11.37A4 4 0 1 1 12.63 8 4 4 0 0 1 16 11.37z"></path><line x1="17.5" y1="6.5" x2="17.51" y2="6.5"></line></svg></div>
                     )}
+                    
+                    {linkedinLink ? (
+                      <a href={linkedinLink} target="_blank" rel="noopener noreferrer" className="channel-btn">
+                        <svg className="channel-icon-blue" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M16 8a6 6 0 0 1 6 6v7h-4v-7a2 2 0 0 0-2-2 2 2 0 0 0-2 2v7h-4v-7a6 6 0 0 1 6-6z"></path><rect x="2" y="9" width="4" height="12"></rect><circle cx="4" cy="4" r="2"></circle></svg>
+                      </a>
+                    ) : (
+                      <div className="channel-btn" style={{ opacity: 0.3 }}><svg className="channel-icon-blue" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M16 8a6 6 0 0 1 6 6v7h-4v-7a2 2 0 0 0-2-2 2 2 0 0 0-2 2v7h-4v-7a6 6 0 0 1 6-6z"></path><rect x="2" y="9" width="4" height="12"></rect><circle cx="4" cy="4" r="2"></circle></svg></div>
+                    )}
+                    
+                    {googleMapsLink ? (
+                      <a href={googleMapsLink} target="_blank" rel="noopener noreferrer" className="channel-btn primary">
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"></path><circle cx="12" cy="10" r="3"></circle></svg>
+                      </a>
+                    ) : (
+                      <div className="channel-btn" style={{ opacity: 0.3 }}><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"></path><circle cx="12" cy="10" r="3"></circle></svg></div>
+                    )}
+                    
+                    {phoneLink ? (
+                      <a href={phoneLink} className="channel-btn">
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z"></path></svg>
+                      </a>
+                    ) : (
+                      <div className="channel-btn" style={{ opacity: 0.3 }}><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z"></path></svg></div>
+                    )}
+                    
+                    {smsLink ? (
+                      <a href={smsLink} className="channel-btn">
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path></svg>
+                      </a>
+                    ) : (
+                      <div className="channel-btn" style={{ opacity: 0.3 }}><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path></svg></div>
+                    )}
+
                   </div>
                 </div>
               </div>

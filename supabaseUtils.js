@@ -23,13 +23,31 @@ export async function createMarketingJob(brandId, taskType, payload) {
 // Prospect Storage
 export async function saveProspect(prospectData) {
     if(!supabase) return null;
+
+    const leadPayload = {
+      business_name: prospectData.business_name,
+      website: prospectData.website || '',
+      phone: prospectData.phone || '',
+      rating: prospectData.rating || 0,
+      review_count: prospectData.reviews_count || 0,
+      google_maps_url: prospectData.raw_data?.radar_parsed?.google_maps_url || null,
+      facebook_url: prospectData.raw_data?.radar_parsed?.facebook_url || null,
+      instagram_url: prospectData.raw_data?.radar_parsed?.instagram_url || null,
+      linkedin_url: prospectData.raw_data?.radar_parsed?.linkedin_url || null,
+      mega_profile: prospectData.raw_data || {},
+      metro_area: prospectData.city || 'Desconocido',
+      industry: 'Servicios',
+      qualification_score: 0,
+      lead_tier: 'COLD'
+    };
+
     const { data, error } = await supabase
-        .from('prospects')
-        .insert([prospectData])
+        .from('leads')
+        .insert([leadPayload])
         .select();
     
     if(error) {
-        console.error("Error saving prospect", error);
+        console.error("Error saving prospect into leads", error);
         return null;
     }
     return data ? data[0] : null;
@@ -38,14 +56,39 @@ export async function saveProspect(prospectData) {
 // Enriched Data Storage
 export async function saveCampaignData(campaignData) {
     if(!supabase) return null;
-    const { data, error } = await supabase
-        .from('campaign_enriched_data')
-        .insert([campaignData])
-        .select();
+
+    const jobPayload = {
+        agent_name: 'Data Enrichment',
+        task_type: 'radiography',
+        status: campaignData.status || 'ENRICHED',
+        payload: { target_lead_id: campaignData.prospect_id },
+        result: {
+            radiography: campaignData.radiography_technical,
+            attack: campaignData.attack_angle,
+            outreach: campaignData.outreach_copy
+        }
+    };
+
+    const campaignPayload = {
+        prospect_id: campaignData.prospect_id,
+        radiography_technical: campaignData.radiography_technical,
+        attack_angle: campaignData.attack_angle,
+        outreach_copy: campaignData.outreach_copy,
+        status: campaignData.status || 'ENRICHED'
+    };
+
+    const [jobsResult, campaignResult] = await Promise.all([
+        supabase.from('jobs').insert([jobPayload]).select(),
+        supabase.from('campaign_enriched_data').insert([campaignPayload]).select()
+    ]);
     
-    if(error) {
-        console.error("Error saving campaign enriched data", error);
-        return null;
+    if(jobsResult.error) {
+        console.error("Error saving campaign enriched data into jobs", jobsResult.error);
     }
-    return data ? data[0] : null;
+    if (campaignResult.error) {
+        console.error("Error saving campaign enriched data into campaign_enriched_data", campaignResult.error);
+    }
+
+    // Prefer returning the campaign data as it's the primary record type for leads
+    return campaignResult.data ? campaignResult.data[0] : null;
 }
