@@ -1,0 +1,8 @@
+node_modules/
+.env
+.tmp/
+db_fallback/
+*.log
+.DS_Store
+enrich-dashboard/node_modules/
+enrich-dashboard/.env

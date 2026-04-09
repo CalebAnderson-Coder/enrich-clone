@@ -1,0 +1,30 @@
+{
+  "name": "enrich-clone",
+  "version": "1.0.0",
+  "type": "module",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "dev": "node --watch index.js",
+    "test": "node test.js"
+  },
+  "keywords": [
+    "ai-marketing",
+    "autonomous-agents",
+    "swarmclaw"
+  ],
+  "author": "Agencia IA",
+  "license": "ISC",
+  "description": "Autonomous AI Marketing Agency Runtime — Enrich Labs Clone",
+  "dependencies": {
+    "@google/generative-ai": "^0.24.1",
+    "@supabase/supabase-js": "^2.101.1",
+    "cors": "^2.8.6",
+    "dotenv": "^17.4.1",
+    "express": "^5.2.1",
+    "fs-extra": "^11.3.4",
+    "groq-sdk": "^1.1.2",
+    "node-cron": "^4.2.1",
+    "resend": "^4.0.0"
+  }
+}

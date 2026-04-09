@@ -1,0 +1,22 @@
+[
+  { "id": 1, "es": "Construcción general", "en": "General construction" },
+  { "id": 2, "es": "Remodelación de interiores", "en": "Remodeling" },
+  { "id": 3, "es": "Remoción de escombros y basura", "en": "Junk removal" },
+  { "id": 4, "es": "HVAC (Aire acondicionado y calefacción)", "en": "HVAC" },
+  { "id": 5, "es": "Plomería", "en": "Plumbing" },
+  { "id": 6, "es": "Electricidad", "en": "Electrical" },
+  { "id": 7, "es": "Limpieza residencial", "en": "Maid services" },
+  { "id": 8, "es": "Paisajismo y cuidado del césped", "en": "Landscaping" },
+  { "id": 9, "es": "Techado", "en": "Roofing" },
+  { "id": 10, "es": "Pintura (Interior y exterior)", "en": "Painting" },
+  { "id": 11, "es": "Control de plagas", "en": "Pest control" },
+  { "id": 12, "es": "Handyman (Mantenimiento general)", "en": "Handyman" },
+  { "id": 13, "es": "Servicios de mudanza", "en": "Moving services" },
+  { "id": 14, "es": "Mantenimiento de piscinas", "en": "Pool service" },
+  { "id": 15, "es": "Instalación de suelos y alfombras", "en": "Flooring" },
+  { "id": 16, "es": "Seguridad y domótica", "en": "Smart home" },
+  { "id": 17, "es": "Lavado a presión", "en": "Pressure washing" },
+  { "id": 18, "es": "Cuidado y poda de árboles", "en": "Tree service" },
+  { "id": 19, "es": "Reparación de electrodomésticos", "en": "Appliance repair" },
+  { "id": 20, "es": "Limpieza de ventanas y canaletas", "en": "Gutter cleaning" }
+]
