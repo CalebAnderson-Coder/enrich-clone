@@ -1,74 +1,58 @@
 import React, { useState, useEffect } from 'react';
+import { supabase } from '../lib/supabase';
 import './LeadsView.css';
-
-const API_BASE = 'http://localhost:3001/api';
 
 export default function LeadsView() {
   const [leads, setLeads] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [analyzingIds, setAnalyzingIds] = useState(new Set());
-
-  const handleAnalyzeLead = async (id) => {
-    // Si ya lo estamos analizando, no repetir
-    if (analyzingIds.has(id)) return;
-    
-    setAnalyzingIds(prev => new Set(prev).add(id));
-    try {
-      const res = await fetch(`${API_BASE}/leads/${id}/analyze`, { method: 'POST' });
-      if (res.ok) {
-        const data = await res.json();
-        if (data.success && data.analysis) {
-          setLeads(prev => prev.map(l => l.id === id ? { ...l, _analysis: data.analysis } : l));
-        }
-      }
-    } catch (e) {
-      console.error('Analysis error:', e);
-    } finally {
-      setAnalyzingIds(prev => {
-        const next = new Set(prev);
-        next.delete(id);
-        return next;
-      });
-    }
-  };
+  const [error, setError] = useState(null);
 
   useEffect(() => {
     fetchLeads();
-    // Refresh periodically
-    const interval = setInterval(fetchLeads, 15000);
-    return () => clearInterval(interval);
+    // Real-time subscription for live updates
+    const channel = supabase
+      .channel('leads-realtime')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'leads' }, () => {
+        fetchLeads();
+      })
+      .subscribe();
+
+    // Fallback polling every 30s
+    const interval = setInterval(fetchLeads, 30000);
+    return () => {
+      supabase.removeChannel(channel);
+      clearInterval(interval);
+    };
   }, []);
-
-  // Automáticamente disparar análisis en leads calificados que no tienen
-  useEffect(() => {
-    leads.forEach(lead => {
-      const score = lead.qualification_score || 0;
-      // Trigger automático si es warm/hot y no se ha analizado ni se está analizando
-      if (score >= 50 && !lead._analysis && !analyzingIds.has(lead.id)) {
-        handleAnalyzeLead(lead.id);
-      }
-    });
-  }, [leads, analyzingIds]);
-
-
 
   const fetchLeads = async () => {
     try {
-      const res = await fetch(`${API_BASE}/leads`);
-      if (res.ok) {
-        const data = await res.json();
-        setLeads(prev => {
-          const prevMap = new Map(prev.map(l => [l.id, l._analysis]));
-          return data.map(nl => ({
-            ...nl,
-            _analysis: prevMap.get(nl.id) || nl._analysis
-          }));
+      const { data: leadsData, error: fetchError } = await supabase
+        .from('leads')
+        .select('*')
+        .order('qualification_score', { ascending: false });
+
+      if (fetchError) throw fetchError;
+
+      const { data: campaignData, error: campaignError } = await supabase
+        .from('campaign_enriched_data')
+        .select('*');
+
+      let enrichedLeads = leadsData || [];
+      if (!campaignError && campaignData) {
+        enrichedLeads = enrichedLeads.map(lead => {
+          const campaign = campaignData.find(c => c.prospect_id === lead.id);
+          return { ...lead, campaign };
         });
       }
+
+      setLeads(enrichedLeads);
+      setError(null);
     } catch (err) {
-      console.error('Error fetching leads:', err);
+      console.error('Error fetching leads from Supabase:', err);
+      setError(err.message);
     } finally {
-      if (loading) setLoading(false);
+      setLoading(false);
     }
   };
 
@@ -79,9 +63,9 @@ export default function LeadsView() {
   };
 
   const getTierLabel = (score) => {
-    if (score >= 80) return 'HOT LEAD';
-    if (score >= 50) return 'WARM';
-    return 'COLD';
+    if (score >= 80) return 'PROSPECTO CALIENTE';
+    if (score >= 50) return 'PROSPECTO TIBIO';
+    return 'PROSPECTO FRÍO';
   };
 
   return (
@@ -89,12 +73,23 @@ export default function LeadsView() {
       <div className="leads-header">
         <div>
           <h2>Leads Precualificados</h2>
-          <p>Contactabilidad multicanal y pipeline de prospección</p>
+          <p>Contactabilidad multicanal y análisis automatizado de prospectos</p>
         </div>
-        <div style={{ background: 'rgba(255,255,255,0.05)', padding: '8px 16px', borderRadius: '20px', fontSize: '0.9rem', color: 'var(--text-secondary)' }}>
-          <strong style={{ color: '#fff' }}>{leads.length}</strong> Leads Activos
+        <div style={{ display: 'flex', gap: '12px', alignItems: 'center' }}>
+          <div style={{ background: 'rgba(16,185,129,0.15)', padding: '6px 14px', borderRadius: '20px', fontSize: '0.8rem', color: '#10b981', fontWeight: 600 }}>
+            ● EN VIVO
+          </div>
+          <div style={{ background: 'rgba(255,255,255,0.05)', padding: '8px 16px', borderRadius: '20px', fontSize: '0.9rem', color: 'var(--text-secondary)' }}>
+            <strong style={{ color: '#fff' }}>{leads.length}</strong> Prospectos
+          </div>
         </div>
       </div>
+
+      {error && (
+        <div style={{ background: 'rgba(239,68,68,0.1)', border: '1px solid rgba(239,68,68,0.3)', padding: '12px 16px', borderRadius: '10px', marginBottom: '16px', color: '#f87171', fontSize: '0.9rem' }}>
+          ⚠️ Error conectando a la base de datos: {error}
+        </div>
+      )}
 
       {loading ? (
         <div className="leads-grid">
@@ -109,17 +104,33 @@ export default function LeadsView() {
       ) : (
         <div className="leads-grid">
           {leads.map(lead => {
-            const score = lead.qualification_score || Math.max(40, Math.floor(Math.random() * 100));
+            const score = lead.qualification_score || 0;
             const tierClass = getTierClass(score);
             
-            // Generación de verdaderos enlaces válidos o fallbacks de búsqueda
-            const whatsappLink = lead.phone ? `https://wa.me/1${lead.phone.replace(/[^0-9]/g, '')}` : null;
-            const emailLink = lead.email ? `mailto:${lead.email}` : null;
-            const phoneLink = lead.phone ? `tel:+1${lead.phone.replace(/[^0-9]/g, '')}` : null;
-            const smsLink = lead.phone ? `sms:+1${lead.phone.replace(/[^0-9]/g, '')}` : null;
-            const mapsLink = lead.google_maps_url || null;
+            // Safe parsing of MEGA PROFILE
+            let parsedProfile = null;
+            if (lead.mega_profile) {
+              try {
+                parsedProfile = typeof lead.mega_profile === 'string' 
+                  ? JSON.parse(lead.mega_profile) 
+                  : lead.mega_profile;
+              } catch (e) {
+                console.error("Error parsing mega_profile", e);
+              }
+            }
+
+            // Datos Extraídos
+            const phoneStr = lead.phone || parsedProfile?.radar_parsed?.phone;
+            const websiteStr = lead.website || parsedProfile?.radar_parsed?.website;
+            const emailStr = lead.email;
             
-            let instagramLink = lead.mega_profile?.instagram_profile || 'https://www.instagram.com/';
+            // Generación de verdaderos enlaces válidos
+            const whatsappLink = phoneStr ? `https://wa.me/1${phoneStr.replace(/[^0-9]/g, '')}` : null;
+            const emailLink = emailStr ? `mailto:${emailStr}` : null;
+            const phoneLink = phoneStr ? `tel:+1${phoneStr.replace(/[^0-9]/g, '')}` : null;
+            const smsLink = phoneStr ? `sms:+1${phoneStr.replace(/[^0-9]/g, '')}` : null;
+            const mapsLink = lead.google_maps_url || null;
+            const instagramLink = parsedProfile?.instagram_profile || (websiteStr ? `${websiteStr}` : null);
 
             return (
               <div key={lead.id} className="lead-card">
@@ -128,27 +139,27 @@ export default function LeadsView() {
                 </div>
                 
                 <div className="lead-info-header">
-                  <h3 className="lead-name">{lead.business_name || 'Prospecto Sin Nombre'}</h3>
+                  <h3 className="lead-name">{lead.business_name || parsedProfile?.radar_parsed?.business_name || 'Prospecto Sin Nombre'}</h3>
                   <div className="lead-industry">
                     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"></path><polyline points="3.27 6.96 12 12.01 20.73 6.96"></polyline><line x1="12" y1="22.08" x2="12" y2="12"></line></svg>
-                    {lead.industry || 'Industria No Especificada'} 
+                    {lead.industry || 'Servicios'} 
                     {lead.metro_area && ` • ${lead.metro_area}`}
                   </div>
                   
                   <div className="lead-details" style={{ marginTop: '8px', fontSize: '0.85rem', color: '#cbd5e1' }}>
-                    {lead.rating && (
+                    {(lead.rating || parsedProfile?.radar_parsed?.rating) && (
                       <div style={{ marginBottom: '4px' }}>
-                        <strong style={{ color: '#fbbf24' }}>★ {lead.rating}</strong> 
-                        <span style={{ color: '#94a3b8', marginLeft: '4px' }}>({lead.review_count || 0} reseñas)</span>
+                        <strong style={{ color: '#fbbf24' }}>★ {Number(lead.rating || parsedProfile?.radar_parsed?.rating).toFixed(1)}</strong> 
+                        <span style={{ color: '#94a3b8', marginLeft: '4px' }}>({lead.review_count || parsedProfile?.radar_parsed?.review_count || 0} reseñas)</span>
                       </div>
                     )}
-                    {lead.phone && (
+                    {phoneStr && (
                       <div style={{ marginBottom: '4px' }}>
-                        📞 <span>{lead.phone}</span>
+                        📞 <span>{phoneStr}</span>
                       </div>
                     )}
                     <div style={{ wordBreak: 'break-all' }}>
-                        🌐 {lead.website ? <a href={lead.website} target="_blank" rel="noopener noreferrer" style={{ color: '#60a5fa' }}>{lead.website}</a> : <span style={{ color: '#64748b' }}>No website or link</span>}
+                        🌐 {websiteStr ? <a href={websiteStr.startsWith('http') ? websiteStr : `https://${websiteStr}`} target="_blank" rel="noopener noreferrer" style={{ color: '#60a5fa' }}>{websiteStr}</a> : <span style={{ color: '#64748b' }}>Sin sitio web</span>}
                     </div>
                   </div>
                 </div>
@@ -160,63 +171,46 @@ export default function LeadsView() {
                   <div className="score-value">{score}/100</div>
                 </div>
 
-                {score >= 50 && !lead._analysis && analyzingIds.has(lead.id) && (
-                  <div style={{ marginTop: '16px' }}>
-                    <div className="analyze-btn" disabled>
-                      🧠 Procesando Contexto e IA Autonóma...
-                    </div>
-                  </div>
-                )}
+                {/* Sección de Análisis de IA */}
+                <div className="mega-profile-card" style={{ marginTop: '16px', background: 'rgba(16, 185, 129, 0.05)', border: '1px solid rgba(16, 185, 129, 0.2)', padding: '16px', borderRadius: '12px' }}>
+                  <h4 style={{ color: '#10b981', display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '12px' }}>
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 2a10 10 0 1 0 10 10H12V2z"></path><path d="M21.18 8.02c-1-2.3-2.85-4.17-5.16-5.18"></path></svg>
+                    Análisis del Prospecto
+                  </h4>
+                  <div className="mega-profile-content" style={{ fontSize: '0.85rem', color: '#e2e8f0' }}>
 
-                {lead._analysis && (
-                  <div className="lead-analysis-card" style={{ marginTop: '16px', background: 'rgba(56, 189, 248, 0.05)', border: '1px solid rgba(56, 189, 248, 0.2)', padding: '16px', borderRadius: '12px' }}>
-                    <h4 style={{ color: '#38bdf8', marginBottom: '12px' }}>🎯 Estrategia Diseñada por IA</h4>
-                    <p style={{ fontSize: '0.85rem', color: '#e2e8f0', marginBottom: '12px' }}><strong>Ángulo a venderles:</strong> {lead._analysis.attack_angle}</p>
-                    
-                    {lead._analysis.multichannel_copys && (
-                      <div className="multichannel-copys" style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                        <div style={{ background: 'rgba(0,0,0,0.2)', padding: '10px', borderRadius: '8px' }}>
-                          <strong style={{ color: '#22c55e', fontSize: '0.8rem', display: 'block', marginBottom: '4px' }}>WhatsApp Copy (Nuestra Agencia):</strong>
-                          <p style={{ fontSize: '0.8rem', color: '#cbd5e1', margin: '0', whiteSpace: 'pre-wrap' }}>{lead._analysis.multichannel_copys.whatsapp}</p>
-                        </div>
-                        <div style={{ background: 'rgba(0,0,0,0.2)', padding: '10px', borderRadius: '8px' }}>
-                          <strong style={{ color: '#fb923c', fontSize: '0.8rem', display: 'block', marginBottom: '4px' }}>Email Copy (Nuestra Agencia):</strong>
-                          <p style={{ fontSize: '0.8rem', color: '#cbd5e1', margin: '0', whiteSpace: 'pre-wrap' }}>{lead._analysis.multichannel_copys.email}</p>
-                        </div>
-                        <div style={{ background: 'rgba(0,0,0,0.2)', padding: '10px', borderRadius: '8px' }}>
-                          <strong style={{ color: '#ec4899', fontSize: '0.8rem', display: 'block', marginBottom: '4px' }}>Instagram Copy (Nuestra Agencia):</strong>
-                          <p style={{ fontSize: '0.8rem', color: '#cbd5e1', margin: '0', whiteSpace: 'pre-wrap' }}>{lead._analysis.multichannel_copys.instagram}</p>
-                        </div>
+                    {parsedProfile?.radar_parsed?.radar_summary && (
+                      <div style={{ marginTop: '0px' }}>
+                        <strong style={{ color: '#f87171' }}>Resumen Situacional:</strong>
+                        <p style={{ marginTop: '4px', color: '#cbd5e1', marginBottom: '12px', fontStyle: 'italic' }}>
+                          "{parsedProfile.radar_parsed.radar_summary}"
+                        </p>
                       </div>
                     )}
-                  </div>
-                )}
 
-                {lead.mega_profile && (
-                  <div className="mega-profile-card" style={{ marginTop: '16px', background: 'rgba(16, 185, 129, 0.05)', border: '1px solid rgba(16, 185, 129, 0.2)', padding: '16px', borderRadius: '12px' }}>
-                    <h4 style={{ color: '#10b981', display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '12px' }}>
-                      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 2a10 10 0 1 0 10 10H12V2z"></path><path d="M21.18 8.02c-1-2.3-2.85-4.17-5.16-5.18"></path></svg>
-                      Análisis del Prospecto
-                    </h4>
-                    <div className="mega-profile-content" style={{ fontSize: '0.85rem', color: '#e2e8f0' }}>
-                      <p><strong>Decisor Clave:</strong> {lead.mega_profile.key_decision_maker}</p>
-                      
+                    {lead.campaign?.radiography_technical && (
                       <div style={{ marginTop: '12px' }}>
-                        <strong style={{ color: '#f87171' }}>Puntos de Dolor de la Empresa:</strong>
-                        <ul style={{ paddingLeft: '20px', marginTop: '4px', color: '#cbd5e1', marginBottom: '0' }}>
-                          {lead.mega_profile.pain_points?.map((pt, idx) => <li key={idx} style={{ marginBottom: '4px' }}>{pt}</li>)}
-                        </ul>
+                        <strong style={{ color: '#f87171' }}>Puntos de Dolor & Análisis:</strong>
+                        <p style={{ marginTop: '4px', color: '#cbd5e1', marginBottom: '0' }}>
+                          {lead.campaign.radiography_technical.replace(/\n\n/g, ' ')}
+                        </p>
                       </div>
+                    )}
 
+                    {lead.campaign?.attack_angle && (
                       <div style={{ marginTop: '12px' }}>
-                        <strong style={{ color: '#34d399' }}>Qué Servicios Les Podríamos Vender:</strong>
-                        <ul style={{ paddingLeft: '20px', marginTop: '4px', color: '#cbd5e1', marginBottom: '0' }}>
-                          {lead.mega_profile.agency_pitch_angles?.map((pt, idx) => <li key={idx} style={{ marginBottom: '4px' }}>{pt}</li>)}
-                        </ul>
+                        <strong style={{ color: '#34d399' }}>Estrategia de Venta:</strong>
+                        <p style={{ marginTop: '4px', color: '#cbd5e1', marginBottom: '0' }}>
+                          {lead.campaign.attack_angle.replace(/\n\n/g, ' ')}
+                        </p>
                       </div>
-                    </div>
+                    )}
+
+                    {(!parsedProfile && !lead.campaign) && (
+                      <p style={{ color: '#64748b', fontStyle: 'italic', margin: 0 }}>Esperando reporte de los agentes AI...</p>
+                    )}
                   </div>
-                )}
+                </div>
 
                 <div style={{ marginTop: 'auto' }}>
                   <div className="outreach-actions-title">Canales de Contacto Directo</div>
@@ -233,9 +227,11 @@ export default function LeadsView() {
                       </a>
                     )}
                     
-                    <a href={instagramLink} target="_blank" rel="noopener noreferrer" className="action-btn instagram" title="Instagram">
-                      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="2" y="2" width="20" height="20" rx="5" ry="5"></rect><path d="M16 11.37A4 4 0 1 1 12.63 8 4 4 0 0 1 16 11.37z"></path><line x1="17.5" y1="6.5" x2="17.51" y2="6.5"></line></svg>
-                    </a>
+                    {instagramLink && (
+                      <a href={instagramLink} target="_blank" rel="noopener noreferrer" className="action-btn instagram" title="Instagram / Red Social">
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="2" y="2" width="20" height="20" rx="5" ry="5"></rect><path d="M16 11.37A4 4 0 1 1 12.63 8 4 4 0 0 1 16 11.37z"></path><line x1="17.5" y1="6.5" x2="17.51" y2="6.5"></line></svg>
+                      </a>
+                    )}
                     
                     {mapsLink && (
                       <a href={mapsLink} target="_blank" rel="noopener noreferrer" className="action-btn map" title="Google Maps" style={{ background: '#4285F4' }}>

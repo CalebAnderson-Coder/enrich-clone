@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import './App.css';
+import { supabase } from './lib/supabase';
 
 // Import Views
 import PerformanceView from './views/PerformanceView';
@@ -11,12 +12,10 @@ import HistoryView from './views/HistoryView';
 import LeadsView from './views/LeadsView';
 import CampaignView from './views/CampaignView';
 
-const API_BASE = 'http://localhost:3001/api';
-
 function App() {
   // Navigation State
-  const [currentView, setCurrentView] = useState('chat'); // 'chat', 'performance', 'calendar', 'files', 'profile', 'integrations', 'history'
-  const [activeChannel, setActiveChannel] = useState('general');
+  const [currentView, setCurrentView] = useState('leads'); // Default to leads view (main client view)
+  const [activeChannel, setActiveChannel] = useState('leads_precualificados');
 
   // Chat/Backend State
   const [agents, setAgents] = useState([]);
@@ -26,7 +25,7 @@ function App() {
       role: 'assistant',
       author: 'Helena',
       time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-      text: 'Estoy en línea y lista para ayudarte. Escribe un mensaje abajo para empezar a organizar tareas y ejecutar campañas.',
+      text: 'Estoy en línea y lista para ayudarte. Los datos se cargan en tiempo real desde Supabase. Navega a "Leads Precualificados" para ver los prospectos encontrados.',
     }
   ]);
   const [inputText, setInputText] = useState('');
@@ -40,7 +39,7 @@ function App() {
     fetchAgents();
     fetchJobs();
 
-    const interval = setInterval(fetchJobs, 10000);
+    const interval = setInterval(fetchJobs, 15000);
     return () => clearInterval(interval);
   }, []);
 
@@ -67,7 +66,16 @@ function App() {
 
   const fetchJobs = async () => {
     try {
-      setJobs([]);
+      const { data, error } = await supabase
+        .from('jobs')
+        .select('*')
+        .in('status', ['PENDING', 'AWAITING_APPROVAL'])
+        .order('created_at', { ascending: false })
+        .limit(10);
+      
+      if (!error && data) {
+        setJobs(data);
+      }
     } catch (err) {
       console.error('Error fetching jobs:', err);
     }
@@ -88,49 +96,26 @@ function App() {
     setInputText('');
     setIsTyping(true);
 
-    try {
-      const res = await fetch(`${API_BASE}/chat`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          message: userMessage.text,
-          agent: selectedAgent,
-          brandId: 'brand_test_123' 
-        })
-      });
-      const data = await res.json();
-      
-      setMessages(prev => [...prev, {
-        role: 'assistant',
-        author: data.agent || selectedAgent,
-        time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-        text: data.response || 'Sin respuesta',
-        artifacts: data.artifacts || []
-      }]);
-      
-      fetchJobs();
-
-    } catch (err) {
-      console.error('Chat error:', err);
+    // Chat requires the backend Node.js server to be running
+    // In production (Vercel), just show an informational message
+    setTimeout(() => {
       setMessages(prev => [...prev, {
         role: 'assistant',
         author: 'Sistema',
         time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-        text: `Error conectando al backend: ${err.message}`
+        text: 'El chat interactivo con agentes requiere el servidor Node.js activo. Los datos de leads y campañas se cargan en tiempo real desde Supabase — navega a "Leads Precualificados" o "Campañas en Vivo".'
       }]);
-    } finally {
       setIsTyping(false);
-    }
+    }, 1000);
   };
 
   const handleApprovalAction = async (e, jobId, action) => {
     e.preventDefault();
     try {
-      const res = await fetch(`${API_BASE}/approve?jobId=${jobId}&action=${action}`);
-      if (res.ok) {
-        // Refresh the job queue
-        setTimeout(() => fetchJobs(), 1000); 
-      }
+      // Update job status directly in Supabase
+      const newStatus = action === 'approve' ? 'APPROVED' : 'REJECTED';
+      await supabase.from('jobs').update({ status: newStatus }).eq('id', jobId);
+      setTimeout(() => fetchJobs(), 500); 
     } catch (err) {
       console.error('Action error:', err);
     }

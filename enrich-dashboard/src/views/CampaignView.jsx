@@ -1,58 +1,54 @@
 import React, { useState, useEffect } from 'react';
+import { supabase } from '../lib/supabase';
 import './CampaignView.css';
-
-const API_BASE = 'http://localhost:3001/api';
 
 export default function CampaignView() {
   const [jobs, setJobs] = useState([]);
   const [loading, setLoading] = useState(true);
-
-  const [industry, setIndustry] = useState('landscaping');
-  const [city, setCity] = useState('Miami, FL');
-  const [pipelineStatus, setPipelineStatus] = useState('');
+  const [error, setError] = useState(null);
 
   useEffect(() => {
     fetchJobs();
-    const interval = setInterval(fetchJobs, 5000);
-    return () => clearInterval(interval);
+
+    // Real-time subscription
+    const channel = supabase
+      .channel('jobs-realtime')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'jobs' }, () => {
+        fetchJobs();
+      })
+      .subscribe();
+
+    const interval = setInterval(fetchJobs, 15000);
+    return () => {
+      supabase.removeChannel(channel);
+      clearInterval(interval);
+    };
   }, []);
 
   const fetchJobs = async () => {
     try {
-      const res = await fetch(`${API_BASE}/jobs`);
-      if (res.ok) {
-        const data = await res.json();
-        setJobs(data.jobs || []);
-      }
+      const { data, error: fetchError } = await supabase
+        .from('jobs')
+        .select('*')
+        .order('created_at', { ascending: false });
+
+      if (fetchError) throw fetchError;
+      setJobs(data || []);
+      setError(null);
     } catch (err) {
-      console.error('Error fetching jobs:', err);
+      console.error('Error fetching jobs from Supabase:', err);
+      setError(err.message);
     } finally {
-      if (loading) setLoading(false);
+      setLoading(false);
     }
   };
 
   const getStatusColor = (status) => {
     switch ((status || '').toLowerCase()) {
-      case 'executed': return '#10b981'; // Emerald
-      case 'pending': return '#f59e0b'; // Amber
-      case 'awaiting_approval': return '#3b82f6'; // Blue
-      default: return '#64748b'; // Slate
-    }
-  };
-
-  const handleStartPipeline = async (e) => {
-    e.preventDefault();
-    setPipelineStatus('Lanzando pipeline... revisa la consola del servidor de Node.js para logs en vivo.');
-    try {
-      const res = await fetch(`${API_BASE}/campaign/pipeline`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ industry, city })
-      });
-      const data = await res.json();
-      setPipelineStatus(data.message || 'Pipeline finalizado.');
-    } catch(e) {
-      setPipelineStatus(`Error: ${e.message}`);
+      case 'executed': return '#10b981';
+      case 'pending': return '#f59e0b';
+      case 'awaiting_approval': return '#3b82f6';
+      default: return '#64748b';
     }
   };
 
@@ -63,37 +59,27 @@ export default function CampaignView() {
           <h2>Campaña & Flujos de Agentes</h2>
           <p>Supervisa todos los trabajos delegados, procesados y entregables de los agentes.</p>
         </div>
-        <div style={{ background: 'rgba(255,255,255,0.05)', padding: '8px 16px', borderRadius: '20px', fontSize: '0.9rem', color: 'var(--text-secondary)' }}>
-          <strong style={{ color: '#fff' }}>{jobs.length}</strong> Jobs Totales
+        <div style={{ display: 'flex', gap: '12px', alignItems: 'center' }}>
+          <div style={{ background: 'rgba(16,185,129,0.15)', padding: '6px 14px', borderRadius: '20px', fontSize: '0.8rem', color: '#10b981', fontWeight: 600 }}>
+            ● LIVE desde Supabase
+          </div>
+          <div style={{ background: 'rgba(255,255,255,0.05)', padding: '8px 16px', borderRadius: '20px', fontSize: '0.9rem', color: 'var(--text-secondary)' }}>
+            <strong style={{ color: '#fff' }}>{jobs.length}</strong> Jobs Totales
+          </div>
         </div>
       </div>
 
+      {error && (
+        <div style={{ background: 'rgba(239,68,68,0.1)', border: '1px solid rgba(239,68,68,0.3)', padding: '12px 16px', borderRadius: '10px', marginBottom: '16px', color: '#f87171', fontSize: '0.9rem' }}>
+          ⚠️ Error conectando a Supabase: {error}
+        </div>
+      )}
+
       <div className="pipeline-trigger" style={{ background: 'rgba(30,41,59,0.8)', padding: '20px', borderRadius: '12px', marginBottom: '24px', border: '1px solid rgba(148,163,184,0.1)' }}>
-        <h3 style={{ marginBottom: '8px' }}>🚀 Lanzar Pipeline de Prospección Profunda (Macro-Flujo)</h3>
-        <p style={{ color: '#94a3b8', fontSize: '0.9rem', marginBottom: '16px' }}>Busca en Maps -&gt; Califica -&gt; Enriquecimiento Web -&gt; Análisis Estratégico (Carlos) -&gt; Copy Redactado (Angela).</p>
-        
-        <form onSubmit={handleStartPipeline} style={{ display: 'flex', gap: '12px', alignItems: 'center' }}>
-          <input 
-            type="text" 
-            value={industry} 
-            onChange={(e) => setIndustry(e.target.value)} 
-            placeholder="Nicho (ej. roofing)" 
-            style={{ padding: '10px 16px', borderRadius: '8px', border: '1px solid rgba(255,255,255,0.1)', background: 'rgba(0,0,0,0.2)', color: 'white', outline: 'none', minWidth: '200px' }} 
-            required
-          />
-          <input 
-            type="text" 
-            value={city} 
-            onChange={(e) => setCity(e.target.value)} 
-            placeholder="Ciudad (ej. Houston, TX)" 
-            style={{ padding: '10px 16px', borderRadius: '8px', border: '1px solid rgba(255,255,255,0.1)', background: 'rgba(0,0,0,0.2)', color: 'white', outline: 'none', minWidth: '200px' }} 
-            required
-          />
-          <button type="submit" style={{ padding: '10px 24px', background: 'var(--accent-primary)', color: 'white', border: 'none', borderRadius: '8px', cursor: 'pointer', fontWeight: 'bold' }}>
-            Lanzar Pipeline
-          </button>
-        </form>
-        {pipelineStatus && <div style={{ marginTop: '12px', color: '#10b981', fontSize: '0.9rem', fontWeight: 'bold' }}>{pipelineStatus}</div>}
+        <h3 style={{ marginBottom: '8px' }}>🚀 Pipeline de Prospección Profunda</h3>
+        <p style={{ color: '#94a3b8', fontSize: '0.9rem', marginBottom: '0' }}>
+          Los agentes ejecutan el pipeline automáticamente desde el backend. Los jobs aparecerán aquí en tiempo real conforme se creen.
+        </p>
       </div>
 
       {loading ? (
@@ -110,8 +96,8 @@ export default function CampaignView() {
                 <div className="job-header">
                   <div>
                     <div className="agent-badge">
-                      <img src={`https://ui-avatars.com/api/?name=${job.agent_name}&background=random&color=fff`} alt={job.agent_name} className="agent-avatar" />
-                      <span className="agent-name">{job.agent_name}</span>
+                      <img src={`https://ui-avatars.com/api/?name=${job.agent_name || 'Agent'}&background=random&color=fff`} alt={job.agent_name} className="agent-avatar" />
+                      <span className="agent-name">{job.agent_name || 'Sin Asignar'}</span>
                     </div>
                     <h3 className="task-type">{job.task_type}</h3>
                   </div>
@@ -121,10 +107,12 @@ export default function CampaignView() {
                   </div>
                 </div>
 
-                <div className="job-payload">
-                  <h4>Instrucciones / Payload:</h4>
-                  <pre>{JSON.stringify(job.payload, null, 2)}</pre>
-                </div>
+                {job.payload && (
+                  <div className="job-payload">
+                    <h4>Instrucciones / Payload:</h4>
+                    <pre>{typeof job.payload === 'object' ? JSON.stringify(job.payload, null, 2) : job.payload}</pre>
+                  </div>
+                )}
 
                 {job.result && (
                   <div className="job-result">
@@ -138,7 +126,7 @@ export default function CampaignView() {
                 )}
                 
                 <div className="job-footer">
-                   <span>ID: {job.id}</span>
+                   <span>ID: {typeof job.id === 'string' ? job.id.substring(0, 12) : job.id}...</span>
                    <span>Creado: {new Date(job.created_at).toLocaleString()}</span>
                 </div>
               </div>
