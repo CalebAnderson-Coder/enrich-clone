@@ -125,12 +125,18 @@ export default function LeadsView() {
             const emailStr = lead.email;
             
             // Generación de verdaderos enlaces válidos
-            const whatsappLink = phoneStr ? `https://wa.me/1${phoneStr.replace(/[^0-9]/g, '')}` : null;
+            let finalPhone = null;
+            if (phoneStr) {
+               const digitsOnly = phoneStr.replace(/[^0-9]/g, '');
+               finalPhone = (digitsOnly.length === 10) ? `1${digitsOnly}` : digitsOnly;
+            }
+
+            const whatsappLink = finalPhone ? `https://wa.me/${finalPhone}` : null;
             const emailLink = emailStr ? `mailto:${emailStr}` : null;
-            const phoneLink = phoneStr ? `tel:+1${phoneStr.replace(/[^0-9]/g, '')}` : null;
-            const smsLink = phoneStr ? `sms:+1${phoneStr.replace(/[^0-9]/g, '')}` : null;
+            const phoneLink = finalPhone ? `tel:+${finalPhone}` : null;
+            const smsLink = finalPhone ? `sms:+${finalPhone}` : null;
             const mapsLink = lead.google_maps_url || null;
-            const instagramLink = parsedProfile?.instagram_profile || (websiteStr ? `${websiteStr}` : null);
+            const instagramLink = parsedProfile?.instagram_profile || null;
 
             return (
               <div key={lead.id} className="lead-card">
