@@ -24,5 +24,7 @@ CREATE TABLE IF NOT EXISTS campaign_enriched_data (
     attack_angle TEXT,
     outreach_copy TEXT,
     status VARCHAR DEFAULT 'PENDING',
+    lead_magnet_status VARCHAR DEFAULT 'IDLE',
+    lead_magnets_data JSONB,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now())
 );
