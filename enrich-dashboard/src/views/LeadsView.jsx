@@ -210,20 +210,20 @@ export default function LeadsView() {
                       </div>
                     )}
 
-                    {lead.campaign?.radiography_technical && (
+                    {(parsedProfile?.radiography_technical || lead.campaign?.radiography_technical) && (
                       <div style={{ marginTop: '12px' }}>
                         <strong style={{ color: '#f87171' }}>Puntos de Dolor & Análisis:</strong>
                         <p style={{ marginTop: '4px', color: '#cbd5e1', marginBottom: '0' }}>
-                          {lead.campaign.radiography_technical.replace(/\n\n/g, ' ')}
+                          {String(parsedProfile?.radiography_technical || lead.campaign?.radiography_technical).replace(/\n\n/g, ' ')}
                         </p>
                       </div>
                     )}
 
-                    {lead.campaign?.attack_angle && (
+                    {(parsedProfile?.attack_angle || lead.campaign?.attack_angle) && (
                       <div style={{ marginTop: '12px' }}>
                         <strong style={{ color: '#34d399' }}>Estrategia de Venta:</strong>
                         <p style={{ marginTop: '4px', color: '#cbd5e1', marginBottom: '0' }}>
-                          {lead.campaign.attack_angle.replace(/\n\n/g, ' ')}
+                          {String(parsedProfile?.attack_angle || lead.campaign?.attack_angle).replace(/\n\n/g, ' ')}
                         </p>
                       </div>
                     )}

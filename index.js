@@ -17,8 +17,10 @@ import { manager } from './agents/manager.js';
 import { scout } from './agents/scout.js';
 import { carlos } from './agents/carlos.js';
 import { getPendingJobs, updateJobStatus, getActiveBrands, createJob, getJobById } from './lib/supabase.js';
-import { getLeads, getLeadById, updateOutreachStatus } from './tools/database.js';
+import { getLeads, getLeadById, updateOutreachStatus, getLeadsStats } from './tools/database.js';
 import { fetchPage } from './tools/webResearch.js';
+import { processIdleMagnets } from './lead_magnet_worker.js';
+import { startTranscriptionWorker } from './workers/transcription_worker.js';
 
 dotenv.config();
 
@@ -48,7 +50,11 @@ console.log(`   Agents: ${Array.from(runtime.agents.keys()).join(', ')}`);
 const app = express();
 const port = process.env.PORT || 3000;
 
-app.use(cors());
+app.use(cors({
+  origin: [process.env.FRONTEND_URL, 'http://localhost:5174'],
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization']
+}));
 app.use(express.json());
 
 // ---- Health Check ----
@@ -61,6 +67,18 @@ app.get('/health', (req, res) => {
     uptime: process.uptime(),
     timestamp: new Date().toISOString(),
   });
+});
+
+// ---- Authentication Middleware for API routes ----
+app.use('/api', (req, res, next) => {
+  if (req.path === '/approve') return next(); // Webhook exception
+  
+  const authHeader = req.headers.authorization;
+  if (!authHeader || authHeader !== `Bearer ${process.env.API_SECRET_KEY}`) {
+    console.log(`\n🚫 [Auth] Unauthorized API access attempt to /api${req.path}`);
+    return res.status(401).json({ error: 'Unauthorized: Invalid or missing Bearer token' });
+  }
+  next();
 });
 
 // ---- Chat Endpoint (direct agent interaction) ----
@@ -128,7 +146,7 @@ app.post('/api/leads/:id/draft-campaign', async (req, res) => {
     console.log(`\n📧 [Native Outreach] Redactando correo con Angela para: ${leadName}`);
     
     // Create the pending job first
-    const brandId = 'eca1d833-77e3-4690-8cf1-2a44db20dcf8';
+    const brandId = process.env.BRAND_ID;
     const job = await createJob(brandId, 'Angela', 'cold_outreach', {
       leadId: lead.id,
       leadName: leadName
@@ -220,7 +238,7 @@ app.get('/api/approve', async (req, res) => {
           `El lead "${job.payload.leadName}" ha sido APROBADO. Escribe un borrador de Cold Email para este lead de remodelación. 
           Debe ser hiper-personalizado basándote en que vimos sus reviews en Google Maps: "${job.payload.reviewsText}".
           Ofrécele regalarle esta Landing Page estandarizada: ${job.payload.landingUrl}.
-          IMPORTANTE: Simula que al final haces un envío POST al webhook de N8N Delivery. No espero que envíes el correo de verdad ahora, solo simula el output final.`,
+          IMPORTANTE: Simula que al final haces un envío al sistema interno de Delivery. No espero que envíes el correo de verdad ahora, solo simula el output final.`,
           { currentAgent: 'Sam', brandId: job.brand_id }
         ).then(result => {
            console.log(`  🚀 Email generado por Sam para ${job.payload.leadName}!`);
@@ -366,21 +384,35 @@ app.post('/api/prospect', async (req, res) => {
   }
 });
 
+// ---- Get Leads Stats ----
+app.get('/api/leads/stats', async (req, res) => {
+  try {
+    const stats = await getLeadsStats();
+    res.json({ success: true, stats });
+  } catch (err) {
+    console.error('Error fetching leads stats:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ---- List Leads ----
 app.get('/api/leads', async (req, res) => {
-  const { tier, metro, industry, outreach_status, limit } = req.query;
+  const { tier, metro, industry, outreach_status, limit, page } = req.query;
 
   try {
-    const leads = await getLeads({
+    const { data: leads, total } = await getLeads({
       tier,
       metro,
       industry,
       outreach_status,
-      limit: limit ? parseInt(limit) : undefined,
+      limit,
+      page,
     });
 
     res.json({
-      total: leads.length,
+      total,
+      limit: parseInt(limit) || 20,
+      page: parseInt(page) || 1,
       leads: leads.map(l => ({
         id: l.id,
         business_name: l.business_name,
@@ -537,6 +569,18 @@ cron.schedule('0 9 * * *', async () => {
     }
   }
 });
+
+// Loop for independent background workers
+console.log('\n⚙️ [Workers] Launching background workers (Landing Page Lead Magnets)...');
+setInterval(async () => {
+  try {
+    await processIdleMagnets();
+  } catch (e) {
+    console.error('Interval error processing idle magnets:', e);
+  }
+}, 30000); // Poll every 30 seconds
+
+startTranscriptionWorker();
 
 // ============================================================
 // 4. Start Server

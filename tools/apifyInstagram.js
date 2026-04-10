@@ -4,6 +4,7 @@
 // ============================================================
 
 import { Tool } from '../lib/AgentRuntime.js';
+import { ApifyClient } from 'apify-client';
 
 const APIFY_BASE = 'https://api.apify.com/v2';
 
@@ -127,3 +128,110 @@ export const checkInstagram = new Tool({
     }
   },
 });
+
+export const scrapeClientInstagram = new Tool({
+  name: 'scrape_client_instagram',
+  description: `Extracts the latest Instagram posts and reels from a client's Instagram profile using Apify.
+The output provides caption text, engagement numbers, and video URLs.
+NOTE: This operation handles the scraping and queues the posts for video transcription (RAG).
+This should be called when Carlos needs deep context about a client's content.`,
+  parameters: {
+    type: 'object',
+    properties: {
+      prospect_id: {
+        type: 'string',
+        description: 'The UUID of the prospect in the database.',
+      },
+      instagram_username: {
+        type: 'string',
+        description: 'The Instagram handle to scrape (without the @ symbol).',
+      },
+      limit: {
+        type: 'number',
+        description: 'Number of recent posts/videos to extract. Default is 10.',
+      },
+    },
+    required: ['prospect_id', 'instagram_username'],
+  },
+  fn: async (args) => {
+    const { prospect_id, instagram_username, limit = 10 } = args;
+
+    if (!process.env.APIFY_API_TOKEN) {
+      return JSON.stringify({ error: 'APIFY_API_TOKEN is missing in .env' });
+    }
+
+    try {
+      console.log(`  🕸️ [Scraper] Initiating Apify Instagram Scraper for @${instagram_username}...`);
+      
+      const client = new ApifyClient({
+        token: process.env.APIFY_API_TOKEN,
+      });
+
+      const input = {
+        addParentData: false,
+        directUrls: [
+          `https://www.instagram.com/${instagram_username}/`
+        ],
+        enhanceUserSearchWithFacebookPage: false,
+        isUserTaggedFeedURL: false,
+        resultsLimit: limit,
+        resultsType: "posts",
+        searchLimit: 1,
+        searchType: "hashtag"
+      };
+
+      const run = await client.actor("apify/instagram-scraper").call(input);
+      const { items } = await client.dataset(run.defaultDatasetId).listItems();
+      
+      console.log(`  🕸️ [Scraper] Scraped ${items.length} posts for @${instagram_username}`);
+
+      // Dynamically import supabase 
+      const { supabase } = await import('../lib/supabase.js');
+
+      if (!supabase) {
+         return JSON.stringify({ success: true, count: items.length, mock: true, items });
+      }
+
+      const records = items.filter(p => !p.error).map(p => {
+        const likes = p.likesCount || 0;
+        const comments = p.commentsCount || 0;
+        const score = likes + (comments * 3);
+        
+        return {
+          prospect_id,
+          source_type: p.type === 'Video' ? 'instagram_reel' : 'instagram_post',
+          caption: p.caption || '',
+          transcription: null, 
+          engagement_score: score,
+          post_date: p.timestamp ? new Date(p.timestamp).toISOString() : null,
+          source_url: p.url,       
+          // We can also extract videoUrl directly if present. Apify usually returns it as videoUrl
+          raw_data: p             
+        };
+      });
+
+      // Upsert into client_knowledge
+      const { data, error } = await supabase
+        .from('client_knowledge')
+        .upsert(records, { onConflict: 'source_url', ignoreDuplicates: true })
+        .select('id');
+
+      if (error) {
+        console.error('  ❌ [Scraper] Supabase error:', error.message);
+        throw error;
+      }
+
+      return JSON.stringify({
+        success: true,
+        scraped_posts: items.length,
+        inserted_records: data ? data.length : 0,
+        message: 'Records saved. Background transcription worker will now extract audio and generate vectors for semantic search.'
+      });
+
+    } catch (err) {
+      console.error(`  ❌ [Scraper] Error: ${err.message}`);
+      return JSON.stringify({ error: err.message });
+    }
+  },
+});
+

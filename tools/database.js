@@ -192,15 +192,24 @@ export const updateMegaProfile = new Tool({
 // --- Helper functions for API endpoints (not agent tools) ---
 
 export async function getLeads(filters = {}) {
+  const limit = parseInt(filters.limit) || 20;
+  const page = parseInt(filters.page) || 1;
+  const offset = (page - 1) * limit;
+
   if (!supabase) {
     let results = [...mockLeads];
     if (filters.tier) results = results.filter(l => l.lead_tier === filters.tier);
     if (filters.metro) results = results.filter(l => l.metro_area?.includes(filters.metro));
     if (filters.industry) results = results.filter(l => l.industry?.includes(filters.industry));
-    return results.sort((a, b) => (b.qualification_score || 0) - (a.qualification_score || 0));
+    if (filters.outreach_status) results = results.filter(l => l.outreach_status === filters.outreach_status);
+    
+    results = results.sort((a, b) => (b.qualification_score || 0) - (a.qualification_score || 0));
+    
+    const paginated = results.slice(offset, offset + limit);
+    return { data: paginated, total: results.length };
   }
 
-  let query = supabase.from('leads').select('*');
+  let query = supabase.from('leads').select('*', { count: 'exact' });
   
   if (filters.tier) query = query.eq('lead_tier', filters.tier);
   if (filters.metro) query = query.ilike('metro_area', `%${filters.metro}%`);
@@ -208,12 +217,16 @@ export async function getLeads(filters = {}) {
   if (filters.outreach_status) query = query.eq('outreach_status', filters.outreach_status);
   
   query = query.order('qualification_score', { ascending: false });
-  
-  if (filters.limit) query = query.limit(filters.limit);
+  query = query.range(offset, offset + limit - 1);
 
-  const { data, error } = await query;
-  if (error) { console.error('❌ Get leads error:', error.message); return mockLeads; }
-  return [...mockLeads, ...(data || [])];
+  const { data, count, error } = await query;
+  if (error) { 
+    console.error('❌ Get leads error:', error.message); 
+    const fallbackResults = mockLeads.slice(offset, offset + limit);
+    return { data: fallbackResults, total: mockLeads.length };
+  }
+  
+  return { data: data || [], total: count || 0 };
 }
 
 export async function getLeadById(leadId) {
@@ -229,6 +242,37 @@ export async function getLeadById(leadId) {
 
   if (error) return null;
   return data;
+}
+
+export async function getLeadsStats() {
+  const stats = {
+    byTier: {},
+    byMetro: {},
+    byIndustry: {}
+  };
+
+  if (!supabase) {
+    mockLeads.forEach(lead => {
+      if (lead.lead_tier) stats.byTier[lead.lead_tier] = (stats.byTier[lead.lead_tier] || 0) + 1;
+      if (lead.metro_area) stats.byMetro[lead.metro_area] = (stats.byMetro[lead.metro_area] || 0) + 1;
+      if (lead.industry) stats.byIndustry[lead.industry] = (stats.byIndustry[lead.industry] || 0) + 1;
+    });
+    return stats;
+  }
+
+  const { data, error } = await supabase.from('leads').select('lead_tier, metro_area, industry');
+  if (error) {
+    console.error('❌ Get leads stats error:', error.message);
+    return stats;
+  }
+
+  (data || []).forEach(lead => {
+    if (lead.lead_tier) stats.byTier[lead.lead_tier] = (stats.byTier[lead.lead_tier] || 0) + 1;
+    if (lead.metro_area) stats.byMetro[lead.metro_area] = (stats.byMetro[lead.metro_area] || 0) + 1;
+    if (lead.industry) stats.byIndustry[lead.industry] = (stats.byIndustry[lead.industry] || 0) + 1;
+  });
+
+  return stats;
 }
 
 export async function updateOutreachStatus(leadId, status, notes = null) {
