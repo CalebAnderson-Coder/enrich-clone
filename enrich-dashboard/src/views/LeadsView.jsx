@@ -193,43 +193,64 @@ export default function LeadsView() {
                   <div className="score-value">{score}/100</div>
                 </div>
 
-                {/* Sección de Análisis de IA */}
-                <div className="mega-profile-card" style={{ marginTop: '16px', background: 'rgba(16, 185, 129, 0.05)', border: '1px solid rgba(16, 185, 129, 0.2)', padding: '16px', borderRadius: '12px' }}>
-                  <h4 style={{ color: '#10b981', display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '12px' }}>
-                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 2a10 10 0 1 0 10 10H12V2z"></path><path d="M21.18 8.02c-1-2.3-2.85-4.17-5.16-5.18"></path></svg>
-                    Análisis del Prospecto
+                {/* Sección de Análisis de IA Extendida */}
+                <div className="mega-profile-card" style={{ marginTop: '16px', background: 'linear-gradient(145deg, rgba(16, 185, 129, 0.08) 0%, rgba(16, 185, 129, 0.02) 100%)', border: '1px solid rgba(16, 185, 129, 0.2)', padding: '16px', borderRadius: '12px', position: 'relative', overflow: 'hidden' }}>
+                  <div style={{ position: 'absolute', top: 0, left: 0, right: 0, height: '2px', background: 'linear-gradient(90deg, transparent, #10b981, transparent)', opacity: 0.5 }}></div>
+                  <h4 style={{ color: '#10b981', display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '16px', fontSize: '1rem' }}>
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 2a10 10 0 1 0 10 10H12V2z"></path><path d="M21.18 8.02c-1-2.3-2.85-4.17-5.16-5.18"></path><path d="M2 12h5"></path><path d="M17 12h5"></path></svg>
+                    Inteligencia Artificial: Análisis Web
                   </h4>
-                  <div className="mega-profile-content" style={{ fontSize: '0.85rem', color: '#e2e8f0' }}>
+                  <div className="mega-profile-content" style={{ fontSize: '0.88rem', color: '#e2e8f0', display: 'flex', flexDirection: 'column', gap: '14px' }}>
 
                     {parsedProfile?.radar_parsed?.radar_summary && (
-                      <div style={{ marginTop: '0px' }}>
-                        <strong style={{ color: '#f87171' }}>Resumen Situacional:</strong>
-                        <p style={{ marginTop: '4px', color: '#cbd5e1', marginBottom: '12px', fontStyle: 'italic' }}>
+                      <div>
+                        <strong style={{ color: '#f87171', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M2 12h4l3-9 5 18 3-9h5"/></svg>
+                          Resumen Situacional (Radar):
+                        </strong>
+                        <p style={{ marginTop: '6px', color: '#cbd5e1', fontStyle: 'italic', background: 'rgba(0,0,0,0.15)', padding: '10px', borderRadius: '6px', borderLeft: '2px solid #ef4444' }}>
                           "{parsedProfile.radar_parsed.radar_summary}"
                         </p>
                       </div>
                     )}
 
                     {(parsedProfile?.radiography_technical || lead.campaign?.radiography_technical) && (
-                      <div style={{ marginTop: '12px' }}>
-                        <strong style={{ color: '#f87171' }}>Puntos de Dolor & Análisis:</strong>
-                        <p style={{ marginTop: '4px', color: '#cbd5e1', marginBottom: '0' }}>
-                          {String(parsedProfile?.radiography_technical || lead.campaign?.radiography_technical).replace(/\n\n/g, ' ')}
+                      <div>
+                        <strong style={{ color: '#fbbf24', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="16" y1="13" x2="8" y2="13"></line><line x1="16" y1="17" x2="8" y2="17"></line><polyline points="10 9 9 9 8 9"></polyline></svg>
+                          Radiografía Técnica (Presencia Digital):
+                        </strong>
+                        <p style={{ marginTop: '6px', color: '#e2e8f0', lineHeight: '1.5' }}>
+                          {(() => {
+                            const val = parsedProfile?.radiography_technical || lead.campaign?.radiography_technical;
+                            if (!val) return null;
+                            return typeof val === 'object' ? JSON.stringify(val) : String(val).replace(/\n\n/g, ' ');
+                          })()}
                         </p>
                       </div>
                     )}
 
                     {(parsedProfile?.attack_angle || lead.campaign?.attack_angle) && (
-                      <div style={{ marginTop: '12px' }}>
-                        <strong style={{ color: '#34d399' }}>Estrategia de Venta:</strong>
-                        <p style={{ marginTop: '4px', color: '#cbd5e1', marginBottom: '0' }}>
-                          {String(parsedProfile?.attack_angle || lead.campaign?.attack_angle).replace(/\n\n/g, ' ')}
+                      <div style={{ background: 'rgba(52, 211, 153, 0.1)', padding: '12px', borderRadius: '8px', border: '1px solid rgba(52, 211, 153, 0.2)' }}>
+                        <strong style={{ color: '#34d399', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="10"></circle><circle cx="12" cy="12" r="6"></circle><circle cx="12" cy="12" r="2"></circle></svg>
+                          Ángulo de Ataque & Oferta Sugerida:
+                        </strong>
+                        <p style={{ marginTop: '6px', color: '#f8fafc', fontWeight: '500', lineHeight: '1.5' }}>
+                          {(() => {
+                            const val = parsedProfile?.attack_angle || lead.campaign?.attack_angle;
+                            if (!val) return null;
+                            return typeof val === 'object' ? JSON.stringify(val) : String(val).replace(/\n\n/g, ' ');
+                          })()}
                         </p>
                       </div>
                     )}
 
                     {(!parsedProfile && !lead.campaign) && (
-                      <p style={{ color: '#64748b', fontStyle: 'italic', margin: 0 }}>Esperando reporte de los agentes AI...</p>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px', background: 'rgba(255,255,255,0.05)', padding: '12px', borderRadius: '8px' }}>
+                        <svg className="spinner" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#64748b" strokeWidth="2" style={{ animation: 'spin 1s linear infinite' }}><line x1="12" y1="2" x2="12" y2="6"></line><line x1="12" y1="18" x2="12" y2="22"></line><line x1="4.93" y1="4.93" x2="7.76" y2="7.76"></line><line x1="16.24" y1="16.24" x2="19.07" y2="19.07"></line><line x1="2" y1="12" x2="6" y2="12"></line><line x1="18" y1="12" x2="22" y2="12"></line><line x1="4.93" y1="19.07" x2="7.76" y2="16.24"></line><line x1="16.24" y1="7.76" x2="19.07" y2="4.93"></line></svg>
+                        <p style={{ color: '#94a3b8', fontStyle: 'italic', margin: 0 }}>Analizando presencia digital y huella web en segundo plano...</p>
+                      </div>
                     )}
                   </div>
                 </div>

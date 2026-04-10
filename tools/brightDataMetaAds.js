@@ -113,6 +113,7 @@ export const checkMetaAds = new Tool({
         hasActiveAds: result.hasActiveAds,
         adCount: result.adCount,
         platforms: result.platforms,
+        adLibraryUrl: searchUrl,
         // Score: 10 points if NO ads (good for us), 0 if they already run ads
         score_contribution: result.hasActiveAds ? 0 : 10,
       });

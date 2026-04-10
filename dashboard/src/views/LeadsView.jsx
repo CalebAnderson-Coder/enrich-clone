@@ -107,6 +107,16 @@ export default function LeadsView() {
             const campaignData = lead.campaign_enriched_data && lead.campaign_enriched_data[0] ? lead.campaign_enriched_data[0] : null;
             const rawMega = lead.mega_profile || {};
             
+            const fbAdsUrl = rawMega?.meta_ads?.adLibraryUrl || `https://www.facebook.com/ads/library/?active_status=all&ad_type=all&country=US&q=${encodeURIComponent(lead.business_name)}&search_type=keyword_unordered`;
+            let hasAdsIndicator = "Desconocido";
+            if (lead.score_breakdown && typeof lead.score_breakdown === 'object') {
+              const str = JSON.stringify(lead.score_breakdown).toLowerCase();
+              if (str.includes('no meta ads') || str.includes('not in meta ad')) hasAdsIndicator = "No";
+              else if (str.includes('has active meta ads') || str.includes('active ads')) hasAdsIndicator = "Sí";
+            }
+            if (rawMega?.meta_ads && rawMega.meta_ads.hasActiveAds === false) hasAdsIndicator = "No";
+            if (rawMega?.meta_ads && rawMega.meta_ads.hasActiveAds === true) hasAdsIndicator = "Sí";
+            
             // We prioritize the new table structure, fallback to raw mega_profile properties if they somehow exist, else generic placeholder matching formatting.
             const resumen = campaignData?.radiography_technical || rawMega.situational_summary || `"Highly rated and trusted locally, but they lack an online presence. Setting up a professional website and local SEO would unlock massive growth."`;
             
@@ -151,6 +161,12 @@ export default function LeadsView() {
                       <a href={websiteUrl} target="_blank" rel="noopener noreferrer">{websiteUrl}</a>
                     </div>
                   )}
+
+                  <div className="meta-row ads" style={{ marginTop: '4px' }}>
+                    <svg className="gray-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M11 5L6 9H2v6h4l5 4V5z"></path><path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07"></path></svg>
+                    <span>Anuncios Meta: <strong style={{ color: hasAdsIndicator === 'No' ? '#4ade80' : hasAdsIndicator === 'Sí' ? '#ef4444' : '#9ca3af' }}>{hasAdsIndicator}</strong></span>
+                    <a href={fbAdsUrl} target="_blank" rel="noopener noreferrer" style={{ marginLeft: '8px', fontSize: '0.8rem', color: '#60a5fa', textDecoration: 'underline' }}>Ver Ad Library</a>
+                  </div>
                 </div>
 
                 <div className="lead-progress">

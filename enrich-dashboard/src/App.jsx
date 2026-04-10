@@ -308,12 +308,12 @@ function App() {
             <div className="metric-card">
               <div className="metric-label">Usuarios Activos</div>
               <div className="metric-val">12</div>
-              <a href="#" className="metric-link" onClick={() => setCurrentView('performance')}>Ver detalles</a>
+              <span className="metric-link" style={{ cursor: 'pointer' }} onClick={() => setCurrentView('performance')}>Ver detalles</span>
             </div>
             <div className="metric-card">
               <div className="metric-label">Sesiones</div>
               <div className="metric-val">142</div>
-              <a href="#" className="metric-link" onClick={() => setCurrentView('integrations')}>Conectar GA</a>
+              <span className="metric-link" style={{ cursor: 'pointer' }} onClick={() => setCurrentView('integrations')}>Conectar GA</span>
             </div>
           </div>
         </div>

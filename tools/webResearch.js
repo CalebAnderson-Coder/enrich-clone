@@ -20,36 +20,42 @@ export const searchWeb = new Tool({
     const { query, num_results = 5 } = args;
     
     try {
-      // Direct DuckDuckGo Lite HTML Scraper (No API key required)
-      console.log(`  🔍 [webResearch] Searching DuckDuckGo for: "${query}"`);
-      const response = await fetch('https://lite.duckduckgo.com/lite/', {
+      const token = process.env.BRIGHTDATA_API_TOKEN;
+      
+      if (!token) {
+        return JSON.stringify({ error: "BRIGHTDATA_API_TOKEN is not set. Web search unavailable." });
+      }
+
+      console.log(`  🔍 [webResearch] Searching Google via Bright Data for: "${query}"`);
+      const response = await fetch('https://api.brightdata.com/serp/req', {
         method: 'POST',
         headers: {
-          'Content-Type': 'application/x-www-form-urlencoded',
-          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`,
         },
-        body: 'q=' + encodeURIComponent(query)
+        body: JSON.stringify({
+          query: query,
+          search_engine: 'google',
+          country: 'us',
+          language: 'en',
+          num: Math.min(num_results, 20),
+          zone: process.env.BRIGHTDATA_SERP_ZONE || 'serp_api1',
+        }),
       });
       
-      const html = await response.text();
-      
-      // Extract results from DDG lite HTML
-      // DDG Lite uses tables, with result-snippet being the body and result__a/result-title being the link
-      const snippets = [...html.matchAll(/class='result-snippet[^>]*>([\s\S]*?)<\/td>/g)];
-      const titles = [...html.matchAll(/class='result-title[^>]*>([\s\S]*?)<\/a>/g)];
-      
-      const results = [];
-      for (let i = 0; i < Math.min(snippets.length, num_results); i++) {
-        const text = snippets[i] ? snippets[i][1].replace(/<[^>]+>/g, '').trim() : '';
-        const titleText = titles[i] ? titles[i][1].replace(/<[^>]+>/g, '').trim() : '';
-        
-        if (titleText) {
-          results.push({
-            title: titleText,
-            description: text,
-          });
-        }
+      if (!response.ok) {
+        const errText = await response.text();
+        throw new Error(`Bright Data search failed (${response.status}): ${errText}`);
       }
+
+      const data = await response.json();
+      const organic = data.organic || [];
+      
+      const results = organic.slice(0, num_results).map((item) => ({
+        title: item.title || '',
+        description: item.description || item.snippet || '',
+        url: item.link || item.url || ''
+      }));
 
       if (results.length === 0) {
         return JSON.stringify({ error: "No results found for query." });
