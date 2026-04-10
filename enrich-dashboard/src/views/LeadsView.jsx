@@ -2,10 +2,20 @@ import React, { useState, useEffect } from 'react';
 import { supabase } from '../lib/supabase';
 import './LeadsView.css';
 
+// API base URL — in production this is the Vercel deployment URL
+const API_URL = import.meta.env.VITE_API_URL || '';
+
 export default function LeadsView() {
   const [leads, setLeads] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+
+  // ── Email Draft Modal State ──────────────────────────────
+  const [draftModal, setDraftModal] = useState({ open: false, lead: null, campaign: null });
+  const [rejectMode, setRejectMode] = useState(false);
+  const [rejectReason, setRejectReason] = useState('');
+  const [actionLoading, setActionLoading] = useState(false);
+  const [actionResult, setActionResult] = useState(null);
   useEffect(() => {
     fetchLeads();
     // Real-time subscription for live updates
@@ -56,6 +66,62 @@ export default function LeadsView() {
     } finally {
       setLoading(false);
     }
+  };
+
+  // ── Approve/Reject Handlers ────────────────────────────────
+  const handleApproveEmail = async () => {
+    if (!draftModal.campaign) return;
+    setActionLoading(true);
+    setActionResult(null);
+    try {
+      const res = await fetch(`${API_URL}/api/approve-email`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ campaignId: draftModal.campaign.id, action: 'approve' }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        setActionResult({ type: 'success', message: '✅ ¡Email enviado y lead sincronizado con GHL!' });
+        setTimeout(() => { setDraftModal({ open: false, lead: null, campaign: null }); setActionResult(null); fetchLeads(); }, 2500);
+      } else {
+        setActionResult({ type: 'error', message: data.error || 'Error al aprobar' });
+      }
+    } catch (err) {
+      setActionResult({ type: 'error', message: err.message });
+    } finally {
+      setActionLoading(false);
+    }
+  };
+
+  const handleRejectEmail = async () => {
+    if (!draftModal.campaign || !rejectReason.trim()) return;
+    setActionLoading(true);
+    setActionResult(null);
+    try {
+      const res = await fetch(`${API_URL}/api/approve-email`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ campaignId: draftModal.campaign.id, action: 'reject', rejectionReason: rejectReason }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        setActionResult({ type: 'success', message: '⚠️ Correo rechazado. El equipo lo revisará.' });
+        setTimeout(() => { setDraftModal({ open: false, lead: null, campaign: null }); setRejectMode(false); setRejectReason(''); setActionResult(null); fetchLeads(); }, 2500);
+      } else {
+        setActionResult({ type: 'error', message: data.error || 'Error al rechazar' });
+      }
+    } catch (err) {
+      setActionResult({ type: 'error', message: err.message });
+    } finally {
+      setActionLoading(false);
+    }
+  };
+
+  const openDraftModal = (lead) => {
+    setDraftModal({ open: true, lead, campaign: lead.campaign });
+    setRejectMode(false);
+    setRejectReason('');
+    setActionResult(null);
   };
 
   const getTierClass = (score) => {
@@ -121,41 +187,68 @@ export default function LeadsView() {
               }
             }
 
+            // Sanitizar valores inválidos como la cadena "null"
+            const isValidStr = (...strs) => {
+              for (const str of strs) {
+                if (!str) continue;
+                const t = String(str).trim();
+                if (t === '' || t.toLowerCase() === 'null' || t.toLowerCase() === 'none' || t.toLowerCase() === 'n/a' || t.toLowerCase() === 'not found') continue;
+                return t;
+              }
+              return null;
+            };
+
             // Datos Extraídos
-            const phoneStr = lead.phone || parsedProfile?.radar_parsed?.phone;
-            const websiteStr = lead.website || parsedProfile?.radar_parsed?.website;
-            const emailStr = lead.email;
+            const phoneStr = isValidStr(lead.phone, parsedProfile?.radar_parsed?.phone);
+            const websiteStr = isValidStr(lead.website, lead.domain, parsedProfile?.radar_parsed?.domain, parsedProfile?.radar_parsed?.website);
+            const emailStr = isValidStr(lead.email, parsedProfile?.email, parsedProfile?.radar_parsed?.email);
             
             // Generación de verdaderos enlaces válidos
             let finalPhone = null;
             if (phoneStr) {
                const digitsOnly = phoneStr.replace(/[^0-9]/g, '');
-               finalPhone = (digitsOnly.length === 10) ? `1${digitsOnly}` : digitsOnly;
+               finalPhone = (digitsOnly.length === 10) ? `1${digitsOnly}` : (digitsOnly.length > 0 ? digitsOnly : null);
             }
 
             const whatsappLink = finalPhone ? `https://wa.me/${finalPhone}` : null;
             const emailLink = emailStr ? `mailto:${emailStr}` : null;
             const phoneLink = finalPhone ? `tel:+${finalPhone}` : null;
             const smsLink = finalPhone ? `sms:+${finalPhone}` : null;
-            const ensureHttps = (url) => {
-              if (!url) return null;
-              const t = url.trim();
-              if (t.startsWith('http://') || t.startsWith('https://')) return t;
+            
+            const getSmartMapsLink = (...strs) => {
+              const t = isValidStr(...strs);
+              if (!t) return null;
+              if (t.startsWith('http')) return t;
+              if (!t.includes('.') || t.includes(' ') || t.includes(',')) {
+                return `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(t)}`;
+              }
               return `https://${t}`;
             };
 
-            const mapsLink = ensureHttps(lead.google_maps_url || parsedProfile?.radar_parsed?.google_maps_url || null);
-            let instagramLink = ensureHttps(lead.instagram_url || parsedProfile?.instagram_profile || parsedProfile?.radar_parsed?.instagram_url || null);
-            let facebookLink = ensureHttps(lead.facebook_url || parsedProfile?.radar_parsed?.facebook_url || null);
-            let linkedinLink = ensureHttps(lead.linkedin_url || parsedProfile?.radar_parsed?.linkedin_url || null);
-            
+            const getSmartSocialLink = (domain, ...strs) => {
+              let t = isValidStr(...strs);
+              if (!t) return null;
+              if (t.startsWith('http')) return t;
+              if (!t.toLowerCase().includes(domain.toLowerCase())) {
+                t = t.replace(/^@/, '');
+                return `https://www.${domain}.com/${t}`;
+              }
+              return `https://${t}`;
+            };
+
+            const mapsLink = getSmartMapsLink(lead.google_maps_url, parsedProfile?.radar_parsed?.google_maps_url);
+            let instagramLink = getSmartSocialLink('instagram', lead.instagram_url, parsedProfile?.instagram_profile, parsedProfile?.radar_parsed?.instagram_url);
+            let facebookLink = getSmartSocialLink('facebook', lead.facebook_url, parsedProfile?.radar_parsed?.facebook_url);
+            let linkedinLink = getSmartSocialLink('linkedin', lead.linkedin_url, parsedProfile?.radar_parsed?.linkedin_url);
+
             // Wipe useless root links
             if (instagramLink && instagramLink.match(/^https?:\/\/(www\.)?instagram\.com\/?$/i)) instagramLink = null;
             if (facebookLink && facebookLink.match(/^https?:\/\/(www\.)?facebook\.com\/?$/i)) facebookLink = null;
             if (linkedinLink && linkedinLink.match(/^https?:\/\/(www\.)?linkedin\.com\/?$/i)) linkedinLink = null;
 
             const rawMega = parsedProfile?.mega_profile || parsedProfile;
-            const fbAdsUrl = rawMega?.meta_ads?.adLibraryUrl || `https://www.facebook.com/ads/library/?active_status=all&ad_type=all&country=US&q=${encodeURIComponent(lead.business_name)}&search_type=keyword_unordered`;
+            const parsedBusinessName = lead.business_name || parsedProfile?.radar_parsed?.business_name || '';
+            const fbAdsUrl = rawMega?.meta_ads?.adLibraryUrl || `https://www.facebook.com/ads/library/?active_status=all&ad_type=all&country=US&q=${encodeURIComponent(parsedBusinessName)}&search_type=keyword_unordered`;
             let hasAdsIndicator = "Desconocido";
             if (lead.score_breakdown && typeof lead.score_breakdown === 'object') {
               const str = JSON.stringify(lead.score_breakdown).toLowerCase();
@@ -275,7 +368,7 @@ export default function LeadsView() {
                       <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px' }}>
                         {/* Meta Ads Badge */}
                         <a 
-                          href={rawMega?.meta_ads?.adLibraryUrl || `/api/redirect-ads?query=${encodeURIComponent(lead.business_name || '')}&fb_url=${encodeURIComponent(lead.facebook_url || parsedProfile?.radar_parsed?.facebook_url || '')}`}
+                          href={rawMega?.meta_ads?.adLibraryUrl || `/api/redirect-ads?query=${encodeURIComponent(lead.business_name || '')}&fb_url=${encodeURIComponent(facebookLink || '')}`}
                           target="_blank" 
                           rel="noopener noreferrer" 
                           title="Búsqueda en Ads Library resolviendo ID automáticamente"
@@ -299,9 +392,9 @@ export default function LeadsView() {
                         </a>
                         
                         {/* Direct Facebook Link if available */}
-                        {lead.facebook_url && !lead.facebook_url.match(/^https?:\/\/(www\.)?facebook\.com\/?$/i) && (
+                        {facebookLink && (
                            <a 
-                             href={ensureHttps(lead.facebook_url)}
+                             href={facebookLink}
                              target="_blank" 
                              rel="noopener noreferrer" 
                              title="Ir al perfil de Facebook para ver Transparencia de la Página"
@@ -330,97 +423,88 @@ export default function LeadsView() {
                   </div>
                 </div>
 
-                {/* Lead Magnets Section */}
-                <div style={{ marginTop: '16px', background: lead.campaign?.lead_magnet_status === 'COMPLETED' ? 'rgba(99, 102, 241, 0.1)' : 'transparent', border: lead.campaign?.lead_magnet_status === 'COMPLETED' ? '1px solid rgba(99, 102, 241, 0.3)' : 'none', padding: lead.campaign?.lead_magnet_status === 'COMPLETED'  ? '16px' : '0', borderRadius: '12px', transition: 'all 0.3s ease' }}>
-                  {(!lead.campaign || lead.campaign.lead_magnet_status === 'IDLE' || !lead.campaign.lead_magnet_status) && lead.campaign ? (
-                    <button 
-                      onClick={async () => {
-                        try {
-                          await supabase.from('campaign_enriched_data')
-                            .update({ lead_magnet_status: 'PENDING' })
-                            .eq('id', lead.campaign.id);
-                          // El realtime refetch hará el cambio visual
-                        } catch (e) {
-                          console.error(e);
-                        }
-                      }}
-                      style={{
-                        width: '100%',
-                        background: 'linear-gradient(135deg, #6366f1 0%, #a855f7 100%)',
-                        color: 'white',
-                        border: 'none',
-                        padding: '12px',
-                        borderRadius: '8px',
-                        fontWeight: '600',
-                        cursor: 'pointer',
-                        display: 'flex',
-                        justifyContent: 'center',
-                        alignItems: 'center',
-                        gap: '8px'
-                      }}
-                    >
-                      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"></path><polyline points="3.27 6.96 12 12.01 20.73 6.96"></polyline><line x1="12" y1="22.08" x2="12" y2="12"></line></svg>
-                      Generar Lead Magnets AI
-                    </button>
-                  ) : (lead.campaign?.lead_magnet_status === 'PENDING' || lead.campaign?.lead_magnet_status === 'PROCESSING') ? (
-                    <button 
-                      disabled
-                      style={{
-                        width: '100%',
-                        background: 'linear-gradient(135deg, #6366f1 0%, #a855f7 100%)',
-                        color: 'white',
-                        border: 'none',
-                        padding: '12px',
-                        borderRadius: '8px',
-                        fontWeight: '600',
-                        cursor: 'not-allowed',
-                        opacity: 0.7,
-                        display: 'flex',
-                        justifyContent: 'center',
-                        alignItems: 'center',
-                        gap: '8px'
-                      }}
-                    >
-                      <svg className="spinner" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ animation: 'spin 1s linear infinite' }}><line x1="12" y1="2" x2="12" y2="6"></line><line x1="12" y1="18" x2="12" y2="22"></line><line x1="4.93" y1="4.93" x2="7.76" y2="7.76"></line><line x1="16.24" y1="16.24" x2="19.07" y2="19.07"></line><line x1="2" y1="12" x2="6" y2="12"></line><line x1="18" y1="12" x2="22" y2="12"></line><line x1="4.93" y1="19.07" x2="7.76" y2="16.24"></line><line x1="16.24" y1="7.76" x2="19.07" y2="4.93"></line></svg>
-                      Generando Lead Magnets...
-                    </button>
-                  ) : lead.campaign?.lead_magnet_status === 'COMPLETED' && lead.campaign?.lead_magnets_data ? (
-                    <div style={{ animation: 'fadeIn 0.5s ease' }}>
-                      <h4 style={{ color: '#818cf8', display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '12px' }}>
-                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M2 12h4l3-9 5 18 3-9h5"></path></svg>
-                        Lead Magnets Listos
-                      </h4>
-                      <div style={{ fontSize: '0.85rem', color: '#e2e8f0' }}>
+                {/* Email Draft / Approval Section */}
+                <div style={{ marginTop: '16px' }}>
+                  {(() => {
+                    const approvalStatus = lead.campaign?.approval_status;
+                    const outreachStatus = lead.campaign?.outreach_status;
+                    const hasDraft = !!lead.campaign?.email_draft_html;
+                    const ghlTag = lead.campaign?.ghl_tag;
 
-                        {lead.campaign.lead_magnets_data.free_website_magnet && (
-                          <div style={{ marginBottom: '12px' }}>
-                            <strong style={{ color: '#fcd34d' }}>Sitio Web Gratis:</strong>
-                            <p style={{ marginTop: '4px', color: '#cbd5e1', marginBottom: '4px' }}><strong>Concepto:</strong> {lead.campaign.lead_magnets_data.free_website_magnet.title}</p>
-                            <p style={{ marginTop: '4px', color: '#cbd5e1', marginBottom: '4px' }}><strong>Propuesta:</strong> {lead.campaign.lead_magnets_data.free_website_magnet.value_proposition}</p>
-                            <p style={{ marginTop: '4px', color: '#cbd5e1' }}><strong>Estructura:</strong> {lead.campaign.lead_magnets_data.free_website_magnet.structure}</p>
+                    // SENT — Already approved and dispatched
+                    if (approvalStatus === 'APPROVED' || outreachStatus === 'SENT') {
+                      return (
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', background: 'rgba(16,185,129,0.1)', border: '1px solid rgba(16,185,129,0.3)', padding: '12px', borderRadius: '8px' }}>
+                          <span style={{ fontSize: '1.2rem' }}>✅</span>
+                          <div>
+                            <div style={{ color: '#10b981', fontWeight: 600, fontSize: '0.9rem' }}>Email Enviado</div>
+                            {ghlTag && <div style={{ color: '#94a3b8', fontSize: '0.8rem', marginTop: '2px' }}>GHL Tag: <strong style={{ color: ghlTag === 'Interesado' ? '#fbbf24' : '#60a5fa' }}>{ghlTag}</strong></div>}
+                            {lead.campaign?.email_sent_at && <div style={{ color: '#64748b', fontSize: '0.75rem', marginTop: '2px' }}>{new Date(lead.campaign.email_sent_at).toLocaleDateString('es')}</div>}
                           </div>
-                        )}
-                        
-                        {lead.campaign.lead_magnets_data.ads_magnet?.creative_1 && (
-                          <div style={{ marginBottom: '12px', background: 'rgba(0,0,0,0.2)', padding: '10px', borderRadius: '8px', borderLeft: '3px solid #818cf8' }}>
-                            <strong style={{ color: '#a78bfa' }}>Ad Concept 1:</strong>
-                            <div style={{ marginTop: '4px', marginBottom: '4px' }}><strong style={{color:'#94a3b8'}}>Hook:</strong> {lead.campaign.lead_magnets_data.ads_magnet.creative_1.hook}</div>
-                            <div style={{ marginBottom: '4px' }}><strong style={{color:'#94a3b8'}}>Copy:</strong> {lead.campaign.lead_magnets_data.ads_magnet.creative_1.copy}</div>
-                            <div><strong style={{color:'#94a3b8'}}>Visual:</strong> {lead.campaign.lead_magnets_data.ads_magnet.creative_1.visual}</div>
-                          </div>
-                        )}
+                        </div>
+                      );
+                    }
 
-                        {lead.campaign.lead_magnets_data.ads_magnet?.creative_2 && (
-                          <div style={{ marginBottom: '12px', background: 'rgba(0,0,0,0.2)', padding: '10px', borderRadius: '8px', borderLeft: '3px solid #34d399' }}>
-                            <strong style={{ color: '#34d399' }}>Ad Concept 2 (Urgencia):</strong>
-                            <div style={{ marginTop: '4px', marginBottom: '4px' }}><strong style={{color:'#94a3b8'}}>Hook:</strong> {lead.campaign.lead_magnets_data.ads_magnet.creative_2.hook}</div>
-                            <div style={{ marginBottom: '4px' }}><strong style={{color:'#94a3b8'}}>Copy:</strong> {lead.campaign.lead_magnets_data.ads_magnet.creative_2.copy}</div>
-                            <div><strong style={{color:'#94a3b8'}}>Visual:</strong> {lead.campaign.lead_magnets_data.ads_magnet.creative_2.visual}</div>
+                    // REJECTED — Show rejection badge
+                    if (approvalStatus === 'REJECTED') {
+                      return (
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', background: 'rgba(239,68,68,0.1)', border: '1px solid rgba(239,68,68,0.3)', padding: '12px', borderRadius: '8px' }}>
+                          <span style={{ fontSize: '1.2rem' }}>❌</span>
+                          <div>
+                            <div style={{ color: '#f87171', fontWeight: 600, fontSize: '0.9rem' }}>Correo Rechazado</div>
+                            {lead.campaign?.rejection_reason && <div style={{ color: '#94a3b8', fontSize: '0.8rem', marginTop: '4px', fontStyle: 'italic' }}>"{lead.campaign.rejection_reason}"</div>}
                           </div>
-                        )}
-                      </div>
-                    </div>
-                  ) : null}
+                        </div>
+                      );
+                    }
+
+                    // DRAFT with HTML ready — Show "Draft de Correo" button
+                    if (hasDraft && (approvalStatus === 'DRAFT' || outreachStatus === 'AWAITING_APPROVAL')) {
+                      return (
+                        <button 
+                          onClick={() => openDraftModal(lead)}
+                          className="draft-email-btn"
+                        >
+                          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                            <path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"></path>
+                            <polyline points="22,6 12,13 2,6"></polyline>
+                          </svg>
+                          Draft de Correo
+                        </button>
+                      );
+                    }
+
+                    // PENDING/PROCESSING magnet — Generating
+                    if (lead.campaign?.lead_magnet_status === 'PENDING' || lead.campaign?.lead_magnet_status === 'PROCESSING') {
+                      return (
+                        <button disabled className="draft-email-btn generating">
+                          <svg className="spinner" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ animation: 'spin 1s linear infinite' }}><line x1="12" y1="2" x2="12" y2="6"></line><line x1="12" y1="18" x2="12" y2="22"></line><line x1="4.93" y1="4.93" x2="7.76" y2="7.76"></line><line x1="16.24" y1="16.24" x2="19.07" y2="19.07"></line><line x1="2" y1="12" x2="6" y2="12"></line><line x1="18" y1="12" x2="22" y2="12"></line><line x1="4.93" y1="19.07" x2="7.76" y2="16.24"></line><line x1="16.24" y1="7.76" x2="19.07" y2="4.93"></line></svg>
+                          Preparando Draft...
+                        </button>
+                      );
+                    }
+
+                    // IDLE — No magnet yet, trigger generation
+                    if (lead.campaign && (lead.campaign.lead_magnet_status === 'IDLE' || !lead.campaign.lead_magnet_status)) {
+                      return (
+                        <button 
+                          onClick={async () => {
+                            try {
+                              await supabase.from('campaign_enriched_data')
+                                .update({ lead_magnet_status: 'PENDING' })
+                                .eq('id', lead.campaign.id);
+                            } catch (e) { console.error(e); }
+                          }}
+                          className="draft-email-btn idle"
+                        >
+                          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"></path><polyline points="3.27 6.96 12 12.01 20.73 6.96"></polyline><line x1="12" y1="22.08" x2="12" y2="12"></line></svg>
+                          Generar Draft de Email
+                        </button>
+                      );
+                    }
+
+                    return null;
+                  })()}
                 </div>
 
                 <div style={{ marginTop: 'auto' }}>
@@ -477,6 +561,91 @@ export default function LeadsView() {
               </div>
             );
           })}
+        </div>
+      )}
+
+      {/* ═══════ EMAIL DRAFT PREVIEW MODAL ═══════ */}
+      {draftModal.open && draftModal.campaign && (
+        <div className="draft-modal-overlay" onClick={() => !actionLoading && setDraftModal({ open: false, lead: null, campaign: null })}>
+          <div className="draft-modal" onClick={e => e.stopPropagation()}>
+            <div className="draft-modal-header">
+              <h3>
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"></path>
+                  <polyline points="22,6 12,13 2,6"></polyline>
+                </svg>
+                Vista Previa del Correo
+              </h3>
+              <button className="close-modal-btn" onClick={() => !actionLoading && setDraftModal({ open: false, lead: null, campaign: null })}>
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+              </button>
+            </div>
+
+            <div className="draft-modal-meta">
+              <div><strong>Para:</strong> {draftModal.lead?.email || draftModal.lead?.email_address || 'Sin email'}</div>
+              <div><strong>Negocio:</strong> {draftModal.lead?.business_name}</div>
+              <div><strong>Asunto:</strong> {draftModal.campaign.email_draft_subject || 'Sin asunto'}</div>
+            </div>
+
+            <div className="draft-modal-preview">
+              <iframe
+                title="Email Preview"
+                srcDoc={draftModal.campaign.email_draft_html}
+                style={{ width: '100%', height: '450px', border: 'none', borderRadius: '8px', background: '#0D0D0D' }}
+              />
+            </div>
+
+            {actionResult && (
+              <div className={`draft-action-result ${actionResult.type}`}>
+                {actionResult.message}
+              </div>
+            )}
+
+            {!rejectMode ? (
+              <div className="draft-modal-actions">
+                <button 
+                  className="draft-approve-btn" 
+                  onClick={handleApproveEmail} 
+                  disabled={actionLoading}
+                >
+                  {actionLoading ? 'Enviando...' : '✅ Aprobar y Enviar'}
+                </button>
+                <button 
+                  className="draft-reject-btn" 
+                  onClick={() => setRejectMode(true)} 
+                  disabled={actionLoading}
+                >
+                  ❌ Rechazar
+                </button>
+              </div>
+            ) : (
+              <div className="draft-reject-form">
+                <label>¿Por qué rechazas este correo?</label>
+                <textarea 
+                  value={rejectReason} 
+                  onChange={e => setRejectReason(e.target.value)} 
+                  placeholder="Ej: El tono no es apropiado, quiero cambiar la oferta..."
+                  rows={3}
+                />
+                <div className="draft-modal-actions">
+                  <button 
+                    className="draft-reject-confirm-btn" 
+                    onClick={handleRejectEmail} 
+                    disabled={actionLoading || !rejectReason.trim()}
+                  >
+                    {actionLoading ? 'Enviando...' : 'Enviar Feedback'}
+                  </button>
+                  <button 
+                    className="draft-cancel-btn" 
+                    onClick={() => { setRejectMode(false); setRejectReason(''); }} 
+                    disabled={actionLoading}
+                  >
+                    Cancelar
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
         </div>
       )}
     </div>

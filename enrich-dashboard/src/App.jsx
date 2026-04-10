@@ -52,13 +52,24 @@ function App() {
 
   const fetchAgents = async () => {
     try {
-      const dummyAgents = [
-        { name: 'Helena', toolCount: 5 },
-        { name: 'Sam', toolCount: 3 },
-        { name: 'Kai', toolCount: 2 }
-      ];
-      setAgents(dummyAgents);
-      setSelectedAgent('Helena');
+      // Connect to the real local Node.js API
+      const res = await fetch(`http://localhost:3001/api/agents`, {
+        headers: {
+          'Authorization': 'Bearer sk_live_51MxxXYZ123SecureEnrichToken2026'
+        }
+      });
+      const data = await res.json();
+      const realAgents = data.agents || [];
+      setAgents(realAgents);
+
+      // Auto-select Helena if she exists, else the first one
+      if (realAgents.length > 0) {
+        if (realAgents.some(a => a.name === 'Helena')) {
+          setSelectedAgent('Helena');
+        } else {
+          setSelectedAgent(realAgents[0].name);
+        }
+      }
     } catch (err) {
       console.error('Error fetching agents:', err);
     }
@@ -96,14 +107,13 @@ function App() {
     setInputText('');
     setIsTyping(true);
 
-    // Chat requires the backend Node.js server to be running
-    // In production (Vercel), just show an informational message
+    // Chat is currently mocked (Coming soon)
     setTimeout(() => {
       setMessages(prev => [...prev, {
         role: 'assistant',
         author: 'Sistema',
         time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-        text: 'El chat interactivo con agentes requiere el servidor Node.js activo. Los datos de leads y campañas se cargan en tiempo real desde Supabase — navega a "Leads Precualificados" o "Campañas en Vivo".'
+        text: 'Próximamente... (Conexión de chat en progreso)'
       }]);
       setIsTyping(false);
     }, 1000);

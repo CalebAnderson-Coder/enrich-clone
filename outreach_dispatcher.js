@@ -1,6 +1,6 @@
 // ============================================================
 // outreach_dispatcher.js — Autonomous Email Outreach Dispatcher
-// Primary transport: Gmail SMTP (Jsanchez@empirikagroup.com)
+// Primary transport: Gmail SMTP
 // Fallback transport: Resend API (if RESEND_API_KEY is set)
 // ============================================================
 
@@ -17,11 +17,11 @@ const supabase = createClient(
 );
 
 // ── Transport selection ───────────────────────────────────────
-const SMTP_USER    = process.env.SMTP_USER;     // Jsanchez@empirikagroup.com
+const SMTP_USER    = process.env.SMTP_USER;     // User's SMTP Email
 const SMTP_PASS    = process.env.SMTP_PASS;     // app password (spaces OK for nodemailer)
 const SMTP_HOST    = process.env.SMTP_HOST    || 'smtp.gmail.com';
 const SMTP_PORT    = parseInt(process.env.SMTP_PORT || '587', 10);
-const FROM_NAME    = process.env.SMTP_FROM_NAME || 'Ángela · Empírika Digital';
+const FROM_NAME    = process.env.SMTP_FROM_NAME || 'Ángela · Agency Fleet';
 const FROM_ADDRESS = SMTP_USER || process.env.RESEND_FROM_EMAIL || 'onboarding@resend.dev';
 
 const RESEND_API_KEY  = process.env.RESEND_API_KEY;
@@ -39,7 +39,7 @@ if (SMTP_USER && SMTP_PASS) {
       pass: SMTP_PASS.trim(),
     },
     tls: {
-      rejectUnauthorized: false, // EMPIRIKA Gmail app password
+      rejectUnauthorized: false, // Gmail app password
     },
   });
   console.log(`📧 [OutreachDispatcher] SMTP configurado: ${SMTP_USER}`);
@@ -50,43 +50,47 @@ if (SMTP_USER && SMTP_PASS) {
 // ── Main export ───────────────────────────────────────────────
 
 /**
- * Dispatches personalized emails to all leads whose magnet is
- * COMPLETED but outreach is still PENDING.
- * @returns {{ sent: number, skipped: number, errors: number }}
+ * Pre-renders email drafts for all leads whose magnet is COMPLETED
+ * and saves the HTML to Supabase for client approval via dashboard.
+ * NO emails are sent automatically — the client must approve each one.
+ * @returns {{ rendered: number, skipped: number, errors: number }}
  */
 export async function dispatchPendingOutreach() {
-  console.log('\n📬 [OutreachDispatcher] Buscando leads listos para outreach...');
+  console.log('\n📬 [OutreachDispatcher] Buscando leads listos para pre-render de correo...');
 
-  // ── 1. Fetch eligible records ─────────────────────────────
+  // ── 1. Fetch eligible records (COMPLETED magnets, still DRAFT) ──
   const { data: records, error } = await supabase
     .from('campaign_enriched_data')
     .select(`
       id,
       prospect_id,
       lead_magnets_data,
+      approval_status,
       leads!inner (
+        id,
         business_name,
         email_address
       )
     `)
     .eq('lead_magnet_status', 'COMPLETED')
-    .eq('outreach_status', 'PENDING')
+    .or('approval_status.is.null,approval_status.eq.DRAFT')
+    .is('email_draft_html', null)
     .not('lead_magnets_data', 'is', null)
     .limit(BATCH_LIMIT);
 
   if (error) {
     console.error('❌ [OutreachDispatcher] Error consultando Supabase:', error.message);
-    return { sent: 0, skipped: 0, errors: 1 };
+    return { rendered: 0, skipped: 0, errors: 1 };
   }
 
   if (!records || records.length === 0) {
-    console.log('✅ [OutreachDispatcher] No hay leads pendientes de outreach.');
-    return { sent: 0, skipped: 0, errors: 0 };
+    console.log('✅ [OutreachDispatcher] No hay leads pendientes de pre-render.');
+    return { rendered: 0, skipped: 0, errors: 0 };
   }
 
-  console.log(`📋 [OutreachDispatcher] ${records.length} lead(s) en cola.\n`);
+  console.log(`📋 [OutreachDispatcher] ${records.length} lead(s) para pre-renderizar.\n`);
 
-  const stats = { sent: 0, skipped: 0, errors: 0 };
+  const stats = { rendered: 0, skipped: 0, errors: 0 };
 
   // ── 2. Process each lead ─────────────────────────────────
   for (const record of records) {
@@ -112,38 +116,36 @@ export async function dispatchPendingOutreach() {
     }
 
     try {
-      // ── 3. Render HTML email ──────────────────────────────
+      // ── 3. Render HTML email (pre-render only, no send) ───
       const { subject, html } = renderMagnetEmail(magnetData, lead);
 
-      console.log(`  ✉️  → ${lead.email_address}  (${lead.business_name}) [${magnetData.magnet_type}]`);
+      console.log(`  📝 Pre-rendered → ${lead.email_address}  (${lead.business_name}) [${magnetData.magnet_type}]`);
 
-      // ── 4. Send ───────────────────────────────────────────
-      const emailId = await sendEmail({ to: lead.email_address, subject, html });
-
-      // ── 5. Mark as SENT ───────────────────────────────────
+      // ── 4. Save draft to Supabase for client preview ──────
       await supabase
         .from('campaign_enriched_data')
         .update({
-          outreach_status: 'SENT',
-          email_sent_at:   new Date().toISOString(),
-          email_resend_id: emailId || null,
+          outreach_status:     'AWAITING_APPROVAL',
+          approval_status:     'DRAFT',
+          email_draft_subject: subject,
+          email_draft_html:    html,
         })
         .eq('id', record.id);
 
-      console.log(`  ✅  Enviado! ID: ${emailId} → ${lead.business_name}`);
-      stats.sent++;
+      console.log(`  ✅  Draft guardado → ${lead.business_name} (listo para aprobación)`);
+      stats.rendered++;
 
     } catch (err) {
-      console.error(`  ❌  Error enviando a ${lead.business_name}:`, err.message);
+      console.error(`  ❌  Error pre-renderizando ${lead.business_name}:`, err.message);
       await supabase
         .from('campaign_enriched_data')
-        .update({ outreach_status: 'ERROR' })
+        .update({ outreach_status: 'RENDER_ERROR' })
         .eq('id', record.id);
       stats.errors++;
     }
   }
 
-  console.log(`\n📊 [OutreachDispatcher] Resumen: ${stats.sent} enviados | ${stats.skipped} saltados | ${stats.errors} errores\n`);
+  console.log(`\n📊 [OutreachDispatcher] Resumen: ${stats.rendered} pre-rendered | ${stats.skipped} saltados | ${stats.errors} errores\n`);
   return stats;
 }
 

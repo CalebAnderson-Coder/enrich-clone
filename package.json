@@ -16,7 +16,7 @@
   ],
   "author": "Agencia IA",
   "license": "ISC",
-  "description": "Autonomous AI Marketing Agency Runtime — Enrich Labs Clone",
+  "description": "Autonomous AI Marketing Agency Runtime",
   "dependencies": {
     "@google/genai": "^1.49.0",
     "@google/generative-ai": "^0.24.1",

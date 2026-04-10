@@ -1,5 +1,5 @@
 // ============================================================
-// index.js — Main Entry Point: Empírika Agent Fleet Runtime
+// index.js — Main Entry Point: Agency Fleet Runtime
 // Express server + Agent Runtime + Cron Scheduler + Lead Pipeline
 // ============================================================
 
@@ -16,6 +16,7 @@ import { kai } from './agents/kai.js';
 import { manager } from './agents/manager.js';
 import { scout } from './agents/scout.js';
 import { carlos } from './agents/carlos.js';
+import { davinci } from './agents/davinci.js';
 import { getPendingJobs, updateJobStatus, getActiveBrands, createJob, getJobById } from './lib/supabase.js';
 import { getLeads, getLeadById, updateOutreachStatus, getLeadsStats } from './tools/database.js';
 import { fetchPage } from './tools/webResearch.js';
@@ -42,6 +43,7 @@ runtime.registerAgent(helena);
 runtime.registerAgent(sam);
 runtime.registerAgent(kai);
 runtime.registerAgent(carlos);
+runtime.registerAgent(davinci);
 
 console.log(`🧠 Agent Runtime initialized with ${runtime.agents.size} agents`);
 console.log(`   Agents: ${Array.from(runtime.agents.keys()).join(', ')}`);
@@ -190,7 +192,7 @@ app.post('/api/leads/:id/analyze', async (req, res) => {
 
     const prompt = `Contexto del lead: ${context}`;
 
-    const result = await runtime.run('Carlos Empirika', prompt, { currentAgent: 'Carlos Empirika' });
+    const result = await runtime.run('Carlos', prompt, { currentAgent: 'Carlos' });
 
     let parsedResponse = {};
     try {
@@ -199,7 +201,7 @@ app.post('/api/leads/:id/analyze', async (req, res) => {
     } catch (e) {
        console.log("No se pudo parsear el JSON de la estrategia, fallback aplicado.");
        parsedResponse = {
-         attack_angle: "El Sistema Automatizado de Lead Generation de Empirika (Scraping + Landings con IA + GoHighLevel) te permitirá escalar captación y cerrar clientes calificados en piloto automático. (Generado automáticamente)",
+         attack_angle: "Nuestro Sistema Automatizado de Lead Generation (Scraping + Landings con IA + GoHighLevel) te permitirá escalar captación y cerrar clientes calificados en piloto automático. (Generado automáticamente)",
          copy_suggestion: result.response
        };
     }
@@ -470,7 +472,7 @@ app.post('/api/leads/:id/enrich', async (req, res) => {
 
 INSTRUCCIONES DE DELEGACIÓN ESTRICTA EN ORDEN:
 1. Delega a 'Helena', 'Sam' y 'Kai' para hacer una radiografía técnica del lead (SEO/Velocidad, Ads y Redes Sociales).
-2. Con los hallazgos de esos tres agentes, delega a 'Carlos Empirika' para armar el 'Attack Angle' estratégico (por qué nos necesitan basado en esa radiografía técnica).
+2. Con los hallazgos de esos tres agentes, delega a 'Carlos' para armar el 'Attack Angle' estratégico (por qué nos necesitan basado en esa radiografía técnica).
 3. Con el Angle de Carlos listo, delega a 'Angela' para crear el copy de multi-contacto. Ángela DEBE redactar TRES (3) piezas de outreach: un Cold Email, un DM persuasivo para Instagram o FB, y un mensaje corto e impactante vía WhatsApp.
 4. Devuélveme a mí (el usuario) todo consolidado que incluya: el resumen técnico de la radiografía, el Approach de Carlos, y los 3 mensajes escritos por Ángela. Responde en español (Markdown).`;
 
@@ -704,7 +706,7 @@ startTranscriptionWorker();
 // ============================================================
 app.listen(port, () => {
   console.log(`\n${'═'.repeat(56)}`);
-  console.log(`🤖 EMPÍRIKA — AI Marketing Agency Fleet`);
+  console.log(`🤖 AGENCY — AI Marketing Fleet`);
   console.log(`${'─'.repeat(56)}`);
   console.log(`🌐 Server:     http://localhost:${port}`);
   console.log(`❤️  Health:     http://localhost:${port}/health`);
