@@ -4,6 +4,7 @@ dotenv.config();
 import { AgentRuntime } from './lib/AgentRuntime.js';
 import { supabase } from './lib/supabase.js';
 import { carlos } from './agents/carlos.js';
+import { fetchPage } from './tools/webResearch.js';
 
 async function main() {
   const runtime = new AgentRuntime({
@@ -18,7 +19,7 @@ async function main() {
     return;
   }
 
-  console.log(`Fetched ${leads.length} leads. Starting Carlos analysis...`);
+  console.log(`Fetched ${leads.length} leads. Starting Firecrawl + Carlos analysis...`);
 
   for (const lead of leads) {
     let mega_profile = {};
@@ -34,11 +35,21 @@ async function main() {
 
     console.log(`Analyzing: ${lead.business_name} ...`);
 
+    let websiteContent = "No hay sitio web proporcionado.";
+    if (lead.website) {
+       console.log(`  -> Extrañendo web de ${lead.website} con Firecrawl...`);
+       websiteContent = await fetchPage.fn({ url: lead.website });
+    }
+
     const context = `
       Nombre: ${lead.business_name || lead.empresa || 'Empresa local'}
       Industria: ${lead.industry || lead.nicho || 'General'}
       Web/Maps: ${lead.website || lead.google_maps_url || 'No disponible'}
       Ubicación: ${lead.metro_area || lead.ciudad || 'No disponible'}
+      
+      === CONTENIDO DEL SITIO WEB REPORTADO POR FIRECRAWL (MARKDOWN) ===
+      ${websiteContent}
+      ==================================================================
     `;
 
     const prompt = `Contexto del lead: ${context}

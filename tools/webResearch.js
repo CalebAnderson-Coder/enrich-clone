@@ -70,7 +70,7 @@ export const searchWeb = new Tool({
 
 export const fetchPage = new Tool({
   name: 'fetch_webpage',
-  description: 'Fetch and extract text content from a webpage URL. Returns the text content for analysis.',
+  description: 'Fetch and extract text content from a webpage URL using Firecrawl. Returns clean Markdown content for analysis.',
   parameters: {
     type: 'object',
     properties: {
@@ -79,26 +79,52 @@ export const fetchPage = new Tool({
     required: ['url'],
   },
   fn: async (args) => {
-    const { url } = args;
+    let { url } = args;
 
     try {
-      const response = await fetch(url, {
-        headers: { 'User-Agent': 'Mozilla/5.0 (compatible; EnrichBot/1.0)' },
-        signal: AbortSignal.timeout(10000),
-      });
-      
-      const html = await response.text();
-      
-      // Basic HTML to text extraction
-      const text = html
-        .replace(/<script[\s\S]*?<\/script>/gi, '')
-        .replace(/<style[\s\S]*?<\/style>/gi, '')
-        .replace(/<[^>]+>/g, ' ')
-        .replace(/\s+/g, ' ')
-        .trim()
-        .slice(0, 3000); // Limit to avoid token overflow
+      // 1. Limpieza básica de la URL
+      url = url.trim();
+      if (!url.startsWith('http://') && !url.startsWith('https://')) {
+        url = 'https://' + url;
+      }
 
-      return text || 'Page content was empty or blocked.';
+      // Validar si la URL tiene un formato aceptable
+      try {
+        new URL(url);
+      } catch (e) {
+        return `Error: URL inválida proporcionada (${url}).`;
+      }
+
+      const apiKey = process.env.FIRECRAWL_API_KEY || 'fc-eac1599ed25044feb68df593f82e6a32';
+      
+      console.log(`  🌐 [webResearch] Scraping website with Firecrawl: ${url}`);
+      const response = await fetch('https://api.firecrawl.dev/v1/scrape', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${apiKey}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          url: url,
+          formats: ['markdown']
+        })
+      });
+
+      if (!response.ok) {
+        const errorData = await response.text();
+        return `Firecrawl API error (${response.status}): ${errorData}`;
+      }
+
+      const data = await response.json();
+      
+      if (data.success && data.data && data.data.markdown) {
+        const markdown = data.data.markdown.trim();
+        // Ampliamos el límite porque Markdown limpio es denso en contexto
+        return markdown.slice(0, 8000); 
+      } else {
+        return 'Page content could not be extracted by Firecrawl.';
+      }
+
     } catch (err) {
       return `Failed to fetch ${url}: ${err.message}`;
     }
