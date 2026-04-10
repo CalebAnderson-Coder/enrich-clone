@@ -459,7 +459,7 @@ export default function LeadsView() {
                     }
 
                     // DRAFT with HTML ready — Show "Draft de Correo" button
-                    if (hasDraft && (approvalStatus === 'DRAFT' || outreachStatus === 'AWAITING_APPROVAL')) {
+                    if (hasDraft && approvalStatus !== 'APPROVED' && approvalStatus !== 'REJECTED' && outreachStatus !== 'SENT') {
                       return (
                         <button 
                           onClick={() => openDraftModal(lead)}
