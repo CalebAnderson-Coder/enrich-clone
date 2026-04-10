@@ -154,6 +154,17 @@ export default function LeadsView() {
             if (facebookLink && facebookLink.match(/^https?:\/\/(www\.)?facebook\.com\/?$/i)) facebookLink = null;
             if (linkedinLink && linkedinLink.match(/^https?:\/\/(www\.)?linkedin\.com\/?$/i)) linkedinLink = null;
 
+            const rawMega = parsedProfile?.mega_profile || parsedProfile;
+            const fbAdsUrl = rawMega?.meta_ads?.adLibraryUrl || `https://www.facebook.com/ads/library/?active_status=all&ad_type=all&country=US&q=${encodeURIComponent(lead.business_name)}&search_type=keyword_unordered`;
+            let hasAdsIndicator = "Desconocido";
+            if (lead.score_breakdown && typeof lead.score_breakdown === 'object') {
+              const str = JSON.stringify(lead.score_breakdown).toLowerCase();
+              if (str.includes('no meta ads') || str.includes('not in meta ad')) hasAdsIndicator = "No";
+              else if (str.includes('has active meta ads') || str.includes('active ads')) hasAdsIndicator = "Sí";
+            }
+            if (rawMega?.meta_ads && rawMega.meta_ads.hasActiveAds === false) hasAdsIndicator = "No";
+            if (rawMega?.meta_ads && rawMega.meta_ads.hasActiveAds === true) hasAdsIndicator = "Sí";
+
             return (
               <div key={lead.id} className="lead-card">
                 <div className={`lead-tier-badge ${tierClass}`}>
@@ -248,10 +259,74 @@ export default function LeadsView() {
 
                     {(!parsedProfile && !lead.campaign) && (
                       <div style={{ display: 'flex', alignItems: 'center', gap: '8px', background: 'rgba(255,255,255,0.05)', padding: '12px', borderRadius: '8px' }}>
-                        <svg className="spinner" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#64748b" strokeWidth="2" style={{ animation: 'spin 1s linear infinite' }}><line x1="12" y1="2" x2="12" y2="6"></line><line x1="12" y1="18" x2="12" y2="22"></line><line x1="4.93" y1="4.93" x2="7.76" y2="7.76"></line><line x1="16.24" y1="16.24" x2="19.07" y2="19.07"></line><line x1="2" y1="12" x2="6" y2="12"></line><line x1="18" y1="12" x2="22" y2="12"></line><line x1="4.93" y1="19.07" x2="7.76" y2="16.24"></line><line x1="16.24" y1="7.76" x2="19.07" y2="4.93"></line></svg>
-                        <p style={{ color: '#94a3b8', fontStyle: 'italic', margin: 0 }}>Analizando presencia digital y huella web en segundo plano...</p>
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ color: '#94a3b8' }}><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>
+                        <span style={{ color: '#94a3b8' }}>Análisis completo en proceso (los agentes están procesando los datos)...</span>
                       </div>
                     )}
+
+                    {/* NEW: ANUNCIOS META Y SEÑALES DE MARKETING */}
+                    <div style={{ marginTop: '4px', paddingTop: '12px', borderTop: '1px solid rgba(255,255,255,0.05)' }}>
+                      <strong style={{ color: '#60a5fa', display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '8px' }}>
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                          <path d="M22 12h-4l-3 9L9 3l-3 9H2" />
+                        </svg>
+                        Señales de Marketing:
+                      </strong>
+                      <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px' }}>
+                        {/* Meta Ads Badge */}
+                        <a 
+                          href={rawMega?.meta_ads?.adLibraryUrl || `/api/redirect-ads?query=${encodeURIComponent(lead.business_name || '')}&fb_url=${encodeURIComponent(lead.facebook_url || parsedProfile?.radar_parsed?.facebook_url || '')}`}
+                          target="_blank" 
+                          rel="noopener noreferrer" 
+                          title="Búsqueda en Ads Library resolviendo ID automáticamente"
+                          style={{ 
+                            display: 'inline-flex', 
+                            alignItems: 'center', 
+                            gap: '4px', 
+                            background: hasAdsIndicator === 'Sí' ? 'rgba(59,130,246,0.1)' : 'rgba(148, 163, 184, 0.1)', 
+                            color: hasAdsIndicator === 'Sí' ? '#60a5fa' : '#94a3b8', 
+                            padding: '4px 8px', 
+                            borderRadius: '4px', 
+                            fontSize: '0.8rem', 
+                            textDecoration: 'none',
+                            border: hasAdsIndicator === 'Sí' ? '1px solid rgba(59,130,246,0.2)' : '1px solid rgba(148,163,184,0.2)'
+                          }}
+                        >
+                          <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor">
+                             <path d="M24 12.073c0-6.627-5.373-12-12-12s-12 5.373-12 12c0 5.99 4.388 10.954 10.125 11.854v-8.385H7.078v-3.469h3.047V9.43c0-3.007 1.792-4.669 4.533-4.669 1.312 0 2.686.235 2.686.235v2.953H15.83c-1.491 0-1.956.925-1.956 1.874v2.25h3.328l-.532 3.469h-2.796v8.385C19.612 23.027 24 18.062 24 12.073z"/>
+                          </svg>
+                          Ads Library: {hasAdsIndicator}
+                        </a>
+                        
+                        {/* Direct Facebook Link if available */}
+                        {lead.facebook_url && !lead.facebook_url.match(/^https?:\/\/(www\.)?facebook\.com\/?$/i) && (
+                           <a 
+                             href={ensureHttps(lead.facebook_url)}
+                             target="_blank" 
+                             rel="noopener noreferrer" 
+                             title="Ir al perfil de Facebook para ver Transparencia de la Página"
+                             style={{ 
+                               display: 'inline-flex', 
+                               alignItems: 'center', 
+                               gap: '4px', 
+                               background: 'rgba(59,130,246,0.1)', 
+                               color: '#60a5fa', 
+                               padding: '4px 8px', 
+                               borderRadius: '4px', 
+                               fontSize: '0.8rem', 
+                               textDecoration: 'none',
+                               border: '1px solid rgba(59,130,246,0.2)'
+                             }}
+                           >
+                             <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                               <path d="M18 2h-3a5 5 0 0 0-5 5v3H7v4h3v8h4v-8h3l1-4h-4V7a1 1 0 0 1 1-1h3z"></path>
+                             </svg>
+                             Ver Facebook
+                           </a>
+                        )}
+                      </div>
+                    </div>
+
                   </div>
                 </div>
 

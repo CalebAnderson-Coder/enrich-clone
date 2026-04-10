@@ -1,6 +1,7 @@
 import { createClient } from '@supabase/supabase-js';
 import dotenv from 'dotenv';
 import { manager } from './agents/manager.js';
+import { davinci } from './agents/davinci.js';
 import { AgentRuntime } from './lib/AgentRuntime.js';
 
 dotenv.config();
@@ -11,6 +12,7 @@ const runtime = new AgentRuntime({
   model: 'gemini-2.0-flash',
 });
 runtime.registerAgent(manager);
+runtime.registerAgent(davinci);
 
 export async function processIdleMagnets() {
     console.log('🤖 [Lead Magnet Worker] Buscando leads con status IDLE...');
@@ -40,7 +42,7 @@ export async function processIdleMagnets() {
 
     for (const record of campaignData) {
         const lead = record.leads;
-        console.log(`⚡ [Lead Magnet Worker] Generando Landing Page para prospecto: ${lead.business_name}`);
+        console.log(`⚡ [Lead Magnet Worker] Generando estrategia de Magneto Visual para: ${lead.business_name}`);
         
         await supabase
             .from('campaign_enriched_data')
@@ -50,36 +52,19 @@ export async function processIdleMagnets() {
         try {
             const megaProfileJSON = lead.mega_profile ? JSON.stringify(lead.mega_profile, null, 2) : 'No mega_profile available.';
             
-            const prompt = `
-El siguiente prospecto necesita un "Lead Magnet" específico: Una propuesta conceptual para una nueva landing page, basada en su MEGA PERFIL.
+            const prompt = `Por favor, evalúa este perfil, ejecuta la tool para diseñar el magnet (Stitch o DALLE) y devuelve el reporte final.
+Business: ${lead.business_name}
+Industry: ${lead.industry}
+Website: ${lead.website || 'Ninguno'}
 
-Nombre del Negocio: ${lead.business_name}
-Industria: ${lead.industry}
-Sitio Web Actual: ${lead.website || 'Ninguno'}
+MEGA PROFILE:
+${megaProfileJSON}`;
 
-MEGA PERFIL:
-${megaProfileJSON}
-
-TU TAREA COMO MANAGER:
-Coordina la creación de una propuesta de Landing Page altamente persuasiva que usaremos como Lead Magnet para abrir la puerta a una venta de agencia.
-
-Entrega el resultado en FORMATO JSON (No markdown). Estructura esperada:
-{
-  "landing_page_magnet": {
-    "hero_headline": "...",
-    "subheadline": "...",
-    "value_proposition": "...",
-    "key_benefits": ["...", "..."],
-    "call_to_action": "..."
-  }
-}
-Responde SOLO con el objeto JSON.
-`;
-
-            const resultMsg = await runtime.run('Manager', prompt, { currentAgent: 'Manager' });
+            const resultMsg = await runtime.run('DaVinci', prompt, { currentAgent: 'DaVinci' });
             const rawOutput = resultMsg.response || resultMsg.content;
             
             let magnetData = {};
+            let isParseSuccess = false;
             try {
                 let cleanOutput = rawOutput.replace(/```json/gi, '').replace(/```/g, '').trim();
                 const match = cleanOutput.match(/\{[\s\S]*\}/);
@@ -87,12 +72,15 @@ Responde SOLO con el objeto JSON.
                     cleanOutput = match[0];
                 }
                 magnetData = JSON.parse(cleanOutput);
+                isParseSuccess = true;
             } catch (e) {
                 console.error('❌ [Lead Magnet Worker] Error parseando JSON:', e);
-                magnetData = { error: 'No se pudo parsear', raw: rawOutput };
+                magnetData = { error: 'No se pudo parsear devolucion de DaVinci.', raw: rawOutput };
             }
 
-            console.log(`✅ [Lead Magnet Worker] Completado para: ${lead.business_name}`);
+            console.log(`✅ [Lead Magnet Worker] Completado para: ${lead.business_name} | Ruta: ${magnetData.magnet_type || 'Desconocida'}`);
+
+            
             await supabase
                 .from('campaign_enriched_data')
                 .update({ 

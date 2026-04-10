@@ -21,6 +21,8 @@ import { getLeads, getLeadById, updateOutreachStatus, getLeadsStats } from './to
 import { fetchPage } from './tools/webResearch.js';
 import { processIdleMagnets } from './lead_magnet_worker.js';
 import { startTranscriptionWorker } from './workers/transcription_worker.js';
+import { dispatchPendingOutreach } from './outreach_dispatcher.js';
+import { processStitchQueue } from './workers/stitch_queue_processor.js';
 
 dotenv.config();
 
@@ -511,6 +513,110 @@ app.post('/api/leads/:id/outreach', async (req, res) => {
 });
 
 // ============================================================
+// OUTREACH PIPELINE ENDPOINTS
+// ============================================================
+
+/**
+ * Full autonomous cycle:
+ * 1. Prospect (Scout)  → finds new leads
+ * 2. Enrich (Carlos)   → builds MEGA profiles
+ * 3. Magnet (DaVinci)  → generates creative magnets
+ * 4. Dispatch (Angela) → sends personalized emails
+ */
+app.post('/api/run-cycle', async (req, res) => {
+  const {
+    metro         = 'Miami FL',
+    industry      = 'restaurant',
+    prospect_limit = 5,
+    skip_prospect  = false,
+    skip_stitch    = false,
+    skip_email     = false,
+  } = req.body;
+
+  // Respond immediately — pipeline runs in background
+  res.json({
+    success: true,
+    message: 'Sisyphus cycle started in background.',
+    config: { metro, industry, prospect_limit, skip_prospect, skip_stitch, skip_email },
+  });
+
+  (async () => {
+    console.log(`\n🔄 [RunCycle] ══════════════════════════════`);
+    console.log(`   metro=${metro} | industry=${industry}`);
+    console.log(`🔄 [RunCycle] ══════════════════════════════\n`);
+
+    // ── Step 1: Prospect ───────────────────────────────────
+    if (!skip_prospect) {
+      console.log('🎯 [RunCycle] Step 1 — Prospecting...');
+      try {
+        await runtime.run('scout',
+          `Prospect for ${industry} businesses in ${metro}. Find up to ${prospect_limit} leads. Apply all GATE filters and scoring. Save qualified leads to the database.`,
+          { currentAgent: 'scout' }
+        );
+        console.log('✅ [RunCycle] Step 1 done.');
+      } catch (e) {
+        console.error('❌ [RunCycle] Step 1 failed:', e.message);
+      }
+    }
+
+    // ── Step 2: Magnets ────────────────────────────────────
+    console.log('🎨 [RunCycle] Step 2 — Generating lead magnets (DaVinci)...');
+    try {
+      await processIdleMagnets();
+      console.log('✅ [RunCycle] Step 2 done.');
+    } catch (e) {
+      console.error('❌ [RunCycle] Step 2 failed:', e.message);
+    }
+
+    // ── Step 3: Stitch queue ───────────────────────────────
+    if (!skip_stitch) {
+      console.log('🏗️  [RunCycle] Step 3 — Processing Stitch queue...');
+      try {
+        await processStitchQueue();
+        console.log('✅ [RunCycle] Step 3 done.');
+      } catch (e) {
+        console.error('❌ [RunCycle] Step 3 failed:', e.message);
+      }
+    }
+
+    // ── Step 4: Email dispatch ─────────────────────────────
+    if (!skip_email) {
+      console.log('📬 [RunCycle] Step 4 — Dispatching outreach emails...');
+      try {
+        const emailStats = await dispatchPendingOutreach();
+        console.log(`✅ [RunCycle] Step 4 done. Sent: ${emailStats.sent}`);
+      } catch (e) {
+        console.error('❌ [RunCycle] Step 4 failed:', e.message);
+      }
+    }
+
+    console.log('\n🏁 [RunCycle] Full Sisyphus cycle complete.\n');
+  })();
+});
+
+// ---- Manual outreach trigger ----
+app.post('/api/outreach/dispatch', async (req, res) => {
+  try {
+    const stats = await dispatchPendingOutreach();
+    res.json({ success: true, stats });
+  } catch (err) {
+    console.error('Outreach dispatch error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ---- Manual Stitch queue trigger ----
+app.post('/api/stitch/process-queue', async (req, res) => {
+  try {
+    const stats = await processStitchQueue();
+    res.json({ success: true, stats });
+  } catch (err) {
+    console.error('Stitch processor error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ============================================================
 // 3. CRON Scheduler — Autonomous task wakeup
 // ============================================================
 
@@ -571,14 +677,25 @@ cron.schedule('0 9 * * *', async () => {
 });
 
 // Loop for independent background workers
-console.log('\n⚙️ [Workers] Launching background workers (Landing Page Lead Magnets)...');
+console.log('\n⚙️ [Workers] Launching background workers...');
+
+// Magnet generator — every 30s
 setInterval(async () => {
-  try {
-    await processIdleMagnets();
-  } catch (e) {
-    console.error('Interval error processing idle magnets:', e);
-  }
-}, 30000); // Poll every 30 seconds
+  try { await processIdleMagnets(); }
+  catch (e) { console.error('Interval error (magnets):', e.message); }
+}, 30_000);
+
+// Stitch queue processor — every 5 minutes
+setInterval(async () => {
+  try { await processStitchQueue(); }
+  catch (e) { console.error('Interval error (stitch):', e.message); }
+}, 5 * 60_000);
+
+// Outreach dispatcher — every 15 minutes
+setInterval(async () => {
+  try { await dispatchPendingOutreach(); }
+  catch (e) { console.error('Interval error (outreach):', e.message); }
+}, 15 * 60_000);
 
 startTranscriptionWorker();
 
@@ -602,7 +719,11 @@ app.listen(port, () => {
   console.log(`🔬 Enrich:     POST http://localhost:${port}/api/leads/:id/enrich`);
   console.log(`📞 Outreach:   POST http://localhost:${port}/api/leads/:id/outreach`);
   console.log(`${'─'.repeat(56)}`);
-  console.log(`⏰ Crons: Hourly job processor + Daily 9am planner`);
+  console.log(`🔄 PIPELINE:   POST http://localhost:${port}/api/run-cycle`);
+  console.log(`📬 Dispatch:   POST http://localhost:${port}/api/outreach/dispatch`);
+  console.log(`🏗️  Stitch:     POST http://localhost:${port}/api/stitch/process-queue`);
+  console.log(`${'─'.repeat(56)}`);
+  console.log(`⏰ Crons: Hourly jobs + Daily 9am + Stitch 5min + Outreach 15min`);
   console.log(`${'═'.repeat(56)}\n`);
 });
 

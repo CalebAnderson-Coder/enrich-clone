@@ -14,6 +14,7 @@ CREATE TABLE IF NOT EXISTS leads (
     facebook_url VARCHAR,
     instagram_url VARCHAR,
     linkedin_url VARCHAR,
+    email_address VARCHAR,                          -- Para outreach directo
     raw_data JSONB,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now())
 );
@@ -28,6 +29,10 @@ CREATE TABLE IF NOT EXISTS campaign_enriched_data (
     status VARCHAR DEFAULT 'PENDING',
     lead_magnet_status VARCHAR DEFAULT 'IDLE',
     lead_magnets_data JSONB,
+    -- Outreach tracking
+    outreach_status  VARCHAR DEFAULT NULL,           -- NULL → PENDING → SENT / SKIPPED_NO_EMAIL / ERROR
+    email_sent_at    TIMESTAMPTZ,
+    email_resend_id  TEXT,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now())
 );
 
@@ -69,6 +74,29 @@ CREATE TABLE IF NOT EXISTS agent_misions (
     payload JSONB,
     result JSONB,
     status VARCHAR DEFAULT 'PENDING', -- PENDING, COMPLETED, FAILED
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()),
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now())
+);
+
+-- ====================================================
+-- SMART AGENCY PIPELINE (CRM Code-First)
+-- Reemplaza a GHL CRM para el manejo del embudo.
+-- ====================================================
+CREATE TABLE IF NOT EXISTS smart_agency_leads (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    business_name VARCHAR NOT NULL,
+    industry VARCHAR,
+    city VARCHAR,
+    phone VARCHAR,
+    original_website VARCHAR,
+    demo_website_url VARCHAR, -- URL generada por Stitch/Netlify
+    bright_data_raw JSONB, -- Backup del scrape
+    
+    -- Pipeline CRM (Reemplaza a GHL Stages)
+    pipeline_stage VARCHAR DEFAULT 'NEW_LEAD', -- NEW_LEAD, DEMO_GENERATED, SMS_SENT, REPLIED, MEETING_BOOKED, WON
+    twilio_sms_status VARCHAR DEFAULT 'PENDING',
+    twilio_message_sid VARCHAR,
+    
     created_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()),
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now())
 );

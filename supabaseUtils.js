@@ -37,8 +37,8 @@ export async function saveProspect(prospectData) {
       mega_profile: prospectData.raw_data || {},
       metro_area: prospectData.city || 'Desconocido',
       industry: 'Servicios',
-      qualification_score: 0,
-      lead_tier: 'COLD'
+      qualification_score: prospectData.qualification_score || 0,
+      lead_tier: prospectData.lead_tier || 'COLD'
     };
 
     const { data, error } = await supabase

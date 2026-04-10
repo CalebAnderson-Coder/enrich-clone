@@ -1,0 +1,12 @@
+{
+  "projectId": "stitch-lm-1775825494522",
+  "businessName": "Tacos El Patrón",
+  "prompt": "[HERO] Headline PAS: ¿Antojo de tacos y sin tiempo de ir? → ¡No te quedes con las ganas! → Tacos El Patrón a domicilio. Subheadline: Los tacos más sabrosos de [zona], ahora en la puerta de tu casa. Pide online y recibe 20% de descuento en tu primer pedido. CTA primario: \"Pedir Ahora →\" con borde rojo (#DC2626). Trust signal: \"Más de 1000 órdenes entregadas este mes\". [FEATURES] Icono de moto + Título: Entrega Rápida + Descripción: Recibe tu pedido en menos de 30 minutos. Icono de teléfono + Título: Pide Fácil Online + Descripción: Ordena desde tu celular en 3 clicks. Icono de estrella + Título: Ingredientes Frescos + Descripción: La mejor calidad en cada taco. [SOCIAL PROOF] Logo de Google Reviews + Texto: 4.8 estrellas basado en 230+ reseñas. [FINAL CTA] Headline de cierre con urgencia: ¡No esperes más para disfrutar los mejores tacos! Botón CTA repetido: \"Pedir Ahora →\". Risk reducer: \"Paga al recibir\". [FOOTER] Información de contacto: [Dirección], Teléfono: [Número], Horario: [Horario]. Diseño estilo: clean-minimal. Color palette: Amarillo (#F59E0B), Rojo (#DC2626), Blanco (#FFFFFF), Gris (#F3F4F6). Diseño mobile-responsive con grid flexible.",
+  "deviceType": "DESKTOP",
+  "createdAt": "2026-04-10T12:51:34.523Z",
+  "status": "QUEUED_FOR_MCP",
+  "mcpInstructions": {
+    "step1": "mcp_stitch_create_project({ title: \"Lead Magnet - Tacos El Patrón\" })",
+    "step2": "mcp_stitch_generate_screen_from_text({ projectId: \"{from_step1}\", prompt: \"[HERO] Headline PAS: ¿Antojo de tacos y sin tiempo de ir? → ¡No te quedes con las ganas! → Tacos El Patrón a domicilio. Subheadline: Los tacos más sabrosos de [zona], ahora en la puerta de tu casa. Pi...\", deviceType: \"DESKTOP\" })"
+  }
+}
