@@ -838,7 +838,7 @@ startTranscriptionWorker();
 app.use(express.static(path.join(__dirname, 'dashboard/dist')));
 
 // Fallback all other non-API routes to React's index.html
-app.get('*', (req, res, next) => {
+app.get(/.*/, (req, res, next) => {
   if (req.path.startsWith('/api/')) return next();
   res.sendFile(path.join(__dirname, 'dashboard/dist/index.html'));
 });
