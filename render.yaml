@@ -3,7 +3,7 @@ services:
     name: agency-fleet-runtime
     env: node
     region: ohio # Defaults to US East
-    buildCommand: npm run heroku-postbuild
+    buildCommand: npm install && npm run heroku-postbuild
     startCommand: npm start
     envVars:
       # Backend Keys
