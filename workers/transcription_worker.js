@@ -5,8 +5,8 @@ import { GoogleGenerativeAI } from '@google/generative-ai';
 import fs from 'fs-extra';
 import path from 'path';
 
-const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
-const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
+const groq = process.env.GROQ_API_KEY ? new Groq({ apiKey: process.env.GROQ_API_KEY }) : null;
+const genAI = process.env.GEMINI_API_KEY ? new GoogleGenerativeAI(process.env.GEMINI_API_KEY) : null;
 
 const TMP_DIR = path.join(process.cwd(), 'tmp');
 
