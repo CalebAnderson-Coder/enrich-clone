@@ -20,10 +20,9 @@ const runtime = new AgentRuntime({
 });
 runtime.registerAgent(angela);
 
-const supabase = createClient(
-  process.env.SUPABASE_URL,
-  process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_ANON_KEY
-);
+const supabaseUrl = process.env.SUPABASE_URL;
+const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_ANON_KEY;
+const supabase = (supabaseUrl && supabaseKey) ? createClient(supabaseUrl, supabaseKey) : null;
 
 // ── Transport selection ───────────────────────────────────────
 const SMTP_USER    = process.env.SMTP_USER;     // User's SMTP Email
@@ -66,6 +65,11 @@ if (SMTP_USER && SMTP_PASS) {
  */
 export async function dispatchPendingOutreach() {
   console.log('\n📬 [OutreachDispatcher] Buscando leads listos para pre-render de correo...');
+
+  if (!supabase) {
+    console.error('❌ [OutreachDispatcher] Supabase no está configurado (falta URL o Key).');
+    return { rendered: 0, skipped: 0, errors: 1 };
+  }
 
   // ── 1. Fetch eligible records (COMPLETED magnets, still DRAFT) ──
   const { data: records, error } = await supabase
@@ -131,35 +135,39 @@ export async function dispatchPendingOutreach() {
 
       if (magnetData.magnet_type === 'website_screenshot') {
         try {
-          const prompt = `Redacta un email en frío (outreach) para un negocio de ${lead.industry || 'servicios generales'} llamado "${lead.business_name || 'tu negocio'}".
+          const prompt = `Redacta un mensaje de contacto (outreach) para un negocio de ${lead.industry || 'servicios generales'} llamado "${lead.business_name || 'tu negocio'}".
 Quiero que apliques tu tono empático, "Spanglish" o español cálido.
 Contexto: Nuestra agencia (Empírika) les diseñó un concepto de página web gratis y profesional (magnet: website_screenshot).
 Menciona que los buscaste, te pareció un buen negocio, pero que notaste que les falta presencia en línea, y diles que miren la foto del concepto web adjunto.
 Ofrece enviársela 100% terminada sin costo.
 Sé asertivo, profesional pero muy humano.
-DEVUELVE ÚNICAMENTE un JSON con este formato:
+
+Crea dos versiones:
+1. Un Email en frío (Asunto y cuerpo).
+2. Un mensaje de WhatsApp (Corto, directo, conversacional e impactante).
+
+DEVUELVE ÚNICAMENTE un JSON con este formato exacto:
 {
-  "outreach_copy": "[Asunto del correo]\\n\\n[Cuerpo del correo con 2 o 3 párrafos]"
+  "email_subject": "[Asunto del correo]",
+  "email_body": "[Cuerpo del correo con 2 o 3 párrafos]",
+  "whatsapp": "[Mensaje de WhatsApp corto e impactante]"
 }`;
-          console.log(`  🤖 Pidiendo a Ángela redactar email para ${lead.business_name}...`);
+          console.log(`  🤖 Pidiendo a Ángela redactar multi-contacto para ${lead.business_name}...`);
           const aiResult = await runtime.run('Angela', prompt, { maxIterations: 3 });
           
           let parsed;
           try {
-            // Remove code block ticks if any
             let jsonStr = aiResult.response.replace(/^\`\`\`json/m, '').replace(/^\`\`\`/m, '').trim();
             parsed = JSON.parse(jsonStr);
           } catch (err) {
-            console.warn(`  ⚠️ No se pudo parsear el JSON de Ángela. Usando fallback.`);
+            console.warn(`  ⚠️ No se pudo parsear el JSON de Ángela. Dando timeout...`);
           }
 
-          if (parsed && parsed.outreach_copy) {
-            const parts = parsed.outreach_copy.split(/\\n\\n|\\r\\n\\r\\n/);
-            if (parts.length >= 2) {
-              angelaSubject = parts[0].trim();
-              angelaBody = parts.slice(1).join('\\n\\n').trim();
-              console.log(`  ✨ Ángela generó copy personalizado!`);
-            }
+          if (parsed) {
+            if (parsed.email_subject) angelaSubject = parsed.email_subject;
+            if (parsed.email_body) angelaBody = parsed.email_body;
+            if (parsed.whatsapp) magnetData.whatsapp_draft = parsed.whatsapp;
+            console.log(`  ✨ Ángela generó copy personalizado de Email y WhatsApp!`);
           }
         } catch (error) {
           console.warn(`  ⚠️ Falló la llamada a Ángela para ${lead.business_name}, usando fallback template:`, error.message);
@@ -172,26 +180,33 @@ DEVUELVE ÚNICAMENTE un JSON con este formato:
       console.log(`  📝 Pre-rendered → ${lead.email_address}  (${lead.business_name}) [${magnetData.magnet_type}]`);
 
       // ── 4. Save draft to Supabase for client preview ──────
-      // Store attachment metadata (paths) for re-assembly at send time
       const attachmentMeta = attachments.map(a => ({
         filename: a.filename,
         path: a.path,
         cid: a.cid,
       }));
 
-      // Modificamos lead_magnets_data para guardar ahí el draft
       magnetData.approval_status = 'DRAFT';
       magnetData.email_draft_subject = subject;
       magnetData.email_draft_html = html;
       magnetData.email_attachments = attachmentMeta.length > 0 ? attachmentMeta : null;
 
+      // Update the campaign table
       await supabase
         .from('campaign_enriched_data')
         .update({
-          outreach_status:   'AWAITING_APPROVAL',
+          outreach_status: 'DRAFT',
           lead_magnets_data: magnetData
         })
         .eq('id', record.id);
+
+      // Update the leads table to reflect status in the main dashboard UI
+      await supabase
+        .from('leads')
+        .update({
+          outreach_status: 'DRAFT'
+        })
+        .eq('id', lead.id);
 
       console.log(`  ✅  Draft guardado → ${lead.business_name} (listo para aprobación)`);
       stats.rendered++;

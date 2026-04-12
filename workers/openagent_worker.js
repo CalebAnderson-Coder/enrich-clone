@@ -7,11 +7,15 @@ dotenv.config();
 
 const supabaseUrl = process.env.SUPABASE_URL;
 const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_ANON_KEY;
-const supabase = createClient(supabaseUrl, supabaseKey);
+const supabase = (supabaseUrl && supabaseKey) ? createClient(supabaseUrl, supabaseKey) : null;
 
 const CLAW_BIN = path.join(process.cwd(), 'claw-code', 'rust', 'target', 'debug', 'claw.exe');
 
 async function processMission(mission) {
+  if (!supabase) {
+    console.error('❌ [Claw Worker] Supabase no está configurado (falta URL o Key).');
+    return;
+  }
   try {
     console.log(`\n[Claw Worker] Iniciando misión ${mission.id}`);
     console.log(`[Claw Worker] Instrucción: ${mission.instruction}`);
@@ -101,6 +105,7 @@ async function startPolling() {
   
   setInterval(async () => {
     try {
+      if (!supabase) return;
       const { data: missions, error } = await supabase
         .from('agent_misions')
         .select('*')

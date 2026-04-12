@@ -10,10 +10,15 @@ export default function OutreachReviewModal({ lead, isOpen, onClose, onSave, onA
 
   useEffect(() => {
     if (lead) {
+      // Intentar leer primero del pipeline automatizado (campaign_enriched_data)
+      const campaignData = lead.campaign_enriched_data && lead.campaign_enriched_data[0] 
+        ? lead.campaign_enriched_data[0].lead_magnets_data : {};
+      
       const outreach = lead.mega_profile?.outreach || {};
-      setSubject(outreach.subject || '');
-      setBody(outreach.body || '');
-      setWhatsapp(outreach.whatsapp || '');
+      
+      setSubject(campaignData?.email_draft_subject || outreach.subject || '');
+      setBody(campaignData?.email_draft_html || outreach.body || '');
+      setWhatsapp(campaignData?.whatsapp_draft || outreach.whatsapp || '');
       setAgentNotes(''); // Reset form open
     }
   }, [lead]);

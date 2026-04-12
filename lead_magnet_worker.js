@@ -17,10 +17,9 @@ dotenv.config();
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-const supabase = createClient(
-  process.env.SUPABASE_URL,
-  process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_ANON_KEY
-);
+const supabaseUrl = process.env.SUPABASE_URL;
+const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_ANON_KEY;
+const supabase = (supabaseUrl && supabaseKey) ? createClient(supabaseUrl, supabaseKey) : null;
 
 // ────────────────────────────────────────────────────────────
 // NICHE → FOLDER MAPPING
@@ -99,6 +98,11 @@ function pickRandomImage(folderName) {
  * Called by the setInterval loop in index.js (every 30s).
  */
 export async function processIdleMagnets() {
+  if (!supabase) {
+    console.error('❌ [Lead Magnet Worker] Supabase no está configurado (falta URL o Key).');
+    return;
+  }
+
   const { data: campaignData, error } = await supabase
     .from('campaign_enriched_data')
     .select(`
