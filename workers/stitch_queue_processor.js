@@ -16,10 +16,9 @@ dotenv.config();
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const QUEUE_DIR = path.join(__dirname, '..', 'output', 'stitch_queue');
 
-const supabase = createClient(
-  process.env.SUPABASE_URL,
-  process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_ANON_KEY
-);
+const supabaseUrl = process.env.SUPABASE_URL;
+const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_SERVICE_KEY || process.env.SUPABASE_ANON_KEY || process.env.VITE_SUPABASE_ANON_KEY;
+const supabase = (supabaseUrl && supabaseKey) ? createClient(supabaseUrl, supabaseKey) : null;
 
 // ── Main export ───────────────────────────────────────────────
 
@@ -77,7 +76,7 @@ export async function processStitchQueue() {
       console.log(`    ✅ Landing creada: ${previewUrl}`);
 
       // ── Update Supabase if campaign ID is known ───────────
-      if (prospect_campaign_id) {
+      if (prospect_campaign_id && supabase) {
         const { error: dbError } = await supabase
           .from('campaign_enriched_data')
           .update({
