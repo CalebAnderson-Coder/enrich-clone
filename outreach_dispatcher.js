@@ -8,8 +8,17 @@ import { createClient } from '@supabase/supabase-js';
 import nodemailer     from 'nodemailer';
 import dotenv         from 'dotenv';
 import { renderMagnetEmail } from './lib/emailRenderer.js';
+import { AgentRuntime } from './lib/AgentRuntime.js';
+import { angela } from './agents/angela.js';
 
 dotenv.config();
+
+// ── Agentic Copilot Init ──────────────────────────────────────
+const runtime = new AgentRuntime({
+  geminiApiKey: process.env.GEMINI_API_KEY,
+  model: 'gemini-2.0-flash',
+});
+runtime.registerAgent(angela);
 
 const supabase = createClient(
   process.env.SUPABASE_URL,
@@ -65,16 +74,16 @@ export async function dispatchPendingOutreach() {
       id,
       prospect_id,
       lead_magnets_data,
-      approval_status,
       leads!inner (
         id,
         business_name,
+        industry,
         email_address
       )
     `)
     .eq('lead_magnet_status', 'COMPLETED')
-    .or('approval_status.is.null,approval_status.eq.DRAFT')
-    .is('email_draft_html', null)
+    // We filter by outreach_status in the DB instead of missing columns
+    .or('outreach_status.is.null,outreach_status.eq.PENDING')
     .not('lead_magnets_data', 'is', null)
     .limit(BATCH_LIMIT);
 
@@ -116,19 +125,71 @@ export async function dispatchPendingOutreach() {
     }
 
     try {
+      // ── 2b. Opcional: Generar copy dinámico si es screenshot
+      let angelaSubject = null;
+      let angelaBody = null;
+
+      if (magnetData.magnet_type === 'website_screenshot') {
+        try {
+          const prompt = `Redacta un email en frío (outreach) para un negocio de ${lead.industry || 'servicios generales'} llamado "${lead.business_name || 'tu negocio'}".
+Quiero que apliques tu tono empático, "Spanglish" o español cálido.
+Contexto: Nuestra agencia (Empírika) les diseñó un concepto de página web gratis y profesional (magnet: website_screenshot).
+Menciona que los buscaste, te pareció un buen negocio, pero que notaste que les falta presencia en línea, y diles que miren la foto del concepto web adjunto.
+Ofrece enviársela 100% terminada sin costo.
+Sé asertivo, profesional pero muy humano.
+DEVUELVE ÚNICAMENTE un JSON con este formato:
+{
+  "outreach_copy": "[Asunto del correo]\\n\\n[Cuerpo del correo con 2 o 3 párrafos]"
+}`;
+          console.log(`  🤖 Pidiendo a Ángela redactar email para ${lead.business_name}...`);
+          const aiResult = await runtime.run('Angela', prompt, { maxIterations: 3 });
+          
+          let parsed;
+          try {
+            // Remove code block ticks if any
+            let jsonStr = aiResult.response.replace(/^\`\`\`json/m, '').replace(/^\`\`\`/m, '').trim();
+            parsed = JSON.parse(jsonStr);
+          } catch (err) {
+            console.warn(`  ⚠️ No se pudo parsear el JSON de Ángela. Usando fallback.`);
+          }
+
+          if (parsed && parsed.outreach_copy) {
+            const parts = parsed.outreach_copy.split(/\\n\\n|\\r\\n\\r\\n/);
+            if (parts.length >= 2) {
+              angelaSubject = parts[0].trim();
+              angelaBody = parts.slice(1).join('\\n\\n').trim();
+              console.log(`  ✨ Ángela generó copy personalizado!`);
+            }
+          }
+        } catch (error) {
+          console.warn(`  ⚠️ Falló la llamada a Ángela para ${lead.business_name}, usando fallback template:`, error.message);
+        }
+      }
+
       // ── 3. Render HTML email (pre-render only, no send) ───
-      const { subject, html } = renderMagnetEmail(magnetData, lead);
+      const { subject, html, attachments } = renderMagnetEmail(magnetData, lead, { angelaSubject, angelaBody });
 
       console.log(`  📝 Pre-rendered → ${lead.email_address}  (${lead.business_name}) [${magnetData.magnet_type}]`);
 
       // ── 4. Save draft to Supabase for client preview ──────
+      // Store attachment metadata (paths) for re-assembly at send time
+      const attachmentMeta = attachments.map(a => ({
+        filename: a.filename,
+        path: a.path,
+        cid: a.cid,
+      }));
+
+      // Modificamos lead_magnets_data para guardar ahí el draft
+      magnetData.approval_status = 'DRAFT';
+      magnetData.email_draft_subject = subject;
+      magnetData.email_draft_html = html;
+      magnetData.email_attachments = attachmentMeta.length > 0 ? attachmentMeta : null;
+
       await supabase
         .from('campaign_enriched_data')
         .update({
-          outreach_status:     'AWAITING_APPROVAL',
-          approval_status:     'DRAFT',
-          email_draft_subject: subject,
-          email_draft_html:    html,
+          outreach_status:   'AWAITING_APPROVAL',
+          lead_magnets_data: magnetData
         })
         .eq('id', record.id);
 
@@ -151,12 +212,12 @@ export async function dispatchPendingOutreach() {
 
 // ── Unified email sender ──────────────────────────────────────
 
-async function sendEmail({ to, subject, html }) {
+async function sendEmail({ to, subject, html, attachments = [] }) {
   const from = `"${FROM_NAME}" <${FROM_ADDRESS}>`;
 
-  // Priority 1: Gmail SMTP (José Sánchez)
+  // Priority 1: Gmail SMTP
   if (smtpTransporter) {
-    const info = await smtpTransporter.sendMail({ from, to, subject, html });
+    const info = await smtpTransporter.sendMail({ from, to, subject, html, attachments });
     return info.messageId;
   }
 

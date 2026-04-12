@@ -306,6 +306,81 @@ export async function updateOutreachStatus(leadId, status, notes = null) {
   return data;
 }
 
+export async function updateLeadOutreach(leadId, outreachData, status = null, notes = null) {
+  if (!supabase) {
+    const idx = mockLeads.findIndex(l => l.id === leadId);
+    if (idx === -1) return null;
+    
+    // Ensure mega_profile exists
+    if (!mockLeads[idx].mega_profile) mockLeads[idx].mega_profile = {};
+    
+    // Update the outreach key specifically
+    mockLeads[idx].mega_profile.outreach = outreachData;
+    
+    // Optionally update top-level status and notes
+    if (status) {
+      mockLeads[idx].outreach_status = status;
+    }
+    if (notes) {
+      mockLeads[idx].notes = notes;
+    }
+    
+    mockLeads[idx].updated_at = new Date().toISOString();
+    saveMockLeads();
+    return mockLeads[idx];
+  }
+
+  try {
+    // 1. Fetch current mega_profile
+    const { data: lead, error: fetchError } = await supabase
+      .from('leads')
+      .select('mega_profile')
+      .eq('id', leadId)
+      .single();
+
+    if (fetchError) throw fetchError;
+
+    const currentProfile = lead.mega_profile || {};
+    currentProfile.outreach = outreachData;
+
+    const updates = {
+      mega_profile: currentProfile,
+      updated_at: new Date().toISOString()
+    };
+    
+    if (status) {
+      updates.outreach_status = status;
+    }
+    if (notes) {
+      updates.notes = notes;
+    }
+
+    // 2. Update with combined data
+    const { data, error } = await supabase
+      .from('leads')
+      .update(updates)
+      .eq('id', leadId)
+      .select()
+      .single();
+
+    if (error) throw error;
+    return data;
+  } catch (err) {
+    console.error('❌ updateLeadOutreach error:', err.message);
+    // Fallback to mock update if Supabase fails
+    const idx = mockLeads.findIndex(l => l.id === leadId);
+    if (idx !== -1) {
+      if (!mockLeads[idx].mega_profile) mockLeads[idx].mega_profile = {};
+      mockLeads[idx].mega_profile.outreach = outreachData;
+      if (status) mockLeads[idx].outreach_status = status;
+      if (notes) mockLeads[idx].notes = notes;
+      saveMockLeads();
+      return mockLeads[idx];
+    }
+    return null;
+  }
+}
+
 export function getMockLeads() {
   return mockLeads;
 }

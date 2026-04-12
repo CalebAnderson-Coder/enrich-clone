@@ -1,6 +1,5 @@
-import React, { useState, useEffect, useRef } from 'react';
+﻿import React, { useState, useEffect, useRef } from 'react';
 import './App.css';
-import { supabase } from './lib/supabase';
 
 // Import Views
 import PerformanceView from './views/PerformanceView';
@@ -12,11 +11,12 @@ import HistoryView from './views/HistoryView';
 import LeadsView from './views/LeadsView';
 import CampaignView from './views/CampaignView';
 
-function App() {
+const API_BASE = 'http://localhost:3001/api';
 
+function App() {
   // Navigation State
-  const [currentView, setCurrentView] = useState('leads'); // Default to leads view (main client view)
-  const [activeChannel, setActiveChannel] = useState('leads_precualificados');
+  const [currentView, setCurrentView] = useState('chat'); // 'chat', 'performance', 'calendar', 'files', 'profile', 'integrations', 'history'
+  const [activeChannel, setActiveChannel] = useState('general');
 
   // Chat/Backend State
   const [agents, setAgents] = useState([]);
@@ -26,7 +26,7 @@ function App() {
       role: 'assistant',
       author: 'Helena',
       time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-      text: 'Estoy en línea y lista para ayudarte. Los datos se cargan en tiempo real desde Supabase. Navega a "Leads Precualificados" para ver los prospectos encontrados.',
+      text: 'Estoy en l├¡nea y lista para ayudarte. Escribe un mensaje abajo para empezar a organizar tareas y ejecutar campa├▒as.',
     }
   ]);
   const [inputText, setInputText] = useState('');
@@ -40,7 +40,7 @@ function App() {
     fetchAgents();
     fetchJobs();
 
-    const interval = setInterval(fetchJobs, 15000);
+    const interval = setInterval(fetchJobs, 10000);
     return () => clearInterval(interval);
   }, []);
 
@@ -53,23 +53,14 @@ function App() {
 
   const fetchAgents = async () => {
     try {
-      // Connect to the real local Node.js API
-      const res = await fetch(`http://localhost:3001/api/agents`, {
-        headers: {
-          'Authorization': 'Bearer sk_live_51MxxXYZ123SecureEnrichToken2026'
-        }
-      });
+      const res = await fetch(`${API_BASE}/agents`);
       const data = await res.json();
-      const realAgents = data.agents || [];
-      setAgents(realAgents);
-
-      // Auto-select Helena if she exists, else the first one
-      if (realAgents.length > 0) {
-        if (realAgents.some(a => a.name === 'Helena')) {
-          setSelectedAgent('Helena');
-        } else {
-          setSelectedAgent(realAgents[0].name);
-        }
+      setAgents(data.agents || []);
+      
+      if (data.agents && data.agents.some(a => a.name === 'Helena')) {
+        setSelectedAgent('Helena');
+      } else if (data.agents && data.agents.length > 0) {
+        setSelectedAgent(data.agents[0].name);
       }
     } catch (err) {
       console.error('Error fetching agents:', err);
@@ -78,16 +69,9 @@ function App() {
 
   const fetchJobs = async () => {
     try {
-      const { data, error } = await supabase
-        .from('marketing_jobs')
-        .select('*')
-        .in('status', ['PENDING', 'AWAITING_APPROVAL'])
-        .order('created_at', { ascending: false })
-        .limit(10);
-      
-      if (!error && data) {
-        setJobs(data);
-      }
+      const res = await fetch(`${API_BASE}/jobs`);
+      const data = await res.json();
+      setJobs(data.jobs || []);
     } catch (err) {
       console.error('Error fetching jobs:', err);
     }
@@ -99,7 +83,7 @@ function App() {
 
     const userMessage = {
       role: 'user',
-      author: 'Tú',
+      author: 'T├║',
       time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
       text: inputText.trim()
     };
@@ -108,25 +92,49 @@ function App() {
     setInputText('');
     setIsTyping(true);
 
-    // Chat is currently mocked (Coming soon)
-    setTimeout(() => {
+    try {
+      const res = await fetch(`${API_BASE}/chat`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          message: userMessage.text,
+          agent: selectedAgent,
+          brandId: 'brand_test_123' 
+        })
+      });
+      const data = await res.json();
+      
+      setMessages(prev => [...prev, {
+        role: 'assistant',
+        author: data.agent || selectedAgent,
+        time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+        text: data.response || 'Sin respuesta',
+        artifacts: data.artifacts || []
+      }]);
+      
+      fetchJobs();
+
+    } catch (err) {
+      console.error('Chat error:', err);
       setMessages(prev => [...prev, {
         role: 'assistant',
         author: 'Sistema',
         time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-        text: 'Próximamente... (Conexión de chat en progreso)'
+        text: `Error conectando al backend: ${err.message}`
       }]);
+    } finally {
       setIsTyping(false);
-    }, 1000);
+    }
   };
 
   const handleApprovalAction = async (e, jobId, action) => {
     e.preventDefault();
     try {
-      // Update job status directly in Supabase
-      const newStatus = action === 'approve' ? 'APPROVED' : 'REJECTED';
-      await supabase.from('marketing_jobs').update({ status: newStatus }).eq('id', jobId);
-      setTimeout(() => fetchJobs(), 500); 
+      const res = await fetch(`${API_BASE}/approve?jobId=${jobId}&action=${action}`);
+      if (res.ok) {
+        // Refresh the job queue
+        setTimeout(() => fetchJobs(), 1000); 
+      }
     } catch (err) {
       console.error('Action error:', err);
     }
@@ -195,7 +203,7 @@ function App() {
                   </div>
                   <div className="msg-content" style={{ display: 'flex', alignItems: 'center' }}>
                       <span className="pulse-anim" style={{ color: 'var(--text-muted)', fontSize: '0.9rem' }}>
-                        {selectedAgent} está pensando y trabajando...
+                        {selectedAgent} est├í pensando y trabajando...
                       </span>
                   </div>
                 </div>
@@ -244,15 +252,15 @@ function App() {
           </div>
           <div className={`nav-item ${currentView === 'leads' ? 'active' : ''}`}
                onClick={() => { setCurrentView('leads'); setActiveChannel('leads_precualificados'); }}>
-            👥 leads precualificados
+            ­ƒæÑ leads precualificados
           </div>
           <div className={`nav-item ${currentView === 'calendar' ? 'active' : ''}`}
                onClick={() => { setCurrentView('calendar'); setActiveChannel('calendario'); }}>
             # calendario
           </div>
           <div className={`nav-item ${currentView === 'campaign' ? 'active' : ''}`}
-               onClick={() => { setCurrentView('campaign'); setActiveChannel('campañas'); }}>
-            🚀 campañas en vivo
+               onClick={() => { setCurrentView('campaign'); setActiveChannel('campa├▒as'); }}>
+            ­ƒÜÇ campa├▒as en vivo
           </div>
         </div>
 
@@ -288,20 +296,20 @@ function App() {
         <div className="nav-section">
           <div className="nav-title">Historial de Chat</div>
           <div className={`nav-item ${currentView === 'history' ? 'active' : ''}`} onClick={() => setCurrentView('history')} style={{ color: currentView === 'history' ? 'var(--text-primary)' : 'var(--text-muted)' }}>
-            <span style={{ marginRight: 8 }}>🔍</span> Buscar conversaciones...
+            <span style={{ marginRight: 8 }}>­ƒöì</span> Buscar conversaciones...
           </div>
-          <div className="nav-item" onClick={() => { setCurrentView('chat'); setMessages([]); }}>📝 Nuevo Chat</div>
+          <div className="nav-item" onClick={() => { setCurrentView('chat'); setMessages([]); }}>­ƒôØ Nuevo Chat</div>
         </div>
 
         <div style={{ marginTop: 'auto' }}>
           <div className={`nav-item ${currentView === 'files' ? 'active' : ''}`} onClick={() => setCurrentView('files')}>
-            📁 Archivos
+            ­ƒôü Archivos
           </div>
           <div className={`nav-item ${currentView === 'profile' ? 'active' : ''}`} onClick={() => setCurrentView('profile')}>
-            👤 Tu Perfil
+            ­ƒæñ Tu Perfil
           </div>
           <div className={`nav-item ${currentView === 'integrations' ? 'active' : ''}`} onClick={() => setCurrentView('integrations')}>
-            🔌 Integraciones
+            ­ƒöî Integraciones
           </div>
         </div>
       </div>
@@ -314,17 +322,17 @@ function App() {
       {/* RIGHT SIDEBAR */}
       <div className="layout-right">
         <div className="panel-section">
-          <div className="panel-title">Métricas de la Agencia</div>
+          <div className="panel-title">M├®tricas de la Agencia</div>
           <div className="metrics-grid">
             <div className="metric-card">
               <div className="metric-label">Usuarios Activos</div>
               <div className="metric-val">12</div>
-              <span className="metric-link" style={{ cursor: 'pointer' }} onClick={() => setCurrentView('performance')}>Ver detalles</span>
+              <a href="#" className="metric-link" onClick={() => setCurrentView('performance')}>Ver detalles</a>
             </div>
             <div className="metric-card">
               <div className="metric-label">Sesiones</div>
               <div className="metric-val">142</div>
-              <span className="metric-link" style={{ cursor: 'pointer' }} onClick={() => setCurrentView('integrations')}>Conectar GA</span>
+              <a href="#" className="metric-link" onClick={() => setCurrentView('integrations')}>Conectar GA</a>
             </div>
           </div>
         </div>
@@ -332,12 +340,12 @@ function App() {
         <div className="panel-section">
           <div className="panel-title">
             <span>Canales</span>
-            <span style={{ fontSize: '0.75rem', fontWeight: 500, color: 'var(--text-muted)' }}>Piloto Automático <label className="switch" style={{display: 'inline-block', width: 24, height: 12, background: '#E2E8F0', borderRadius: 12, verticalAlign: 'middle', marginLeft: 4}}></label></span>
+            <span style={{ fontSize: '0.75rem', fontWeight: 500, color: 'var(--text-muted)' }}>Piloto Autom├ítico <label className="switch" style={{display: 'inline-block', width: 24, height: 12, background: '#E2E8F0', borderRadius: 12, verticalAlign: 'middle', marginLeft: 4}}></label></span>
           </div>
         </div>
 
         <div className="panel-section">
-          <div className="panel-title">Próximas Tareas (Jobs)</div>
+          <div className="panel-title">Pr├│ximas Tareas (Jobs)</div>
           
           {jobs.length === 0 ? (
             <div className="task-card" style={{opacity: 0.7, minHeight: 'auto'}}>

@@ -48,7 +48,16 @@ CRITICAL INSTRUCTION: You MUST speak completely as a human. NEVER mention that y
 - Every email includes: subject line + 2 A/B variants, preview text, body, CTA, PS
 - Always suggest optimal send time based on audience type
 - Include segmentation recommendations
-- Track what works by saving to memory after execution`,
+- Track what works by saving to memory after execution
+
+**MANDATORY OUTPUT FORMAT:**
+Whenever you draft outreach copy, you MUST return a pure JSON object mapping the content to the \`outreach_copy\` key. DO NOT return plain text.
+Example:
+\`\`\`json
+{
+  "outreach_copy": "[El asunto y cuerpo original para contactarlos]"
+}
+\`\`\``,
 
   tools: [
     sendEmail,

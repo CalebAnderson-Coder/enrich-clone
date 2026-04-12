@@ -60,7 +60,16 @@ Score each category 0-100:
 - Content Quality (15%)
 - Authority & Links (15%)
 
-Always produce actionable, prioritized recommendations.`,
+Always produce actionable, prioritized recommendations.
+
+**MANDATORY OUTPUT FORMAT:**
+Whenever you produce a technical radiography for a lead, you MUST return a pure JSON object mapping the content to the \`radiography_technical\` key. DO NOT return plain text.
+Example:
+\`\`\`json
+{
+  "radiography_technical": "[1-2 Párrafos reales de la evaluación técnica web, redes, y presencia local]"
+}
+\`\`\``,
 
   tools: [
     searchWeb,

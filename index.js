@@ -18,14 +18,20 @@ import { scout } from './agents/scout.js';
 import { carlos } from './agents/carlos.js';
 import { davinci } from './agents/davinci.js';
 import { getPendingJobs, updateJobStatus, getActiveBrands, createJob, getJobById } from './lib/supabase.js';
-import { getLeads, getLeadById, updateOutreachStatus, getLeadsStats } from './tools/database.js';
+import { getLeads, getLeadById, updateOutreachStatus, getLeadsStats, updateLeadOutreach } from './tools/database.js';
 import { fetchPage } from './tools/webResearch.js';
 import { processIdleMagnets } from './lead_magnet_worker.js';
 import { startTranscriptionWorker } from './workers/transcription_worker.js';
 import { dispatchPendingOutreach } from './outreach_dispatcher.js';
 import { processStitchQueue } from './workers/stitch_queue_processor.js';
 
+import path from 'path';
+import { fileURLToPath } from 'url';
+
 dotenv.config();
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 // ============================================================
 // 1. Initialize Agent Runtime
@@ -52,14 +58,15 @@ console.log(`   Agents: ${Array.from(runtime.agents.keys()).join(', ')}`);
 // 2. Express Server
 // ============================================================
 const app = express();
-const port = process.env.PORT || 3000;
+const port = process.env.PORT || 4000;
 
 app.use(cors({
-  origin: [process.env.FRONTEND_URL, 'http://localhost:5174'],
+  origin: [process.env.FRONTEND_URL, 'http://localhost:5173', 'http://localhost:3002', 'http://localhost:5174', 'http://localhost:5175', 'http://localhost:5176', 'http://localhost:5177'],
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization']
 }));
-app.use(express.json());
+app.use(express.json({ limit: '10mb' }));
+app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
 // ---- Health Check ----
 app.get('/health', (req, res) => {
@@ -75,14 +82,47 @@ app.get('/health', (req, res) => {
 
 // ---- Authentication Middleware for API routes ----
 app.use('/api', (req, res, next) => {
-  if (req.path === '/approve') return next(); // Webhook exception
-  
+  // Allow OPTIONS preflight
+  if (req.method === 'OPTIONS') return next();
+
   const authHeader = req.headers.authorization;
-  if (!authHeader || authHeader !== `Bearer ${process.env.API_SECRET_KEY}`) {
-    console.log(`\n🚫 [Auth] Unauthorized API access attempt to /api${req.path}`);
-    return res.status(401).json({ error: 'Unauthorized: Invalid or missing Bearer token' });
+  const isAuthorized = authHeader === `Bearer ${process.env.API_SECRET_KEY}`;
+  
+  if (isAuthorized) {
+    return next();
   }
-  next();
+
+  // Bypasses for public / local dashboard access
+  const isLeadPath = req.path.startsWith('/leads/');
+  const publicPaths = ['/approve', '/approve-email', '/leads', '/health'];
+  
+  if (isLeadPath || publicPaths.includes(req.path)) {
+    console.log(`✅ [Auth] Bypassing auth for path: ${req.path}`);
+    return next();
+  }
+
+  console.warn(`🔒 [Auth] Blocked request: ${req.method} ${req.path}`);
+  res.status(401).json({ error: 'Unauthorized' });
+});
+
+// ---- Agents Endpoint ----
+app.get('/api/agents', (req, res) => {
+  const agents = Array.from(runtime.agents.entries()).map(([name, agent]) => ({
+    name,
+    toolCount: agent.tools ? agent.tools.size : 0,
+  }));
+  res.json({ agents });
+});
+
+// ---- Jobs Endpoint ----
+app.get('/api/jobs', async (req, res) => {
+  try {
+    const jobs = await getPendingJobs();
+    res.json({ jobs });
+  } catch (err) {
+    console.error('Error fetching jobs:', err);
+    res.status(500).json({ error: err.message, jobs: [] });
+  }
 });
 
 // ---- Chat Endpoint (direct agent interaction) ----
@@ -213,7 +253,7 @@ app.post('/api/leads/:id/analyze', async (req, res) => {
   }
 });
 
-// ---- Approval Webhook ----
+// ---- Approval Webhook (email link click) ----
 app.get('/api/approve', async (req, res) => {
   const { jobId, action } = req.query;
 
@@ -303,21 +343,47 @@ app.get('/api/approve', async (req, res) => {
   }
 });
 
-// ---- List Jobs (Dashboard data) ----
-app.get('/api/jobs', async (req, res) => {
-  const jobs = await getPendingJobs();
-  res.json({ jobs });
+// ---- Dashboard Approve/Reject Outreach (POST from React UI) ----
+app.post('/api/approve-email', async (req, res) => {
+  const { campaignId, leadId, action, rejectionReason, notes, outreach } = req.body;
+  const targetLeadId = leadId || campaignId; // Support both naming variants
+  const finalNotes = notes || rejectionReason;
+
+  if (!targetLeadId || !action) {
+    return res.status(400).json({ success: false, error: 'leadId (or campaignId) and action are required' });
+  }
+
+  const validActions = ['approve', 'reject'];
+  if (!validActions.includes(action)) {
+    return res.status(400).json({ success: false, error: 'Invalid action. Use "approve" or "reject".' });
+  }
+
+  console.log(`\n📬 [Dashboard Approve] Lead ${targetLeadId} → ${action.toUpperCase()}`);
+
+  try {
+    const newStatus = action === 'approve' ? 'CONTACTED' : 'REJECTED';
+    
+    // If outreach copy was edited in the modal, persist it first
+    if (outreach) {
+      console.log(`  📝 Persisting edited outreach copy for ${targetLeadId}`);
+      await updateLeadOutreach(targetLeadId, outreach);
+    }
+
+    // Update the final status
+    const result = await updateOutreachStatus(targetLeadId, newStatus, finalNotes);
+
+    if (!result) {
+      return res.status(404).json({ success: false, error: 'Lead not found' });
+    }
+
+    console.log(`  ✅ Lead ${targetLeadId} → ${newStatus}`);
+    res.json({ success: true, status: newStatus, lead: result });
+  } catch (err) {
+    console.error('Approve-email error:', err);
+    res.status(500).json({ success: false, error: err.message });
+  }
 });
 
-// ---- List Agents ----
-app.get('/api/agents', (req, res) => {
-  const agents = Array.from(runtime.agents.entries()).map(([name, agent]) => ({
-    name,
-    toolCount: agent.tools.size,
-    tools: Array.from(agent.tools.keys()),
-  }));
-  res.json({ agents });
-});
 
 // ============================================================
 // LEAD PIPELINE ENDPOINTS
@@ -420,6 +486,7 @@ app.get('/api/leads', async (req, res) => {
       leads: leads.map(l => ({
         id: l.id,
         business_name: l.business_name,
+        owner_name: l.owner_name,
         industry: l.industry,
         metro_area: l.metro_area,
         rating: l.rating,
@@ -429,11 +496,15 @@ app.get('/api/leads', async (req, res) => {
         outreach_status: l.outreach_status,
         has_mega_profile: !!l.mega_profile,
         mega_profile: l.mega_profile,
+        score_breakdown: l.score_breakdown,
         profiled_by: l.profiled_by,
         phone: l.phone,
         email: l.email,
         website: l.website,
         google_maps_url: l.google_maps_url,
+        facebook_url: l.facebook_url,
+        instagram_url: l.instagram_url,
+        linkedin_url: l.linkedin_url,
         created_at: l.created_at,
       })),
     });
@@ -494,20 +565,79 @@ INSTRUCCIONES DE DELEGACIÓN ESTRICTA EN ORDEN:
   }
 });
 
-// ---- Update Outreach Status ----
-app.post('/api/leads/:id/outreach', async (req, res) => {
-  const { status, notes } = req.body;
-  const validStatuses = ['PENDING', 'CONTACTED', 'RESPONDED', 'MEETING_SET', 'CLOSED', 'NURTURING', 'DEAD'];
+// ---- Regenerate Outreach (Angela) ----
+app.post('/api/leads/:id/regenerate-outreach', async (req, res) => {
+  try {
+    const lead = await getLeadById(req.params.id);
+    if (!lead) return res.status(404).json({ error: 'Lead not found' });
 
-  if (!status || !validStatuses.includes(status)) {
+    console.log(`\n📬 [Regenerate] Rewriting copy for: ${lead.business_name}`);
+
+    const prompt = `Re-write the outreach messages for this lead. 
+    Use the findings in their MEGA profile: ${JSON.stringify(lead.mega_profile || {})}.
+    
+    Target: ${lead.business_name}
+    Industry: ${lead.industry}
+    Website: ${lead.website}
+    
+    INSTRUCTIONS:
+    - Focus on a different 'Attack Angle' if possible.
+    - Write: 1 Cold Email (Subject + Body), 1 SMS/WhatsApp message, 1 Instagram DM.
+    - Respond strictly with a JSON object containing: { "subject": "...", "body": "...", "whatsapp": "...", "instagram": "..." }
+    - Use Spanish (warm, professional, Empírika tone).`;
+
+    const result = await runtime.run('Angela', prompt, {
+      currentAgent: 'Angela'
+    });
+
+    let copy;
+    try {
+      // Try to parse JSON from Angela
+      const jsonMatch = result.response.match(/\{[\s\S]*\}/);
+      copy = jsonMatch ? JSON.parse(jsonMatch[0]) : null;
+    } catch (e) {
+      console.warn('Angela did not return valid JSON, using raw response');
+    }
+
+    if (!copy) {
+      // Fallback if not JSON
+      copy = { body: result.response };
+    }
+
+    // Persist the new version
+    await updateLeadOutreach(lead.id, copy);
+
+    res.json({
+      success: true,
+      outreach: copy
+    });
+  } catch (err) {
+    console.error('Regenerate error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+app.post('/api/leads/:id/outreach', async (req, res) => {
+  const { status, notes, outreachData, outreach } = req.body;
+  const targetOutreach = outreachData || outreach;
+  const validStatuses = ['PENDING', 'CONTACTED', 'RESPONDED', 'MEETING_SET', 'CLOSED', 'NURTURING', 'DEAD', 'APPROVED', 'REJECTED', 'DRAFT'];
+
+  if (status && !validStatuses.includes(status)) {
     return res.status(400).json({ error: `status must be one of: ${validStatuses.join(', ')}` });
   }
 
   try {
-    const updated = await updateOutreachStatus(req.params.id, status, notes);
+    let updated;
+    
+    // If full outreach data is provided, save it into the mega_profile
+    if (targetOutreach) {
+      updated = await updateLeadOutreach(req.params.id, targetOutreach, status, notes);
+    } else {
+      updated = await updateOutreachStatus(req.params.id, status, notes);
+    }
+
     if (!updated) return res.status(404).json({ error: 'Lead not found' });
 
-    console.log(`  📞 [Outreach] ${updated.business_name} → ${status}`);
+    console.log(`  📞 [Outreach] ${updated.business_name} updated to ${status}.`);
     res.json({ success: true, lead: updated });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -702,8 +832,17 @@ setInterval(async () => {
 startTranscriptionWorker();
 
 // ============================================================
-// 4. Start Server
+// 4. Serve Frontend & Start Server
 // ============================================================
+// Serve static built files from the dashboard
+app.use(express.static(path.join(__dirname, 'dashboard/dist')));
+
+// Fallback all other non-API routes to React's index.html
+app.get('*', (req, res, next) => {
+  if (req.path.startsWith('/api/')) return next();
+  res.sendFile(path.join(__dirname, 'dashboard/dist/index.html'));
+});
+
 app.listen(port, () => {
   console.log(`\n${'═'.repeat(56)}`);
   console.log(`🤖 AGENCY — AI Marketing Fleet`);

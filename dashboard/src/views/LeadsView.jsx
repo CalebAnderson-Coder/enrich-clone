@@ -1,10 +1,15 @@
 import React, { useState, useEffect } from 'react';
 import './LeadsView.css';
 import { supabase } from '../supabaseClient';
+import OutreachReviewModal from '../components/OutreachReviewModal';
+
+const API_BASE_URL = import.meta.env.VITE_API_URL || (import.meta.env.PROD ? '/api' : 'http://localhost:4000/api');
 
 export default function LeadsView() {
   const [leads, setLeads] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [selectedLead, setSelectedLead] = useState(null);
+  const [isModalOpen, setIsModalOpen] = useState(false);
 
   useEffect(() => {
     fetchLeads();
@@ -48,6 +53,103 @@ export default function LeadsView() {
     if (score >= 80) return 'PROSPECTO HOT';
     if (score >= 50) return 'PROSPECTO WARM';
     return 'PROSPECTO FRÍO';
+  };
+
+  const handleOpenReview = (lead) => {
+    setSelectedLead(lead);
+    setIsModalOpen(true);
+  };
+
+  const handleRegenerate = async (leadId, agentNotes) => {
+    try {
+      const response = await fetch(`${API_BASE_URL}/leads/${leadId}/regenerate-outreach`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${import.meta.env.VITE_API_SECRET_KEY}`
+        },
+        body: JSON.stringify({ notes: agentNotes })
+      });
+      const data = await response.json();
+      return data;
+    } catch (err) {
+      console.error('Error regenerating:', err);
+      return null;
+    }
+  };
+
+  const handleSaveOutreach = async (leadId, outreachData) => {
+    try {
+      // We can use a dedicated endpoint or update directly if Supabase allows
+      const { error } = await supabase
+        .from('leads')
+        .update({
+          outreach_status: 'DRAFT',
+          mega_profile: {
+            ...selectedLead.mega_profile,
+            outreach: outreachData
+          },
+          updated_at: new Date().toISOString()
+        })
+        .eq('id', leadId);
+
+      if (error) throw error;
+      
+      setIsModalOpen(false);
+      fetchLeads();
+    } catch (err) {
+      console.error('Error saving:', err);
+      alert('Error al guardar el borrador');
+    }
+  };
+
+  const handleApproveOutreach = async (leadId, outreachData) => {
+    try {
+      const response = await fetch(`${API_BASE_URL}/leads/${leadId}/outreach`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${import.meta.env.VITE_API_SECRET_KEY}`
+        },
+        body: JSON.stringify({
+          outreach: outreachData,
+          status: 'APPROVED'
+        })
+      });
+
+      if (!response.ok) throw new Error('Failed to approve');
+
+      setIsModalOpen(false);
+      fetchLeads();
+    } catch (err) {
+      console.error('Error approving:', err);
+      alert('Error al aprobar y enviar');
+    }
+  };
+
+  const handleRejectLead = async (leadId, agentNotes) => {
+    try {
+      const response = await fetch(`${API_BASE_URL}/leads/${leadId}/outreach`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${import.meta.env.VITE_API_SECRET_KEY}`
+        },
+        body: JSON.stringify({
+          outreach: selectedLead?.mega_profile?.outreach || {},
+          status: 'REJECTED',
+          notes: agentNotes || ''
+        })
+      });
+
+      if (!response.ok) throw new Error('Failed to reject');
+
+      setIsModalOpen(false);
+      fetchLeads();
+    } catch (err) {
+      console.error('Error rejecting:', err);
+      alert('Error al rechazar lead');
+    }
   };
 
   return (
@@ -103,7 +205,6 @@ export default function LeadsView() {
             const linkedinLink = lead.linkedin_url || null;
             const googleMapsLink = lead.google_maps_url || null;
 
-            // Extract campaign values if present, else fallback to something useful or placeholder if requested exactly like screenshot.
             const campaignData = lead.campaign_enriched_data && lead.campaign_enriched_data[0] ? lead.campaign_enriched_data[0] : null;
             const rawMega = lead.mega_profile || {};
             
@@ -117,18 +218,14 @@ export default function LeadsView() {
             if (rawMega?.meta_ads && rawMega.meta_ads.hasActiveAds === false) hasAdsIndicator = "No";
             if (rawMega?.meta_ads && rawMega.meta_ads.hasActiveAds === true) hasAdsIndicator = "Sí";
             
-            // We prioritize the new table structure, fallback to raw mega_profile properties if they somehow exist, else generic placeholder matching formatting.
-            const resumen = campaignData?.radiography_technical || rawMega.situational_summary || `"Highly rated and trusted locally, but they lack an online presence. Setting up a professional website and local SEO would unlock massive growth."`;
-            
-            // To simulate "Puntos de dolor":
-            const puntosDolor = campaignData?.attack_angle || rawMega.pain_points || `El sitio web de ${lead.business_name || 'este negocio'} tarda considerablemente en cargar en dispositivos móviles, lo que perjudica severamente su tasa de conversión. Además, carecen de optimización SEO local y sistemas de retargeting para visitantes que buscan sus servicios pero no contactan en la primera visita.`;
-            
-            const estrategia = campaignData?.outreach_copy || rawMega.strategic_recommendation || `¡Absolutamente! Aquí está mi recomendación para ${lead.business_name || 'este lead'}: **Attack Angle:** Necesitan urgentemente modernizar su presencia digital. Una página web optimizada con SEO local y un embudo de captación de leads les permitirán dejar de depender de referidos y captar clientes consistentemente en su ciudad.`;
+            const resumen = campaignData?.radiography_technical || rawMega.situational_summary || `Evaluando el potencial digital de ${lead.business_name}...`;
+            const puntosDolor = campaignData?.attack_angle || rawMega.pain_points || `Identificando ineficiencias en el embudo actual de ${lead.business_name}...`;
+            const estrategia = campaignData?.outreach_copy || rawMega.strategic_recommendation || `Angela está diseñando la propuesta personalizada para este prospecto.`;
 
             return (
               <div key={lead.id} className="lead-card">
                 <div className="lead-card-header">
-                  <h3 className="lead-name">{lead.business_name || 'Prospecto Sin Nombre'}</h3>
+                  <h3 className="lead-name" title={lead.business_name}>{lead.business_name || 'Prospecto Sin Nombre'}</h3>
                   <div className={`badge ${tierClass}`}>
                     {getTierLabel(score)}
                   </div>
@@ -194,9 +291,24 @@ export default function LeadsView() {
                 </div>
 
                 <div className="lead-contact-channels">
-                  <h5 className="channels-title">CANALES DE CONTACTO DIRECTO</h5>
+                  <div className="outreach-action-row">
+                    <button className="review-outreach-btn" onClick={() => handleOpenReview(lead)}>
+                      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path></svg>
+                      Revisar Outreach
+                    </button>
+                    {lead.outreach_status === 'APPROVED' && (
+                      <span className="status-label approved">✓ Aprobado</span>
+                    )}
+                    {lead.outreach_status === 'REJECTED' && (
+                      <span className="status-label rejected" style={{ color: '#ef4444', background: 'rgba(239, 68, 68, 0.1)', padding: '4px 8px', borderRadius: '4px', fontSize: '0.8rem', display: 'flex', alignItems: 'center' }}>✗ Rechazado</span>
+                    )}
+                    {lead.outreach_status === 'DRAFT' && (
+                      <span className="status-label draft" style={{ color: '#eab308', background: 'rgba(234, 179, 8, 0.1)', padding: '4px 8px', borderRadius: '4px', fontSize: '0.8rem', display: 'flex', alignItems: 'center' }}>✏️ Borrador</span>
+                    )}
+                  </div>
+
+                  <h5 className="channels-title small">CANALES DE CONTACTO DIRECTO</h5>
                   <div className="channels-row">
-                    
                     {whatsappLink ? (
                       <a href={whatsappLink} target="_blank" rel="noopener noreferrer" className="channel-btn">
                         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"></path></svg>
@@ -213,22 +325,6 @@ export default function LeadsView() {
                       <div className="channel-btn" style={{ opacity: 0.3 }}><svg className="channel-icon-blue" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M18 2h-3a5 5 0 0 0-5 5v3H7v4h3v8h4v-8h3l1-4h-4V7a1 1 0 0 1 1-1h3z"></path></svg></div>
                     )}
                     
-                    {instagramLink ? (
-                      <a href={instagramLink} target="_blank" rel="noopener noreferrer" className="channel-btn">
-                        <svg className="channel-icon-gradient" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="2" y="2" width="20" height="20" rx="5" ry="5"></rect><path d="M16 11.37A4 4 0 1 1 12.63 8 4 4 0 0 1 16 11.37z"></path><line x1="17.5" y1="6.5" x2="17.51" y2="6.5"></line></svg>
-                      </a>
-                    ) : (
-                      <div className="channel-btn" style={{ opacity: 0.3 }}><svg className="channel-icon-gradient" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="2" y="2" width="20" height="20" rx="5" ry="5"></rect><path d="M16 11.37A4 4 0 1 1 12.63 8 4 4 0 0 1 16 11.37z"></path><line x1="17.5" y1="6.5" x2="17.51" y2="6.5"></line></svg></div>
-                    )}
-                    
-                    {linkedinLink ? (
-                      <a href={linkedinLink} target="_blank" rel="noopener noreferrer" className="channel-btn">
-                        <svg className="channel-icon-blue" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M16 8a6 6 0 0 1 6 6v7h-4v-7a2 2 0 0 0-2-2 2 2 0 0 0-2 2v7h-4v-7a6 6 0 0 1 6-6z"></path><rect x="2" y="9" width="4" height="12"></rect><circle cx="4" cy="4" r="2"></circle></svg>
-                      </a>
-                    ) : (
-                      <div className="channel-btn" style={{ opacity: 0.3 }}><svg className="channel-icon-blue" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M16 8a6 6 0 0 1 6 6v7h-4v-7a2 2 0 0 0-2-2 2 2 0 0 0-2 2v7h-4v-7a6 6 0 0 1 6-6z"></path><rect x="2" y="9" width="4" height="12"></rect><circle cx="4" cy="4" r="2"></circle></svg></div>
-                    )}
-                    
                     {googleMapsLink ? (
                       <a href={googleMapsLink} target="_blank" rel="noopener noreferrer" className="channel-btn primary">
                         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"></path><circle cx="12" cy="10" r="3"></circle></svg>
@@ -236,29 +332,24 @@ export default function LeadsView() {
                     ) : (
                       <div className="channel-btn" style={{ opacity: 0.3 }}><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"></path><circle cx="12" cy="10" r="3"></circle></svg></div>
                     )}
-                    
-                    {phoneLink ? (
-                      <a href={phoneLink} className="channel-btn">
-                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z"></path></svg>
-                      </a>
-                    ) : (
-                      <div className="channel-btn" style={{ opacity: 0.3 }}><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z"></path></svg></div>
-                    )}
-                    
-                    {smsLink ? (
-                      <a href={smsLink} className="channel-btn">
-                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path></svg>
-                      </a>
-                    ) : (
-                      <div className="channel-btn" style={{ opacity: 0.3 }}><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path></svg></div>
-                    )}
-
                   </div>
                 </div>
               </div>
             );
           })}
         </div>
+      )}
+
+      {selectedLead && (
+        <OutreachReviewModal 
+          lead={selectedLead}
+          isOpen={isModalOpen}
+          onClose={() => setIsModalOpen(false)}
+          onSave={handleSaveOutreach}
+          onApprove={handleApproveOutreach}
+          onRegenerate={handleRegenerate}
+          onReject={handleRejectLead}
+        />
       )}
     </div>
   );

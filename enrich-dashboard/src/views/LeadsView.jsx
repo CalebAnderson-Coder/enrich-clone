@@ -3,7 +3,7 @@ import { supabase } from '../lib/supabase';
 import './LeadsView.css';
 
 // API base URL — in production this is the Vercel deployment URL
-const API_URL = import.meta.env.VITE_API_URL || '';
+const API_URL = import.meta.env.VITE_BACKEND_URL || import.meta.env.VITE_API_URL || 'http://localhost:3001';
 
 export default function LeadsView() {
   const [leads, setLeads] = useState([]);
@@ -16,6 +16,7 @@ export default function LeadsView() {
   const [rejectReason, setRejectReason] = useState('');
   const [actionLoading, setActionLoading] = useState(false);
   const [actionResult, setActionResult] = useState(null);
+
   useEffect(() => {
     fetchLeads();
     // Real-time subscription for live updates
@@ -469,36 +470,7 @@ export default function LeadsView() {
                             <path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"></path>
                             <polyline points="22,6 12,13 2,6"></polyline>
                           </svg>
-                          Draft de Correo
-                        </button>
-                      );
-                    }
-
-                    // PENDING/PROCESSING magnet — Generating
-                    if (lead.campaign?.lead_magnet_status === 'PENDING' || lead.campaign?.lead_magnet_status === 'PROCESSING') {
-                      return (
-                        <button disabled className="draft-email-btn generating">
-                          <svg className="spinner" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ animation: 'spin 1s linear infinite' }}><line x1="12" y1="2" x2="12" y2="6"></line><line x1="12" y1="18" x2="12" y2="22"></line><line x1="4.93" y1="4.93" x2="7.76" y2="7.76"></line><line x1="16.24" y1="16.24" x2="19.07" y2="19.07"></line><line x1="2" y1="12" x2="6" y2="12"></line><line x1="18" y1="12" x2="22" y2="12"></line><line x1="4.93" y1="19.07" x2="7.76" y2="16.24"></line><line x1="16.24" y1="7.76" x2="19.07" y2="4.93"></line></svg>
-                          Preparando Draft...
-                        </button>
-                      );
-                    }
-
-                    // IDLE — No magnet yet, trigger generation
-                    if (lead.campaign && (lead.campaign.lead_magnet_status === 'IDLE' || !lead.campaign.lead_magnet_status)) {
-                      return (
-                        <button 
-                          onClick={async () => {
-                            try {
-                              await supabase.from('campaign_enriched_data')
-                                .update({ lead_magnet_status: 'PENDING' })
-                                .eq('id', lead.campaign.id);
-                            } catch (e) { console.error(e); }
-                          }}
-                          className="draft-email-btn idle"
-                        >
-                          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"></path><polyline points="3.27 6.96 12 12.01 20.73 6.96"></polyline><line x1="12" y1="22.08" x2="12" y2="12"></line></svg>
-                          Generar Draft de Email
+                          Draft Email
                         </button>
                       );
                     }
@@ -648,6 +620,8 @@ export default function LeadsView() {
           </div>
         </div>
       )}
+
+
     </div>
   );
 }

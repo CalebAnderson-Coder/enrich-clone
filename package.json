@@ -7,7 +7,8 @@
     "start": "node index.js",
     "dev": "node --watch index.js",
     "test": "node test.js",
-    "start-openagent": "node workers/openagent_worker.js"
+    "start-openagent": "node workers/openagent_worker.js",
+    "heroku-postbuild": "cd dashboard && npm install && npm run build"
   },
   "keywords": [
     "ai-marketing",
@@ -32,7 +33,8 @@
     "nodemailer": "^8.0.5",
     "pdfkit": "^0.18.0",
     "resend": "^4.0.0",
-    "twilio": "^5.13.1"
+    "twilio": "^5.13.1",
+    "zod": "^4.3.6"
   },
   "devDependencies": {
     "pg": "^8.20.0"

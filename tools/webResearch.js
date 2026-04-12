@@ -20,47 +20,98 @@ export const searchWeb = new Tool({
     const { query, num_results = 5 } = args;
     
     try {
+      // Strategy 1: Try Bright Data SERP API
       const token = process.env.BRIGHTDATA_API_TOKEN;
-      
-      if (!token) {
-        return JSON.stringify({ error: "BRIGHTDATA_API_TOKEN is not set. Web search unavailable." });
+      if (token) {
+        try {
+          console.log(`  🔍 [webResearch] Searching via Bright Data for: "${query}"`);
+          const response = await fetch('https://api.brightdata.com/serp/req', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': `Bearer ${token}`,
+            },
+            body: JSON.stringify({
+              query: query,
+              search_engine: 'google',
+              country: 'us',
+              language: 'en',
+              num: Math.min(num_results, 20),
+              zone: process.env.BRIGHTDATA_SERP_ZONE || 'serp_api1',
+            }),
+          });
+          
+          if (response.ok) {
+            const data = await response.json();
+            const organic = data.organic || [];
+            const results = organic.slice(0, num_results).map((item) => ({
+              title: item.title || '',
+              description: item.description || item.snippet || '',
+              url: item.link || item.url || ''
+            }));
+            if (results.length > 0) {
+              console.log(`  ✅ [webResearch] Bright Data returned ${results.length} results`);
+              return JSON.stringify({ results });
+            }
+          }
+          console.log(`  ⚠️ [webResearch] Bright Data returned no results, falling back to DuckDuckGo...`);
+        } catch (bdErr) {
+          console.log(`  ⚠️ [webResearch] Bright Data failed: ${bdErr.message}, falling back...`);
+        }
       }
 
-      console.log(`  🔍 [webResearch] Searching Google via Bright Data for: "${query}"`);
-      const response = await fetch('https://api.brightdata.com/serp/req', {
-        method: 'POST',
+      // Strategy 2: DuckDuckGo HTML fallback (no API key needed)
+      console.log(`  🦆 [webResearch] Searching via DuckDuckGo for: "${query}"`);
+      const ddgUrl = `https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`;
+      const ddgResponse = await fetch(ddgUrl, {
         headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${token}`,
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
         },
-        body: JSON.stringify({
-          query: query,
-          search_engine: 'google',
-          country: 'us',
-          language: 'en',
-          num: Math.min(num_results, 20),
-          zone: process.env.BRIGHTDATA_SERP_ZONE || 'serp_api1',
-        }),
       });
-      
-      if (!response.ok) {
-        const errText = await response.text();
-        throw new Error(`Bright Data search failed (${response.status}): ${errText}`);
+
+      if (!ddgResponse.ok) {
+        return JSON.stringify({ error: `DuckDuckGo search failed (${ddgResponse.status})` });
       }
 
-      const data = await response.json();
-      const organic = data.organic || [];
+      const html = await ddgResponse.text();
       
-      const results = organic.slice(0, num_results).map((item) => ({
-        title: item.title || '',
-        description: item.description || item.snippet || '',
-        url: item.link || item.url || ''
-      }));
+      // Parse DuckDuckGo HTML results
+      const results = [];
+      const resultPattern = /<a[^>]+class="result__a"[^>]*href="([^"]*)"[^>]*>(.*?)<\/a>[\s\S]*?<a[^>]+class="result__snippet"[^>]*>(.*?)<\/a>/gi;
+      let match;
+      while ((match = resultPattern.exec(html)) !== null && results.length < num_results) {
+        let url = match[1];
+        // DuckDuckGo wraps URLs in a redirect — extract the real URL
+        const uddgMatch = url.match(/uddg=([^&]+)/);
+        if (uddgMatch) url = decodeURIComponent(uddgMatch[1]);
+        
+        const title = match[2].replace(/<[^>]+>/g, '').trim();
+        const description = match[3].replace(/<[^>]+>/g, '').trim();
+        
+        if (title && url) {
+          results.push({ title, description, url });
+        }
+      }
+      
+      // Simpler fallback parsing if the regex above didn't match
+      if (results.length === 0) {
+        const linkPattern = /<a[^>]+class="result__a"[^>]*href="([^"]*)"[^>]*>([\s\S]*?)<\/a>/gi;
+        while ((match = linkPattern.exec(html)) !== null && results.length < num_results) {
+          let url = match[1];
+          const uddgMatch = url.match(/uddg=([^&]+)/);
+          if (uddgMatch) url = decodeURIComponent(uddgMatch[1]);
+          const title = match[2].replace(/<[^>]+>/g, '').trim();
+          if (title && url && url.startsWith('http')) {
+            results.push({ title, description: '', url });
+          }
+        }
+      }
 
       if (results.length === 0) {
-        return JSON.stringify({ error: "No results found for query." });
+        return JSON.stringify({ error: "No results found for query across all search providers." });
       }
 
+      console.log(`  ✅ [webResearch] DuckDuckGo returned ${results.length} results`);
       return JSON.stringify({ results });
     } catch (err) {
       return `Search failed: ${err.message}`;

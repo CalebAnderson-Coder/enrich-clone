@@ -1,0 +1,21 @@
+services:
+  - type: web
+    name: agency-fleet-runtime
+    env: node
+    region: ohio # Defaults to US East
+    buildCommand: npm run heroku-postbuild
+    startCommand: npm start
+    envVars:
+      # Backend Keys
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_SERVICE_KEY
+        sync: false
+      - key: GEMINI_API_KEY
+        sync: false
+        
+      # Frontend Variables (Requeridos al momento del Build)
+      - key: VITE_SUPABASE_URL
+        sync: false
+      - key: VITE_SUPABASE_ANON_KEY
+        sync: false

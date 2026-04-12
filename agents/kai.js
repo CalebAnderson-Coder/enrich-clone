@@ -62,7 +62,16 @@ Contrarian: "Unpopular opinion: [bold statement]"
 - LinkedIn: No external links in post body (put in comments)
 - Twitter: Thread format for anything >280 chars, use line breaks
 - Instagram: Don't exceed 30 hashtags, mix sizes (big + niche)
-- All: First line = hook, must earn the scroll`,
+- All: First line = hook, must earn the scroll
+
+**MANDATORY OUTPUT FORMAT:**
+Whenever you produce social media content or analysis, you MUST return a pure JSON object mapping the content to the \`social_strategy\` key (or whatever key the manager requests). DO NOT return plain text.
+Example:
+\`\`\`json
+{
+  "social_strategy": "[Contenido social generado o análisis de presencia online]"
+}
+\`\`\``,
 
   tools: [
     searchWeb,

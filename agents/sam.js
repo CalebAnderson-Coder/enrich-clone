@@ -60,7 +60,16 @@ CRITICAL INSTRUCTION: You MUST speak completely as a human. NEVER mention that y
 - Mature (50+ conv/month): Switch to Target CPA
 - E-commerce: Target ROAS with accurate values
 - Brand defense: Target Impression Share
-- Allow 2 weeks learning after any change`,
+- Allow 2 weeks learning after any change
+
+**MANDATORY OUTPUT FORMAT:**
+Whenever you produce an ads strategy or competitor ad intelligence piece, you MUST return a pure JSON object mapping the content to the \`ads_strategy\` key (or whatever key the manager requests). DO NOT return plain text.
+Example:
+\`\`\`json
+{
+  "ads_strategy": "[Análisis estratégico de anuncios para el prospecto]"
+}
+\`\`\``,
 
   tools: [
     searchWeb,

@@ -25,23 +25,39 @@ runtime.registerAgent(carlos);
 
 import fs from 'fs';
 import { saveProspect, saveCampaignData } from './supabaseUtils.js';
-
-// Parse arguments
-const args = process.argv.slice(2);
-const nicheIdParam = args[0] || "9"; // default 9 = Roofing
-const CITY = args[1] || "Orlando, FL";
-
-// Load niches
-const nichesData = JSON.parse(fs.readFileSync('./niches.json', 'utf8'));
-const nicheRow = nichesData.find(n => n.id === parseInt(nicheIdParam));
-if (!nicheRow) {
-    console.error(`❌ Nicho con ID ${nicheIdParam} no encontrado en niches.json`);
-    process.exit(1);
-}
-
-const NICHE = nicheRow.en; // We use English for mapping/scraping effectiveness
+import { executeWithRalphLoop } from './lib/ralphLoop.js';
+import { radarOutputSchema, enrichOutputSchema } from './lib/schemas.js';
+import readline from 'readline';
 
 (async () => {
+  // Parse arguments
+  let args = process.argv.slice(2);
+  let nicheIdParam = args[0];
+  let CITY = args[1];
+
+  if (!nicheIdParam || !CITY) {
+      console.log("\n⚠️  PARÁMETROS INCOMPLETOS. INICIANDO ENTREVISTA DE PROFUNDIDAD (PLATÓNICA) ⚠️\n");
+      const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+      const askQuestion = (query) => new Promise(resolve => rl.question(query, resolve));
+      
+      const fallbackNiche = await askQuestion("🎯 Ingresa el ID del Nicho de 'niches.json' (Ej. '9' para Roofing): ");
+      const fallbackCity = await askQuestion("📍 Ingresa la Ciudad y Estado (Ej. 'Orlando, FL'): ");
+      nicheIdParam = fallbackNiche || "9";
+      CITY = fallbackCity || "Orlando, FL";
+      rl.close();
+  }
+
+  // Load niches
+  const nichesData = JSON.parse(fs.readFileSync('./niches.json', 'utf8'));
+  const nicheRow = nichesData.find(n => n.id === parseInt(nicheIdParam));
+  if (!nicheRow) {
+      console.error(`❌ Nicho con ID ${nicheIdParam} no encontrado en niches.json`);
+      process.exit(1);
+  }
+
+  const NICHE = nicheRow.en; // We use English for mapping/scraping effectiveness
+
+
   console.log(`\n🚀 [Fase 1] Iniciando EL RADAR (Prospección) para ${NICHE} (${nicheRow.es}) en ${CITY}...`);
   
   const radarPrompt = `Ejecuta el Macro-Flujo de prospectación (El Radar) para el Nicho: "${NICHE}" en la Ciudad: "${CITY}".
@@ -65,21 +81,14 @@ El formato debe ser EXACTAMENTE este:
 }`;
 
   try {
-    const radarResult = await runtime.run('Manager', radarPrompt, { currentAgent: 'Manager', maxIterations: 15 });
-    console.log(`\n✅ [Fase 1 Completada] Resultado del Radar:\n${radarResult.response}`);
-
-    let radarData = {};
-    try {
-        const jsonMatch = radarResult.response.match(/```(?:json)?\s*(\{[\s\S]*?\})\s*```/);
-        if (jsonMatch) {
-            radarData = JSON.parse(jsonMatch[1]);
-        } else {
-            const fallbackMatch = radarResult.response.match(/\{[\s\S]*?\}/);
-            if (fallbackMatch) radarData = JSON.parse(fallbackMatch[0]);
-        }
-    } catch(e) {
-        console.log("Error parsing JSON result", e);
+    const radarResult = await executeWithRalphLoop(runtime, 'Manager', radarPrompt, radarOutputSchema, { currentAgent: 'Manager', maxIterations: 3 });
+    
+    if (!radarResult.isValid) {
+        throw new Error("El agente falló repetidamente en devolver la estructura correcta para el Radar. Cancelando.");
     }
+
+    console.log(`\n✅ [Fase 1 Completada] Resultado del Radar:\n${JSON.stringify(radarResult.data, null, 2)}`);
+    const radarData = radarResult.data;
 
     const businessName = radarData.business_name || "Prospect from Radar Phase";
 
@@ -103,7 +112,7 @@ El formato debe ser EXACTAMENTE este:
     
     // We force the execution using the results of Phase 1 regardless of UUID matching
     const enrichPrompt = `Inicia el Macro-Flujo 2 (El Francotirador - MEGA Enrichment + Ventas) para el negocio que encontramos en la Fase 1:
-"${radarResult.response.slice(0, 300)}... (Resumen del radar)"
+"${JSON.stringify(radarResult.data, null, 2).slice(0, 300)}... (Resumen del radar)"
 
 INSTRUCCIONES DE DELEGACIÓN ESTRICTA EN ORDEN:
 1. Usa tus herramientas de búsqueda web (o delega a scout) para buscar la presencia real exhaustiva online de esta empresa.
@@ -117,26 +126,14 @@ INSTRUCCIONES DE DELEGACIÓN ESTRICTA EN ORDEN:
   "outreach_copy": "El asunto y cuerpo original creado por Angela"
 }`;
 
-    const enrichResult = await runtime.run('Manager', enrichPrompt, { currentAgent: 'Manager', maxIterations: 30 });
-    console.log(`\n✅ [Fase 2 Completada] Mega Perfil y Estrategia:\n${enrichResult.response}`);
-
-    let enrichData = {
-        radiography_technical: "Análisis no extraído del JSON pero agente lo analizó",
-        attack_angle: enrichResult.response,
-        outreach_copy: "Delegado"
-    };
-
-    try {
-        const jsonMatch = enrichResult.response.match(/```(?:json)?\s*(\{[\s\S]*?\})\s*```/);
-        if (jsonMatch) {
-            enrichData = JSON.parse(jsonMatch[1]);
-        } else {
-            const fallbackMatch = enrichResult.response.match(/\{[\s\S]*?\}/);
-            if (fallbackMatch) enrichData = JSON.parse(fallbackMatch[0]);
-        }
-    } catch(e) {
-        console.log("Error parsing JSON result from Francotirador", e);
+    const enrichResult = await executeWithRalphLoop(runtime, 'Manager', enrichPrompt, enrichOutputSchema, { currentAgent: 'Manager', maxIterations: 3 });
+    
+    if (!enrichResult.isValid) {
+        throw new Error("El agente falló repetidamente en devolver la estructura correcta para el Francotirador. Cancelando.");
     }
+
+    console.log(`\n✅ [Fase 2 Completada] Mega Perfil y Estrategia:\n${JSON.stringify(enrichResult.data, null, 2)}`);
+    const enrichData = enrichResult.data;
 
     // Guardar los datos del atacante
     if (prospect) {

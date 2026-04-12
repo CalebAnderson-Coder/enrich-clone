@@ -289,3 +289,166 @@
 .empty-leads-container svg { color: var(--text-muted); margin-bottom: 16px; }
 .empty-leads-container h3 { font-size: 1.5rem; color: var(--text-primary); margin: 0 0 8px 0; }
 .empty-leads-container p { color: var(--text-secondary); max-width: 400px; margin: 0; }
+
+/* --- Outreach Styling --- */
+
+.status-badge {
+  padding: 4px 10px;
+  border-radius: 12px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.status-pending { background: rgba(255, 193, 7, 0.15); color: #ffc107; border: 1px solid rgba(255, 193, 7, 0.3); }
+.status-contacted { background: rgba(0, 123, 255, 0.15); color: #007bff; border: 1px solid rgba(255, 193, 7, 0.3); }
+.status-responded { background: rgba(40, 167, 69, 0.15); color: #28a745; border: 1px solid rgba(40, 167, 69, 0.3); }
+.status-dead { background: rgba(220, 53, 69, 0.15); color: #dc3545; border: 1px solid rgba(220, 53, 69, 0.3); }
+
+.review-modal-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.8);
+  backdrop-filter: blur(8px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+  padding: 20px;
+}
+
+.review-modal {
+  background: #1a1a1a;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 16px;
+  width: 100%;
+  max-width: 800px;
+  max-height: 90vh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5);
+}
+
+.review-header {
+  padding: 20px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.review-header h2 { margin: 0; font-size: 1.25rem; color: #fff; }
+.close-btn { background: none; border: none; font-size: 1.5rem; color: #888; cursor: pointer; }
+
+.review-content {
+  padding: 24px;
+  overflow-y: auto;
+  flex: 1;
+}
+
+.outreach-platform-tabs {
+  display: flex;
+  gap: 12px;
+  margin-bottom: 20px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  padding-bottom: 12px;
+}
+
+.platform-tab {
+  background: none;
+  border: none;
+  padding: 8px 16px;
+  color: #888;
+  cursor: pointer;
+  border-radius: 8px;
+  transition: all 0.2s;
+  font-weight: 500;
+}
+
+.platform-tab.active {
+  background: rgba(255, 255, 255, 0.1);
+  color: #fff;
+}
+
+.copy-editor-group {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.editor-field {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.editor-field label {
+  font-size: 0.8rem;
+  color: #888;
+  font-weight: 600;
+}
+
+.editor-field input, .editor-field textarea {
+  background: #0d0d0d;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 8px;
+  color: #eee;
+  padding: 12px;
+  font-family: inherit;
+  font-size: 0.95rem;
+  transition: border-color 0.2s;
+}
+
+.editor-field input:focus, .editor-field textarea:focus {
+  border-color: #007bff;
+  outline: none;
+}
+
+.review-footer {
+  padding: 20px;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.footer-left { display: flex; gap: 12px; }
+
+.review-outreach-btn {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: rgba(0, 123, 255, 0.1);
+  color: #007bff;
+  border: 1px solid rgba(0, 123, 255, 0.2);
+  padding: 8px 16px;
+  border-radius: 8px;
+  cursor: pointer;
+  font-weight: 600;
+  margin: 12px 0;
+  transition: all 0.2s;
+  width: fit-content;
+}
+
+.review-outreach-btn:hover {
+  background: rgba(0, 123, 255, 0.2);
+  border-color: rgba(0, 123, 255, 0.4);
+}
+
+.status-label.approved {
+  color: #4ade80;
+  font-size: 0.85rem;
+  font-weight: 600;
+}
+
+.outreach-action-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: 8px;
+}
