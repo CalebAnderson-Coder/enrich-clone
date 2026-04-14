@@ -27,6 +27,9 @@ Se ha consolidado toda la lógica de agentes, bases de datos y la nueva interfaz
 - [x] **Comunicación API-Client:** Validada (Error de CORS resuelto).
 - [x] **Navegación:** Probada vía `browser_subagent` (0 enlaces rotos).
 - [x] **Estilo:** Estética Premium aplicada según requerimientos "Wow".
+- [x] **Branding & Emails (Abril 2026):**
+  - Se inyectó exitosamente la plantilla visual oficial de Empírika (`dashboard-template.html`) dentro de `report-email-workflow.json` (usando tipografía **Inter** y paleta institucional `#1a1a2e`, `#e94560`, `#0f3460`, `#f5a623`).
+  - El Prompt System de la **Agente Angela** en `angela.js` fue actualizado para redactar y formatear cuerpos HTML (`html_body`) basándose estrictamente en dichas reglas de branding, garantizando consistencia gráfica completa en los emails de outreach automáticos.
 - [x] **Agentes registrados:** Manager, Scout, Angela, Helena, Sam, Kai, Carlos, Davinci.
 
 ## 🛠️ Próximos Pasos Sugeridos

@@ -274,7 +274,7 @@ export async function verifySmtpConnection() {
 // ── CLI runner ───────────────────────────────────────────────
 // node outreach_dispatcher.js
 
-if (process.argv[1].includes('outreach_dispatcher')) {
+if (process.argv[1]?.includes('outreach_dispatcher')) {
   (async () => {
     const verify = await verifySmtpConnection();
     if (!verify.ok && SMTP_USER) {

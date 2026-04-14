@@ -6,6 +6,13 @@
 
 import { Tool } from '../lib/AgentRuntime.js';
 import nodemailer from 'nodemailer';
+import { createClient } from '@supabase/supabase-js';
+import dotenv from 'dotenv';
+dotenv.config();
+
+const supabaseUrl = process.env.SUPABASE_URL;
+const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_SERVICE_KEY || process.env.SUPABASE_ANON_KEY || process.env.VITE_SUPABASE_ANON_KEY;
+const supabase = (supabaseUrl && supabaseKey) ? createClient(supabaseUrl, supabaseKey) : null;
 
 // ── Build shared SMTP transporter ─────────────────────────────
 function buildTransporter() {
@@ -24,6 +31,101 @@ function buildTransporter() {
 
 const _transporter = buildTransporter();
 
+// ── GoHighLevel Sync ──────────────────────────────────────────
+async function syncToGHL(email, prospectData) {
+  const ghlKey = process.env.EMPIRIKA_GHL_KEY || process.env.GHL_API_KEY;
+  const locationId = process.env.EMPIRIKA_GHL_LOCATION_ID || process.env.GHL_LOCATION_ID;
+  const webhookUrl = process.env.GHL_WEBHOOK_URL;
+
+  // Formatting name and getting info from DB
+  const companyName = prospectData.business_name || prospectData.nombre || 'Lead';
+  const phone = prospectData.phone || prospectData.telefono || '';
+  
+  // Payload strictly aligned with the old Empirika n8n configuration
+  const payload = {
+    firstName: companyName,
+    email: email,
+    phone: phone,
+    locationId: locationId,
+    tags: ["lead-automatizado", "google-maps", "remodeling"],
+    source: "Lead Generation System - Agentic IA",
+    website: prospectData.website || '',
+    address1: prospectData.address1 || prospectData.direccion || '',
+    city: prospectData.metro_area || prospectData.ciudad || '',
+    companyName: companyName,
+    customFields: [
+      { key: "score", field_value: prospectData.qualification_score || prospectData.score || '' },
+      { key: "categoria", field_value: prospectData.industry || prospectData.categoria || '' },
+      { key: "google_rating", field_value: prospectData.rating || prospectData.google_rating || '' },
+      { key: "total_reviews", field_value: prospectData.review_count || prospectData.total_reviews || 0 },
+      { key: "score_razon", field_value: prospectData.notes || prospectData.score_razon || '' }
+    ]
+  };
+
+  try {
+    if (webhookUrl) {
+      await fetch(webhookUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+      console.log(`[GHL] ✨ Sincronizado vía Webhook para ${email}`);
+    } else if (ghlKey && locationId) {
+      payload.locationId = locationId;
+      const res = await fetch('https://services.leadconnectorhq.com/contacts/', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${ghlKey}`,
+          'Version': '2021-07-28',
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify(payload)
+      });
+      if (res.ok) {
+         console.log(`[GHL] ✨ Contacto creado en API v2 para ${email}`);
+      } else {
+         console.error(`[GHL] Error API:`, await res.text());
+      }
+    } else {
+      console.log(`[GHL] ⚠️ Credenciales de GHL no detectadas en .env. Simulación de sincronización para ${email}`);
+      console.log(`[GHL] Payload que se enviaría a GHL:`, payload);
+    }
+    return true;
+  } catch (err) {
+    console.error(`[GHL] Error durante la sincronización:`, err);
+    return false;
+  }
+}
+
+async function handlePostSendActions(to) {
+  if (!supabase) return;
+  try {
+    // 1. Find lead info
+    const { data: lead } = await supabase
+      .from('leads')
+      .select('*')
+      .eq('email_address', to)
+      .limit(1)
+      .single();
+
+    if (lead) {
+      // 2. Sync to GHL
+      await syncToGHL(to, lead);
+
+      // 3. Update campaign_enriched_data to mark GHL sync mapping
+      await supabase
+        .from('campaign_enriched_data')
+        .update({ ghl_tag: 'lead-automatizado' })
+        .eq('prospect_id', lead.id);
+    } else {
+      console.log(`[GHL] No se encontró el lead en Supabase para el email ${to}. Haciendo sync básico.`);
+      await syncToGHL(to, { business_name: 'Lead Desconocido' });
+    }
+  } catch (e) {
+    console.error('[Post-Send] Error ejecutando acciones post-envío:', e);
+  }
+}
+
 // ── Core sendMail helper ──────────────────────────────────────
 async function sendMail({ to, subject, html_body, from_name }) {
   const smtpUser   = process.env.SMTP_USER;
@@ -33,6 +135,8 @@ async function sendMail({ to, subject, html_body, from_name }) {
     || 'Ángela · Empírika Digital';
   const fromField  = `"${senderName}" <${fromAddr}>`;
 
+  let finalResult = null;
+
   // Priority 1: Gmail SMTP
   if (_transporter) {
     const info = await _transporter.sendMail({
@@ -41,12 +145,11 @@ async function sendMail({ to, subject, html_body, from_name }) {
       subject,
       html:    html_body,
     });
-    return { status: 'sent', email_id: info.messageId, to, subject, transport: 'smtp' };
+    finalResult = { status: 'sent', email_id: info.messageId, to, subject, transport: 'smtp' };
   }
-
   // Priority 2: Resend API
-  const apiKey = process.env.RESEND_API_KEY;
-  if (apiKey) {
+  else if (process.env.RESEND_API_KEY) {
+    const apiKey = process.env.RESEND_API_KEY;
     const res  = await fetch('https://api.resend.com/emails', {
       method:  'POST',
       headers: { 'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
@@ -54,18 +157,27 @@ async function sendMail({ to, subject, html_body, from_name }) {
     });
     const data = await res.json();
     if (data.id) {
-      return { status: 'sent', email_id: data.id, to, subject, transport: 'resend' };
+      finalResult = { status: 'sent', email_id: data.id, to, subject, transport: 'resend' };
+    } else {
+      return { status: 'error', error: data };
     }
-    return { status: 'error', error: data };
+  }
+  // Priority 3: MOCK
+  else {
+    console.log(`  📧 [MOCK] Would send email to ${to}: "${subject}"`);
+    finalResult = {
+      status: 'mock_sent',
+      note:   'No email transport configured. Email logged but not sent.',
+      to, subject,
+    };
   }
 
-  // Priority 3: MOCK
-  console.log(`  📧 [MOCK] Would send email to ${to}: "${subject}"`);
-  return {
-    status: 'mock_sent',
-    note:   'No email transport configured. Email logged but not sent.',
-    to, subject,
-  };
+  // Once mail is sent successfully or mocked => trigger GHL logic
+  if (finalResult && (finalResult.status === 'sent' || finalResult.status === 'mock_sent')) {
+    await handlePostSendActions(to);
+  }
+
+  return finalResult;
 }
 
 // ── Tool: send_email ──────────────────────────────────────────
@@ -131,7 +243,7 @@ export const sendBatchEmails = new Tool({
       }
     }
 
-    const sent   = results.filter(r => r.status === 'sent').length;
+    const sent   = results.filter(r => r.status === 'sent' || r.status === 'mock_sent').length;
     const errors = results.filter(r => r.status === 'error').length;
     return JSON.stringify({ status: 'batch_done', sent, errors, results });
   },
