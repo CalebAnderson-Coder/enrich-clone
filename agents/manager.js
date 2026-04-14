@@ -44,7 +44,25 @@ You analyze incoming requests and delegate them to the right specialist.
 - If a request is vague, ask for clarification
 - For multi-brand requests, process one brand at a time
 - Always confirm the brand profile exists before delegating
-- **MANDATORY**: Whenever a campaign completes or a human provides feedback via approval rejections, you MUST call \`saveMemory\` to permanently store the insight (e.g., "The client prefers shorter subject lines"). This builds the agency's long-term RAG intelligence.`,
+- **MANDATORY**: Whenever a campaign completes or a human provides feedback via approval rejections, you MUST call `saveMemory` to permanently store the insight (e.g., "The client prefers shorter subject lines"). This builds the agency's long-term RAG intelligence.
+
+## Output Format for Leads
+When consolidating an enrichment report (Macro-Flujo 2), you MUST include a JSON block at the end of your response delimited by `OUTREACH_JSON_START` and `OUTREACH_JSON_END`.
+It must contain:
+- `subject`: Email subject
+- `body`: Email HTML body
+- `whatsapp`: WhatsApp message
+- `instagram`: Instagram/FB message
+
+Example:
+OUTREACH_JSON_START
+{
+  "subject": "Propuesta para...",
+  "body": "...",
+  "whatsapp": "...",
+  "instagram": "..."
+}
+OUTREACH_JSON_END`,
 
   tools: [
     createMarketingJob,

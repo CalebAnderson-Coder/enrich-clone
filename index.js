@@ -299,6 +299,24 @@ app.get('/api/approve', async (req, res) => {
     // If approved, wake up the agent to continue
     if (action === 'approve') {
       const job = await getJobById(jobId);
+      
+      // NEW: If the job has structured outreach data, sync it to the lead record
+      // This ensures that approvals via "Magic Link" (email) also update the dashboard's lead state.
+      if (job && job.payload && job.payload.outreach && job.payload.outreach.lead_id) {
+        const { lead_id, subject, body, whatsapp, instagram } = job.payload.outreach;
+        console.log(`  📝 [Sync] Syncing approved outreach for Lead ${lead_id}...`);
+        await updateLeadOutreach(lead_id, { 
+          subject: subject || '', 
+          body: body || '', 
+          whatsapp: whatsapp || '', 
+          instagram: instagram || '' 
+        });
+        // Optionally mark the lead as "CONTACTED" if it was approved and we assume immediate dispatch
+        // Or keep as "PENDING_APPROVAL" if the agent still needs to run the "publish_content" tool.
+        // For structured consistency, we mark it as CONTACTED here if it's an outreach job.
+        await updateOutreachStatus(lead_id, 'CONTACTED');
+      }
+
       if (job && job.payload && job.payload.reviewsText) {
         console.log(`  🔔 Agent notified: Job ${jobId} approved — waking up Sam to write email...`);
         // Wake up Sam to synthesize the email!
@@ -575,20 +593,47 @@ app.post('/api/leads/:id/enrich', async (req, res) => {
 
 INSTRUCCIONES DE DELEGACIÓN ESTRICTA EN ORDEN:
 1. Delega a 'Helena', 'Sam' y 'Kai' para hacer una radiografía técnica del lead (SEO/Velocidad, Ads y Redes Sociales).
-2. Con los hallazgos de esos tres agentes, delega a 'Carlos' para armar el 'Attack Angle' estratégico (por qué nos necesitan basado en esa radiografía técnica).
-3. Con el Angle de Carlos listo, delega a 'Angela' para crear el copy de multi-contacto. Ángela DEBE redactar TRES (3) piezas de outreach: un Cold Email, un DM persuasivo para Instagram o FB, y un mensaje corto e impactante vía WhatsApp.
-4. Devuélveme a mí (el usuario) todo consolidado que incluya: el resumen técnico de la radiografía, el Approach de Carlos, y los 3 mensajes escritos por Ángela. Responde en español (Markdown).`;
+2. Con los hallazgos de esos tres agentes, delega a 'Carlos' para armar el 'Attack Angle' estratégico.
+3. Con el Angle de Carlos listo, delega a 'Angela' para crear el copy de multi-contacto (Email, WhatsApp, Instagram).
+4. Devuélveme todo consolidado en español (Markdown).
+
+MANDATORIO: Al final de tu respuesta, DEBES incluir el bloque JSON con los borradores así:
+OUTREACH_JSON_START
+{
+  "subject": "Email Subject",
+  "body": "Email Body HTML",
+  "whatsapp": "WhatsApp Msg",
+  "instagram": "Instagram/FB DM"
+}
+OUTREACH_JSON_END`;
 
     const result = await runtime.run('Manager', enrichPrompt, {
       currentAgent: 'Manager',
       maxIterations: 30
     });
 
+    // ---- Persistencia Estructurada ----
+    let parsedOutreach = null;
+    const jsonMatch = result.response.match(/OUTREACH_JSON_START([\s\S]*?)OUTREACH_JSON_END/);
+    
+    if (jsonMatch && jsonMatch[1]) {
+      try {
+        parsedOutreach = JSON.parse(jsonMatch[1].trim());
+        console.log(`📦 [Enrich] Parsed outreach drafts for ${lead.business_name}`);
+        
+        // Save to DB
+        await updateLeadOutreach(lead.id, parsedOutreach, 'PENDING');
+      } catch (e) {
+        console.error('❌ [Enrich] Failed to parse outreach JSON:', e.message);
+      }
+    }
+
     res.json({
       success: true,
       lead_id: lead.id,
       business_name: lead.business_name,
       enrichment: result.response,
+      parsed_outreach: parsedOutreach,
       iterations: result.iterations,
     });
   } catch (err) {
