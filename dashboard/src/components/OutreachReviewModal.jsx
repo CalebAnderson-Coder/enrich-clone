@@ -10,16 +10,49 @@ export default function OutreachReviewModal({ lead, isOpen, onClose, onSave, onA
 
   useEffect(() => {
     if (lead) {
-      // Intentar leer primero del pipeline automatizado (campaign_enriched_data)
-      const campaignData = lead.campaign_enriched_data && lead.campaign_enriched_data[0] 
-        ? lead.campaign_enriched_data[0].lead_magnets_data : {};
-      
+      // ── Read from ALL data sources where Angela/DaVinci write ──
+      const campaign = lead.campaign_enriched_data?.[0] || {};
+      const magnetData = campaign.lead_magnets_data || {};
       const outreach = lead.mega_profile?.outreach || {};
-      
-      setSubject(campaignData?.email_draft_subject || outreach.subject || '');
-      setBody(campaignData?.email_draft_html || outreach.body || '');
-      setWhatsapp(campaignData?.whatsapp_draft || outreach.whatsapp || '');
-      setAgentNotes(''); // Reset form open
+
+      // SUBJECT priority: dedicated column → DaVinci JSONB → mega_profile → parse from outreach_copy
+      let resolvedSubject = campaign.email_draft_subject
+        || magnetData.angela_email_subject
+        || outreach.subject
+        || outreach.asunto
+        || '';
+
+      // BODY priority: dedicated column → DaVinci JSONB → mega_profile → outreach_copy text
+      let resolvedBody = campaign.email_draft_html
+        || magnetData.angela_email_body
+        || outreach.body
+        || outreach.cuerpo
+        || '';
+
+      // If still empty, try to parse subject/body from outreach_copy (plain text format)
+      if (!resolvedSubject && !resolvedBody && campaign.outreach_copy) {
+        const copyText = campaign.outreach_copy;
+        // Try parsing "Subject: ..." or "Asunto: ..." from the copy
+        const subjectMatch = copyText.match(/(?:Subject|Asunto):\s*(.+?)(?:\n|$)/i);
+        if (subjectMatch) {
+          resolvedSubject = subjectMatch[1].trim();
+          resolvedBody = copyText.replace(subjectMatch[0], '').trim();
+        } else {
+          // Use entire outreach_copy as body, generate a default subject
+          resolvedBody = copyText;
+          resolvedSubject = `Propuesta para ${lead.business_name}`;
+        }
+      }
+
+      // WhatsApp: magnetData → mega_profile → empty
+      const resolvedWhatsapp = magnetData.whatsapp_draft
+        || outreach.whatsapp
+        || '';
+
+      setSubject(resolvedSubject);
+      setBody(resolvedBody);
+      setWhatsapp(resolvedWhatsapp);
+      setAgentNotes('');
     }
   }, [lead]);
 

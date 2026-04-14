@@ -52,40 +52,62 @@ export function ReviewOutreachModal({
   // Sync state with lead data when modal opens
   useEffect(() => {
     if (open) {
-      // Prioritize structured data if available
-      const outreach = lead.mega_profile?.outreach;
-      const copy = lead.mega_profile?.outreach_copy;
-      
       setStatus(lead.status || 'PENDING');
       setNotes(lead.notes || lead.mega_profile?.internal_notes || '');
 
-      if (outreach) {
-        setEmailSubject(outreach.subject || outreach.asunto || '');
-        setEmailBody(outreach.body || outreach.cuerpo || outreach.email_draft_html || '');
-        setWhatsappMsg(outreach.whatsapp || '');
-        setInstagramMsg(outreach.instagram || '');
-      } else if (copy) {
-        // Fallback to unstructured copy
-        let subject = `Propuesta para ${lead.business_name}`;
-        let body = copy.cold_email || '';
-        
-        if (body.includes('Subject:')) {
-          const parts = body.split('Subject:');
-          const subjectLine = parts[1].split('\n')[0].trim();
-          subject = subjectLine;
-          body = body.replace(`Subject: ${subjectLine}`, '').trim();
-        } else if (body.includes('Asunto:')) {
-          const parts = body.split('Asunto:');
-          const subjectLine = parts[1].split('\n')[0].trim();
-          subject = subjectLine;
-          body = body.replace(`Asunto: ${subjectLine}`, '').trim();
-        }
+      // ── Check campaign_enriched_data first (where Angela/DaVinci actually write) ──
+      const campaign = (lead as any).campaign_enriched_data?.[0] || {};
+      const magnetData = campaign.lead_magnets_data || {};
 
-        setEmailSubject(subject);
-        setEmailBody(body);
-        setWhatsappMsg(copy.whatsapp_message || '');
-        setInstagramMsg(copy.instagram_dm || '');
+      // Priority 1: Dedicated DB columns
+      let resolvedSubject = campaign.email_draft_subject || '';
+      let resolvedBody = campaign.email_draft_html || '';
+      let resolvedWhatsapp = '';
+      let resolvedInstagram = '';
+
+      // Priority 2: DaVinci's JSONB fields inside lead_magnets_data
+      if (!resolvedSubject) resolvedSubject = magnetData.angela_email_subject || '';
+      if (!resolvedBody) resolvedBody = magnetData.angela_email_body || '';
+
+      // Priority 3: mega_profile.outreach (structured)
+      const outreach = lead.mega_profile?.outreach;
+      if (!resolvedSubject && outreach) resolvedSubject = outreach.subject || outreach.asunto || '';
+      if (!resolvedBody && outreach) resolvedBody = outreach.body || outreach.cuerpo || outreach.email_draft_html || '';
+      if (outreach) {
+        resolvedWhatsapp = outreach.whatsapp || '';
+        resolvedInstagram = outreach.instagram || '';
       }
+
+      // Priority 4: Parse from outreach_copy text (Angela's plain text output)
+      if (!resolvedSubject && !resolvedBody) {
+        const copy = campaign.outreach_copy || lead.mega_profile?.outreach_copy;
+        if (copy) {
+          const copyText = typeof copy === 'string' ? copy : copy.cold_email || '';
+          if (copyText) {
+            const subjectMatch = copyText.match(/(?:Subject|Asunto):\s*(.+?)(?:\n|$)/i);
+            if (subjectMatch) {
+              resolvedSubject = subjectMatch[1].trim();
+              resolvedBody = copyText.replace(subjectMatch[0], '').trim();
+            } else {
+              resolvedSubject = `Propuesta para ${lead.business_name}`;
+              resolvedBody = copyText;
+            }
+          }
+          // Also try whatsapp/instagram from unstructured copy
+          if (typeof copy !== 'string') {
+            resolvedWhatsapp = resolvedWhatsapp || copy.whatsapp_message || '';
+            resolvedInstagram = resolvedInstagram || copy.instagram_dm || '';
+          }
+        }
+      }
+
+      // WhatsApp from magnetData fallback
+      resolvedWhatsapp = resolvedWhatsapp || magnetData.whatsapp_draft || '';
+
+      setEmailSubject(resolvedSubject);
+      setEmailBody(resolvedBody);
+      setWhatsappMsg(resolvedWhatsapp);
+      setInstagramMsg(resolvedInstagram);
     }
   }, [open, lead]);
 
