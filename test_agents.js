@@ -1,65 +1,45 @@
-import dotenv from 'dotenv';
-dotenv.config();
-
 import { AgentRuntime } from './lib/AgentRuntime.js';
-import { manager } from './agents/manager.js';
 import { angela } from './agents/angela.js';
 import { helena } from './agents/helena.js';
 import { sam } from './agents/sam.js';
 import { kai } from './agents/kai.js';
-import { carlos } from './agents/carlos.js';
+import { manager } from './agents/manager.js';
 import { scout } from './agents/scout.js';
+import { carlos } from './agents/carlos.js';
+import { davinci } from './agents/davinci.js';
+import dotenv from 'dotenv';
+
+dotenv.config();
 
 const runtime = new AgentRuntime({
-  geminiApiKey: process.env.GEMINI_API_KEY,
-  model: 'gemini-2.0-flash',
+  apiKey: process.env.NVIDIA_API_KEY || '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',
+  model: 'meta/llama-3.1-70b-instruct',
+  baseURL: 'https://integrate.api.nvidia.com/v1'
 });
 
-runtime.registerAgent(manager);
-runtime.registerAgent(scout);
-runtime.registerAgent(angela);
-runtime.registerAgent(helena);
-runtime.registerAgent(sam);
-runtime.registerAgent(kai);
-runtime.registerAgent(carlos);
+const agents = [manager, scout, angela, helena, sam, kai, carlos, davinci];
+agents.forEach(a => runtime.registerAgent(a));
 
-const lead = {
-  business_name: 'Gonzalez Landscaping',
-  industry: 'Landscaping',
-  metro_area: 'Miami, FL',
-  website: 'https://gonzalezlandscapingFL.com',
-  rating: 4.8,
-  review_count: 42,
-  google_maps_url: 'https://maps.google.com/?q=Gonzalez+Landscaping'
-};
-
-const enrichPrompt = `Inicia el Macro-Flujo 2 para este negocio (lead HOT):
-- Negocio: ${lead.business_name}
-- Industria: ${lead.industry}
-- Ciudad: ${lead.metro_area}
-- Web: ${lead.website}
-- Rating: ${lead.rating} (${lead.review_count} reseñas)
-- Google Maps: ${lead.google_maps_url}
-
-INSTRUCCIONES DE DELEGACIÓN ESTRICTA EN ORDEN:
-1. Delega a 'Helena', 'Sam' y 'Kai' para hacer una radiografía técnica simulada del lead (SEO, Ads, Redes Sociales en el mercado anglo para este negocio). No es necesario scraping real si falla, asume la radiografía básica de una empresa de paisajismo en Florida.
-2. Delega a 'Carlos Empirika' para armar el 'Attack Angle' estratégico enfocado en este dueño hispano operando en USA.
-3. Delega a 'Angela' para redactar un Cold Email y un WhatsApp bilingue/espanglish super empatizante, apalancándose en la cultura, para este dueño.
-4. Devuélveme todo consolidado en Español.`;
-
-console.log("🚀 Testing agents with Empírika Latino-focus prompts...");
-(async () => {
+async function runTest() {
+  console.log('🧪 Starting API Verification against NVIDIA NIM LLaMA 3.1 70B...');
+  
+  for (const agent of agents) {
+    console.log(`\n===========================================`);
+    console.log(`🤖 Testing Agent: ${agent.name}`);
+    console.log(`===========================================`);
     try {
-        const result = await runtime.run('Manager', enrichPrompt, {
-            currentAgent: 'Manager',
-            brandId: 'eca1d833-77e3-4690-8cf1-2a44db20dcf8',
-            maxIterations: 30
-        });
-        console.log("========== RESULTADOS DE EXPERIMENTACIÓN ==========");
-        console.log(result.response);
-        process.exit(0);
-    } catch (e) {
-        console.error(e);
-        process.exit(1);
+      const result = await runtime.run(
+        agent.name, 
+        "Hello! Please briefly introduce your role in Spanish using only 1 short sentence. DO NOT use any tools, just say hi."
+      );
+      console.log(`✅ [${agent.name}] RESPONSE:`);
+      console.log(result.response);
+      console.log(`🔄 Iterations inside loop: ${result.iterations}`);
+    } catch (err) {
+      console.error(`❌ ERROR testing ${agent.name}:`, err.message);
     }
-})();
+  }
+  process.exit(0);
+}
+
+runTest();

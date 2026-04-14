@@ -75,6 +75,7 @@ export const saveLead = new Tool({
       qualification_score: { type: 'number', description: 'Lead score (0-100)' },
       lead_tier: { type: 'string', description: 'Lead tier: HOT, WARM, COOL, or COLD' },
       score_breakdown: { type: 'string', description: 'JSON string with score breakdown by category' },
+      auto_enrich: { type: 'boolean', description: 'If true, automatically queue this lead for enrichment' },
     },
     required: ['business_name', 'metro_area', 'qualification_score', 'lead_tier'],
   },
@@ -116,6 +117,24 @@ export const saveLead = new Tool({
       if (error) throw error;
 
       console.log(`  💾 [DB] Saved lead: ${leadData.business_name} (${leadData.lead_tier} / ${leadData.qualification_score}pts)`);
+
+      /* 
+      // Auto-Enrich (Favoring index.js batch loop for Extreme Automation)
+      if (args.auto_enrich) {
+        try {
+          const { createJob } = await import('../lib/supabase.js');
+          const brandId = process.env.BRAND_ID || 'default-brand';
+          await createJob(brandId, 'Carlos', 'deep_analysis', {
+            leadId: data.id,
+            leadName: leadData.business_name
+          }, 'PENDING');
+          console.log(`  🤖 [Auto-Enrich] Queued Carlos job for ${leadData.business_name}`);
+        } catch (e) {
+          console.error('Failed to auto-enrich:', e.message);
+        }
+      }
+      */
+
       return JSON.stringify({ success: true, id: data.id, tier: data.lead_tier, score: data.qualification_score });
     } catch (err) {
       console.error(`  ❌ [DB] Save lead error: ${err.message}. Falling back to mock DB.`);
@@ -533,3 +552,4 @@ export const createMarketingJob = new Tool({
     }
   },
 });
+

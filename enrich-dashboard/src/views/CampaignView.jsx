@@ -7,6 +7,43 @@ export default function CampaignView() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
 
+  const [prospectNiche, setProspectNiche] = useState('Roofing');
+  const [prospectMetro, setProspectMetro] = useState('Miami, FL');
+  const [prospectLimit, setProspectLimit] = useState(5);
+  const [autoEnrich, setAutoEnrich] = useState(false);
+  const [isProspecting, setIsProspecting] = useState(false);
+  const [prospectError, setProspectError] = useState(null);
+  const [prospectSuccess, setProspectSuccess] = useState(null);
+
+  const handleProspect = async (e) => {
+    e.preventDefault();
+    setIsProspecting(true);
+    setProspectError(null);
+    setProspectSuccess(null);
+    try {
+      const apiUrl = import.meta.env.VITE_BACKEND_URL || 'http://localhost:4000';
+      const res = await fetch(`${apiUrl}/api/prospect`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          niche: prospectNiche,
+          metro: prospectMetro,
+          limit: parseInt(prospectLimit),
+          autoEnrich
+        })
+      });
+      if (!res.ok) {
+        const data = await res.json();
+        throw new Error(data.error || 'Error al lanzar prospección');
+      }
+      setProspectSuccess('🚀 Campaña de prospección lanzada con éxito.');
+    } catch (err) {
+      setProspectError(err.message);
+    } finally {
+      setIsProspecting(false);
+    }
+  };
+
   useEffect(() => {
     fetchJobs();
 
@@ -77,9 +114,73 @@ export default function CampaignView() {
 
       <div className="pipeline-trigger" style={{ background: 'rgba(30,41,59,0.8)', padding: '20px', borderRadius: '12px', marginBottom: '24px', border: '1px solid rgba(148,163,184,0.1)' }}>
         <h3 style={{ marginBottom: '8px' }}>🚀 Pipeline de Prospección Profunda</h3>
-        <p style={{ color: '#94a3b8', fontSize: '0.9rem', marginBottom: '0' }}>
-          Los agentes ejecutan el pipeline automáticamente desde el backend. Los jobs aparecerán aquí en tiempo real conforme se creen.
+        <p style={{ color: '#94a3b8', fontSize: '0.9rem', marginBottom: '16px' }}>
+          Configura y lanza una nueva campaña. Los agentes buscarán leads y los procesarán automáticamente.
         </p>
+
+        <form onSubmit={handleProspect} style={{ display: 'flex', flexDirection: 'column', gap: '12px', background: 'rgba(15,23,42,0.5)', padding: '16px', borderRadius: '8px' }}>
+          <div style={{ display: 'flex', gap: '12px', flexWrap: 'wrap' }}>
+            <div style={{ flex: 1, minWidth: '200px' }}>
+              <label style={{ display: 'block', fontSize: '0.85rem', color: 'var(--text-secondary)', marginBottom: '4px' }}>Industria / Nicho</label>
+              <input 
+                type="text" 
+                value={prospectNiche} 
+                onChange={e => setProspectNiche(e.target.value)} 
+                placeholder="Ej. Roofing"
+                style={{ width: '100%', padding: '8px', borderRadius: '6px', border: '1px solid rgba(255,255,255,0.1)', background: 'rgba(0,0,0,0.2)', color: 'white' }}
+                required 
+              />
+            </div>
+            <div style={{ flex: 1, minWidth: '200px' }}>
+              <label style={{ display: 'block', fontSize: '0.85rem', color: 'var(--text-secondary)', marginBottom: '4px' }}>Ciudad / Metro Area</label>
+              <input 
+                type="text" 
+                value={prospectMetro} 
+                onChange={e => setProspectMetro(e.target.value)} 
+                placeholder="Ej. Miami, FL"
+                style={{ width: '100%', padding: '8px', borderRadius: '6px', border: '1px solid rgba(255,255,255,0.1)', background: 'rgba(0,0,0,0.2)', color: 'white' }}
+                required 
+              />
+            </div>
+            <div style={{ width: '100px' }}>
+              <label style={{ display: 'block', fontSize: '0.85rem', color: 'var(--text-secondary)', marginBottom: '4px' }}>Límite</label>
+              <input 
+                type="number" 
+                value={prospectLimit} 
+                onChange={e => setProspectLimit(e.target.value)} 
+                min="1" max="100"
+                style={{ width: '100%', padding: '8px', borderRadius: '6px', border: '1px solid rgba(255,255,255,0.1)', background: 'rgba(0,0,0,0.2)', color: 'white' }}
+                required 
+              />
+            </div>
+          </div>
+
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', margin: '8px 0' }}>
+            <input 
+              type="checkbox" 
+              id="autoEnrich" 
+              checked={autoEnrich} 
+              onChange={e => setAutoEnrich(e.target.checked)} 
+              style={{ width: '16px', height: '16px', cursor: 'pointer' }}
+            />
+            <label htmlFor="autoEnrich" style={{ fontSize: '0.9rem', cursor: 'pointer', color: 'var(--text-primary)' }}>
+              Enable Auto-Enrichment (Lanzar Francotirador automáticamente al hallar lead)
+            </label>
+          </div>
+
+          <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+            <button 
+              type="submit" 
+              disabled={isProspecting}
+              style={{ background: 'var(--primary)', color: 'white', border: 'none', padding: '10px 20px', borderRadius: '6px', fontWeight: 'bold', cursor: isProspecting ? 'not-allowed' : 'pointer', opacity: isProspecting ? 0.7 : 1 }}
+            >
+              {isProspecting ? 'Lanzando Campaña...' : 'Lanzar Campaña'}
+            </button>
+            
+            {prospectSuccess && <span style={{ color: '#10b981', fontSize: '0.9rem' }}>{prospectSuccess}</span>}
+            {prospectError && <span style={{ color: '#ef4444', fontSize: '0.9rem' }}>{prospectError}</span>}
+          </div>
+        </form>
       </div>
 
       {loading ? (

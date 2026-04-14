@@ -32,7 +32,7 @@ function buildTransporter() {
 const _transporter = buildTransporter();
 
 // ── GoHighLevel Sync ──────────────────────────────────────────
-async function syncToGHL(email, prospectData) {
+export async function syncToGHL(email, prospectData) {
   const ghlKey = process.env.EMPIRIKA_GHL_KEY || process.env.GHL_API_KEY;
   const locationId = process.env.EMPIRIKA_GHL_LOCATION_ID || process.env.GHL_LOCATION_ID;
   const webhookUrl = process.env.GHL_WEBHOOK_URL;
@@ -112,11 +112,17 @@ async function handlePostSendActions(to) {
       // 2. Sync to GHL
       await syncToGHL(to, lead);
 
-      // 3. Update campaign_enriched_data to mark GHL sync mapping
+      // 3. Update campaign_enriched_data and mark as SENT
       await supabase
         .from('campaign_enriched_data')
-        .update({ ghl_tag: 'lead-automatizado' })
+        .update({ ghl_tag: 'lead-automatizado', outreach_status: 'SENT' })
         .eq('prospect_id', lead.id);
+
+      // 4. Mapear status en Leads Dashboard
+      await supabase
+        .from('leads')
+        .update({ outreach_status: 'SENT' })
+        .eq('id', lead.id);
     } else {
       console.log(`[GHL] No se encontró el lead en Supabase para el email ${to}. Haciendo sync básico.`);
       await syncToGHL(to, { business_name: 'Lead Desconocido' });

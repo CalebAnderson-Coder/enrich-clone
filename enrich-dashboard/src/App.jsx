@@ -53,8 +53,9 @@ function App() {
 
   const fetchAgents = async () => {
     try {
+      const apiUrl = import.meta.env.VITE_BACKEND_URL || 'http://localhost:4000';
       // Connect to the real local Node.js API
-      const res = await fetch(`http://localhost:3001/api/agents`, {
+      const res = await fetch(`${apiUrl}/api/agents`, {
         headers: {
           'Authorization': 'Bearer sk_live_51MxxXYZ123SecureEnrichToken2026'
         }

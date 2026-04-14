@@ -23,7 +23,7 @@ import { fetchPage } from './tools/webResearch.js';
 import { processIdleMagnets } from './lead_magnet_worker.js';
 import { startTranscriptionWorker } from './workers/transcription_worker.js';
 import { dispatchPendingOutreach } from './outreach_dispatcher.js';
-import { processStitchQueue } from './workers/stitch_queue_processor.js';
+
 
 import path from 'path';
 import { fileURLToPath } from 'url';
@@ -37,8 +37,9 @@ const __dirname = path.dirname(__filename);
 // 1. Initialize Agent Runtime
 // ============================================================
 const runtime = new AgentRuntime({
-  geminiApiKey: process.env.GEMINI_API_KEY,
-  model: 'gemini-2.0-flash',
+  apiKey: process.env.NVIDIA_API_KEY || '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',
+  model: 'meta/llama-3.1-70b-instruct',
+  baseURL: 'https://integrate.api.nvidia.com/v1'
 });
 
 // Register all agents
@@ -253,6 +254,29 @@ app.post('/api/leads/:id/analyze', async (req, res) => {
   }
 });
 
+// ---- Prospecting System ----
+app.post('/api/prospect', async (req, res) => {
+  const { metro, niche, limit, autoEnrich } = req.body;
+  if (!metro || !niche) {
+    return res.status(400).json({ error: 'metro and niche are required' });
+  }
+
+  try {
+    const brandId = process.env.BRAND_ID || 'default-brand';
+    // Create an asynchronous job for prospection
+    const task = `Search for maximum ${limit || 20} Latino-owned businesses in the ${niche} niche in ${metro}. Extract their info and use save_lead. Proceed to qualify them.${autoEnrich ? " IMPORTANT: You MUST set the parameter 'auto_enrich' to true when calling save_lead for each lead you find!" : ""}`;
+    
+    // We start the run async so the UI doesn't hang.
+    runtime.run('scout', task, { currentAgent: 'scout', brandId })
+      .catch(e => console.error("Error in async scout run:", e));
+
+    res.json({ success: true, message: 'Prospecting started in the background.' });
+  } catch (err) {
+    console.error('Prospect error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ---- Approval Webhook (email link click) ----
 app.get('/api/approve', async (req, res) => {
   const { jobId, action } = req.query;
@@ -440,14 +464,21 @@ app.post('/api/prospect', async (req, res) => {
       { currentAgent: 'scout' }
     );
 
+    const { autoEnrich } = req.body;
+
     res.json({
       success: true,
       metro,
       niche,
+      autoEnrich: !!autoEnrich,
       agent: result.agent,
       response: result.response,
       iterations: result.iterations,
     });
+
+    if (autoEnrich) {
+      autoEnrichBackgroundLoop(metro, niche);
+    }
   } catch (err) {
     console.error('Prospect error:', err);
     res.status(500).json({ error: err.message });
@@ -506,6 +537,7 @@ app.get('/api/leads', async (req, res) => {
         instagram_url: l.instagram_url,
         linkedin_url: l.linkedin_url,
         created_at: l.created_at,
+        campaign_enriched_data: l.campaign_enriched_data,
       })),
     });
   } catch (err) {
@@ -649,11 +681,10 @@ app.post('/api/leads/:id/outreach', async (req, res) => {
 // ============================================================
 
 /**
- * Full autonomous cycle:
+ * Full autonomous cycle (Sisyphus):
  * 1. Prospect (Scout)  → finds new leads
- * 2. Enrich (Carlos)   → builds MEGA profiles
- * 3. Magnet (DaVinci)  → generates creative magnets
- * 4. Dispatch (Angela) → sends personalized emails
+ * 2. Magnets (Worker)  → assigns niche screenshots from assets/landing_niches/
+ * 3. Dispatch (Angela) → sends personalized emails
  */
 app.post('/api/run-cycle', async (req, res) => {
   const {
@@ -661,7 +692,6 @@ app.post('/api/run-cycle', async (req, res) => {
     industry      = 'restaurant',
     prospect_limit = 5,
     skip_prospect  = false,
-    skip_stitch    = false,
     skip_email     = false,
   } = req.body;
 
@@ -669,7 +699,7 @@ app.post('/api/run-cycle', async (req, res) => {
   res.json({
     success: true,
     message: 'Sisyphus cycle started in background.',
-    config: { metro, industry, prospect_limit, skip_prospect, skip_stitch, skip_email },
+    config: { metro, industry, prospect_limit, skip_prospect, skip_email },
   });
 
   (async () => {
@@ -700,25 +730,15 @@ app.post('/api/run-cycle', async (req, res) => {
       console.error('❌ [RunCycle] Step 2 failed:', e.message);
     }
 
-    // ── Step 3: Stitch queue ───────────────────────────────
-    if (!skip_stitch) {
-      console.log('🏗️  [RunCycle] Step 3 — Processing Stitch queue...');
-      try {
-        await processStitchQueue();
-        console.log('✅ [RunCycle] Step 3 done.');
-      } catch (e) {
-        console.error('❌ [RunCycle] Step 3 failed:', e.message);
-      }
-    }
 
-    // ── Step 4: Email dispatch ─────────────────────────────
+    // ── Step 3: Email dispatch ─────────────────────────────
     if (!skip_email) {
-      console.log('📬 [RunCycle] Step 4 — Dispatching outreach emails...');
+      console.log('📬 [RunCycle] Step 3 — Dispatching outreach emails...');
       try {
         const emailStats = await dispatchPendingOutreach();
-        console.log(`✅ [RunCycle] Step 4 done. Sent: ${emailStats.sent}`);
+        console.log(`✅ [RunCycle] Step 3 done. Sent: ${emailStats.sent}`);
       } catch (e) {
-        console.error('❌ [RunCycle] Step 4 failed:', e.message);
+        console.error('❌ [RunCycle] Step 3 failed:', e.message);
       }
     }
 
@@ -737,16 +757,7 @@ app.post('/api/outreach/dispatch', async (req, res) => {
   }
 });
 
-// ---- Manual Stitch queue trigger ----
-app.post('/api/stitch/process-queue', async (req, res) => {
-  try {
-    const stats = await processStitchQueue();
-    res.json({ success: true, stats });
-  } catch (err) {
-    console.error('Stitch processor error:', err);
-    res.status(500).json({ error: err.message });
-  }
-});
+
 
 // ============================================================
 // 3. CRON Scheduler — Autonomous task wakeup
@@ -817,11 +828,7 @@ setInterval(async () => {
   catch (e) { console.error('Interval error (magnets):', e.message); }
 }, 30_000);
 
-// Stitch queue processor — every 5 minutes
-setInterval(async () => {
-  try { await processStitchQueue(); }
-  catch (e) { console.error('Interval error (stitch):', e.message); }
-}, 5 * 60_000);
+
 
 // Outreach dispatcher — every 15 minutes
 setInterval(async () => {
@@ -862,10 +869,88 @@ app.listen(port, () => {
   console.log(`${'─'.repeat(56)}`);
   console.log(`🔄 PIPELINE:   POST http://localhost:${port}/api/run-cycle`);
   console.log(`📬 Dispatch:   POST http://localhost:${port}/api/outreach/dispatch`);
-  console.log(`🏗️  Stitch:     POST http://localhost:${port}/api/stitch/process-queue`);
+
   console.log(`${'─'.repeat(56)}`);
-  console.log(`⏰ Crons: Hourly jobs + Daily 9am + Stitch 5min + Outreach 15min`);
+  console.log(`⏰ Crons: Hourly jobs + Daily 9am + Outreach 15min`);
   console.log(`${'═'.repeat(56)}\n`);
 });
+
+// ============================================================
+// AUTO ENRICHMENT BACKGROUND LOOP
+// ============================================================
+
+async function autoEnrichBackgroundLoop(metro, niche) {
+  console.log(`\n🤖 [Auto-Enrich] INICIANDO AUTOMATIZACIÓN EXTREMA: Esperando 5s a que Scout asiente DB...`);
+  
+  try {
+    // Dar unos segundos para garantizar inserción
+    await new Promise(r => setTimeout(r, 5000));
+
+    // Obtener la data actual
+    const { data: leads } = await getLeads({ limit: 100, metro, industry: niche });
+    
+    // Filtrar los que no tienen el mega profile o están en status nulo/vacio
+    const pendingLeads = (leads || []).filter(l => !l.mega_profile && (!l.outreach_status || l.outreach_status === ''));
+
+    console.log(`\n🤖 [Auto-Enrich] Encontrados ${pendingLeads.length} leads de ${niche} en ${metro} para procesar secuencialmente.`);
+
+    for (let i = 0; i < pendingLeads.length; i++) {
+      const lead = pendingLeads[i];
+      console.log(`\n=============================================================`);
+      console.log(`⏳ [Auto-Enrich] Procesando Lead [${i+1}/${pendingLeads.length}]: ${lead.business_name} (${lead.id})`);
+      console.log(`=============================================================`);
+      
+      try {
+        // --- 1. ENRICHMENT (MEGA PROFILE) ---
+        const enrichPrompt = `Inicia el Macro-Flujo 2 (El Francotirador - MEGA Enrichment) para este negocio (lead HOT):
+- Negocio: ${lead.business_name}
+- Industria: ${lead.industry || 'N/A'}
+- Ciudad: ${lead.metro_area || 'N/A'}
+- Web: ${lead.website || 'Sin web'}
+
+DELEGACIÓN:
+1. Delega a 'Helena', 'Sam' y 'Kai' para analizar el negocio, debilidades SEO/Ads y extraer dolores.
+2. Delega a 'Carlos' para armar el 'Attack Angle'.
+3. OBLIGATORIO: Usa la herramienta update_mega_profile para guardar todos estos hallazgos consolidados en la Base de Datos.
+4. Devuélveme a mí (el usuario) el reporte final.`;
+
+        await runtime.run('Manager', enrichPrompt, {
+          currentAgent: 'Manager',
+          maxIterations: 20
+        });
+
+        console.log(`\n✅ [Auto-Enrich] Perfil Mega actualizado para ${lead.business_name}.`);
+
+        // --- 2. COMPOSE EMAIL DRAFT (ANGELA) ---
+        console.log(`\n✉️ [Auto-Enrich] Pasando información a Angela para redactar Outbound Draft...`);
+        const angelaPrompt = `El prospecto con ID ${lead.id} ha sido analizado. Escribe su correo de prospección.
+Business: ${lead.business_name}
+Industry: ${lead.industry}
+Website: ${lead.website}
+
+Genera un HTML con el Asunto (Subject) en una línea H3 y el cuerpo del correo. Luego DEBES USAR LA HERRAMIENTA update_lead_outreach para guardar el HTML generado en el lead con status DRAFT.
+Al hacerlo, usa el argumento lead_id: "${lead.id}" y en html_content el contenido redactado.`;
+
+        await runtime.run('Angela', angelaPrompt, {
+          currentAgent: 'Angela',
+          maxIterations: 8
+        });
+
+        console.log(`✅ [Auto-Enrich] Email guardado en estado DRAFT para: ${lead.business_name}`);
+        
+        // Esperemos un poco entre calls a LLM para evitar Rate Limits drásticos
+        await new Promise(r => setTimeout(r, 4000));
+
+      } catch (err) {
+        console.error(`❌ [Auto-Enrich-Failed] Error con lead ${lead.business_name}:`, err);
+      }
+    }
+    
+    console.log(`\n🎉 [Auto-Enrich] CICLO DE ${pendingLeads.length} LEADS COMPLETADO EXITOSAMENTE.`);
+    
+  } catch (err) {
+    console.error(`❌ [Auto-Enrich-Critical] Loop colapsó:`, err);
+  }
+}
 
 export { runtime, app };
