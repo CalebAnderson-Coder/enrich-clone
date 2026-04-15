@@ -10,13 +10,18 @@ import dotenv         from 'dotenv';
 import { renderMagnetEmail } from './lib/emailRenderer.js';
 import { AgentRuntime } from './lib/AgentRuntime.js';
 import { angela } from './agents/angela.js';
+import { outreachDraftSchema } from './lib/schemas.js';
+import { sanitizeLeadData } from './lib/sanitize.js';
+import { logger } from './lib/logger.js';
+import { withRetry } from './lib/resilience.js';
 
 dotenv.config();
 
 // ── Agentic Copilot Init ──────────────────────────────────────
 const runtime = new AgentRuntime({
-  geminiApiKey: process.env.GEMINI_API_KEY,
+  apiKey: process.env.GEMINI_API_KEY,
   model: 'gemini-2.0-flash',
+  baseURL: 'https://generativelanguage.googleapis.com/v1beta/openai/',
 });
 runtime.registerAgent(angela);
 
@@ -50,9 +55,9 @@ if (SMTP_USER && SMTP_PASS) {
       rejectUnauthorized: false, // Gmail app password
     },
   });
-  console.log(`📧 [OutreachDispatcher] SMTP configurado: ${SMTP_USER}`);
+  logger.info('SMTP configured', { user: SMTP_USER });
 } else {
-  console.log('⚠️  [OutreachDispatcher] Sin SMTP — usando Resend o modo MOCK.');
+  logger.warn('No SMTP configured — using Resend or MOCK mode');
 }
 
 // ── Main export ───────────────────────────────────────────────
@@ -64,10 +69,10 @@ if (SMTP_USER && SMTP_PASS) {
  * @returns {{ rendered: number, skipped: number, errors: number }}
  */
 export async function dispatchPendingOutreach() {
-  console.log('\n📬 [OutreachDispatcher] Buscando leads listos para pre-render de correo...');
+  logger.info('Searching for leads ready for email pre-render');
 
   if (!supabase) {
-    console.error('❌ [OutreachDispatcher] Supabase no está configurado (falta URL o Key).');
+    logger.error('Supabase not configured (missing URL or Key)');
     return { rendered: 0, skipped: 0, errors: 1 };
   }
 
@@ -92,16 +97,16 @@ export async function dispatchPendingOutreach() {
     .limit(BATCH_LIMIT);
 
   if (error) {
-    console.error('❌ [OutreachDispatcher] Error consultando Supabase:', error.message);
+    logger.error('Supabase query error', { error: error.message });
     return { rendered: 0, skipped: 0, errors: 1 };
   }
 
   if (!records || records.length === 0) {
-    console.log('✅ [OutreachDispatcher] No hay leads pendientes de pre-render.');
+    logger.info('No leads pending pre-render');
     return { rendered: 0, skipped: 0, errors: 0 };
   }
 
-  console.log(`📋 [OutreachDispatcher] ${records.length} lead(s) para pre-renderizar.\n`);
+  logger.info('Leads queued for pre-render', { count: records.length });
 
   const stats = { rendered: 0, skipped: 0, errors: 0 };
 
@@ -112,7 +117,7 @@ export async function dispatchPendingOutreach() {
 
     // Guard: skip if no email address
     if (!lead?.email_address) {
-      console.warn(`  ⚠️  Sin email_address: ${lead?.business_name} → SKIP`);
+      logger.warn('Lead missing email_address — SKIP', { business: lead?.business_name });
       await supabase
         .from('campaign_enriched_data')
         .update({ outreach_status: 'SKIPPED_NO_EMAIL' })
@@ -123,7 +128,7 @@ export async function dispatchPendingOutreach() {
 
     // Guard: skip if no magnet data
     if (!magnetData?.magnet_type) {
-      console.warn(`  ⚠️  magnet_data inválido: ${lead.business_name} → SKIP`);
+      logger.warn('Invalid magnet_data — SKIP', { business: lead.business_name });
       stats.skipped++;
       continue;
     }
@@ -135,49 +140,48 @@ export async function dispatchPendingOutreach() {
 
       if (magnetData.magnet_type === 'website_screenshot') {
         try {
-          const prompt = `Redacta un mensaje de contacto (outreach) para un negocio de ${lead.industry || 'servicios generales'} llamado "${lead.business_name || 'tu negocio'}".
-Quiero que apliques tu tono empático, "Spanglish" o español cálido.
-Contexto: Nuestra agencia (Empírika) les diseñó un concepto de página web gratis y profesional (magnet: website_screenshot).
-Menciona que los buscaste, te pareció un buen negocio, pero que notaste que les falta presencia en línea, y diles que miren la foto del concepto web adjunto.
-Ofrece enviársela 100% terminada sin costo.
-Sé asertivo, profesional pero muy humano.
+          // ── Sanitize lead data BEFORE prompt injection ──
+          const safeLead = sanitizeLeadData(lead);
+          const prompt = `Write a cold outreach message for a ${safeLead.industry || 'service'} business called "${safeLead.business_name || 'their business'}".
+Context: Our agency (Empírika) designed a free, professional website concept for them (magnet: website_screenshot).
+Mention that you found their business, thought it was great, but noticed they're missing an online presence — and tell them to check the attached website concept.
+Offer to deliver the finished version 100% free.
+Be assertive, professional, but very human.
 
-Crea dos versiones:
-1. Un Email en frío (Asunto y cuerpo).
-2. Un mensaje de WhatsApp (Corto, directo, conversacional e impactante).
+Write TWO versions:
+1. A cold Email (Subject line + body, 2-3 paragraphs).
+2. A WhatsApp message (Short, direct, conversational, impactful).
 
-DEVUELVE ÚNICAMENTE un JSON con este formato exacto:
+IMPORTANT: Write EVERYTHING in ENGLISH. Return ONLY a JSON object:
 {
-  "email_subject": "[Asunto del correo]",
-  "email_body": "[Cuerpo del correo con 2 o 3 párrafos]",
-  "whatsapp": "[Mensaje de WhatsApp corto e impactante]"
+  "email_subject": "[Subject line]",
+  "email_body": "[Email body with 2-3 paragraphs]",
+  "whatsapp": "[Short WhatsApp message]"
 }`;
-          console.log(`  🤖 Pidiendo a Ángela redactar multi-contacto para ${lead.business_name}...`);
+          logger.info('Asking Angela for multi-channel copy', { business: lead.business_name });
           const aiResult = await runtime.run('Angela', prompt, { maxIterations: 3 });
           
-          let parsed;
-          try {
-            let jsonStr = aiResult.response.replace(/^\`\`\`json/m, '').replace(/^\`\`\`/m, '').trim();
-            parsed = JSON.parse(jsonStr);
-          } catch (err) {
-            console.warn(`  ⚠️ No se pudo parsear el JSON de Ángela. Dando timeout...`);
-          }
+          // ── Use safeParseLLMOutput with Zod validation ──
+          const parseResult = AgentRuntime.safeParseLLMOutput(aiResult.response, outreachDraftSchema);
 
-          if (parsed) {
-            if (parsed.email_subject) angelaSubject = parsed.email_subject;
-            if (parsed.email_body) angelaBody = parsed.email_body;
-            if (parsed.whatsapp) magnetData.whatsapp_draft = parsed.whatsapp;
-            console.log(`  ✨ Ángela generó copy personalizado de Email y WhatsApp!`);
+          if (parseResult.success) {
+            const parsed = parseResult.data;
+            angelaSubject = parsed.email_subject;
+            angelaBody = parsed.email_body;
+            magnetData.whatsapp_draft = parsed.whatsapp;
+            logger.info('Angela generated validated copy', { business: lead.business_name });
+          } else {
+            logger.warn('Angela output failed schema validation', { error: parseResult.error });
           }
         } catch (error) {
-          console.warn(`  ⚠️ Falló la llamada a Ángela para ${lead.business_name}, usando fallback template:`, error.message);
+          logger.warn('Angela call failed — using fallback', { business: lead.business_name, error: error.message });
         }
       }
 
       // ── 3. Render HTML email (pre-render only, no send) ───
       const { subject, html, attachments } = renderMagnetEmail(magnetData, lead, { angelaSubject, angelaBody });
 
-      console.log(`  📝 Pre-rendered → ${lead.email_address}  (${lead.business_name}) [${magnetData.magnet_type}]`);
+      logger.info('Pre-rendered email', { to: lead.email_address, business: lead.business_name, type: magnetData.magnet_type });
 
       // ── 4. Save draft to Supabase for client preview ──────
       const attachmentMeta = attachments.map(a => ({
@@ -208,11 +212,11 @@ DEVUELVE ÚNICAMENTE un JSON con este formato exacto:
         })
         .eq('id', lead.id);
 
-      console.log(`  ✅  Draft guardado → ${lead.business_name} (listo para aprobación)`);
+      logger.info('Draft saved — ready for approval', { business: lead.business_name });
       stats.rendered++;
 
     } catch (err) {
-      console.error(`  ❌  Error pre-renderizando ${lead.business_name}:`, err.message);
+      logger.error('Pre-render error', { business: lead.business_name, error: err.message });
       await supabase
         .from('campaign_enriched_data')
         .update({ outreach_status: 'RENDER_ERROR' })
@@ -221,7 +225,7 @@ DEVUELVE ÚNICAMENTE un JSON con este formato exacto:
     }
   }
 
-  console.log(`\n📊 [OutreachDispatcher] Resumen: ${stats.rendered} pre-rendered | ${stats.skipped} saltados | ${stats.errors} errores\n`);
+  logger.info('Dispatch summary', { rendered: stats.rendered, skipped: stats.skipped, errors: stats.errors });
   return stats;
 }
 
@@ -230,29 +234,35 @@ DEVUELVE ÚNICAMENTE un JSON con este formato exacto:
 async function sendEmail({ to, subject, html, attachments = [] }) {
   const from = `"${FROM_NAME}" <${FROM_ADDRESS}>`;
 
-  // Priority 1: Gmail SMTP
+  // Priority 1: Gmail SMTP — with retry
   if (smtpTransporter) {
-    const info = await smtpTransporter.sendMail({ from, to, subject, html, attachments });
+    const info = await withRetry(
+      () => smtpTransporter.sendMail({ from, to, subject, html, attachments }),
+      { maxRetries: 3, baseDelayMs: 1000, label: 'SMTP-dispatch' }
+    );
     return info.messageId;
   }
 
   // Priority 2: Resend API
   if (RESEND_API_KEY) {
-    const res = await fetch('https://api.resend.com/emails', {
-      method:  'POST',
-      headers: {
-        'Authorization': `Bearer ${RESEND_API_KEY}`,
-        'Content-Type':  'application/json',
-      },
-      body: JSON.stringify({ from, to: [to], subject, html }),
-    });
+    const res = await withRetry(
+      () => fetch('https://api.resend.com/emails', {
+        method:  'POST',
+        headers: {
+          'Authorization': `Bearer ${RESEND_API_KEY}`,
+          'Content-Type':  'application/json',
+        },
+        body: JSON.stringify({ from, to: [to], subject, html }),
+      }),
+      { maxRetries: 2, baseDelayMs: 1000, label: 'Resend-dispatch' }
+    );
     const data = await res.json();
     if (!res.ok) throw new Error(`Resend ${res.status}: ${JSON.stringify(data)}`);
     return data.id;
   }
 
   // Priority 3: Mock (development)
-  console.log(`    📧 [MOCK] Would send to ${to}: "${subject}"`);
+  logger.info('MOCK send', { to, subject });
   return `mock-${Date.now()}`;
 }
 
@@ -263,10 +273,10 @@ export async function verifySmtpConnection() {
   }
   try {
     await smtpTransporter.verify();
-    console.log('✅ [SMTP] Conexión Gmail verificada — listo para enviar.');
+    logger.info('SMTP connection verified — ready to send');
     return { ok: true };
   } catch (err) {
-    console.error('❌ [SMTP] Error de conexión:', err.message);
+    logger.error('SMTP connection error', { error: err.message });
     return { ok: false, reason: err.message };
   }
 }
@@ -278,12 +288,12 @@ if (process.argv[1]?.includes('outreach_dispatcher')) {
   (async () => {
     const verify = await verifySmtpConnection();
     if (!verify.ok && SMTP_USER) {
-      console.error('SMTP verify failed:', verify.reason);
+      logger.error('SMTP verify failed', { reason: verify.reason });
     }
     const stats = await dispatchPendingOutreach();
     process.exit(stats.errors > 0 ? 1 : 0);
   })().catch(err => {
-    console.error('💥 Fatal:', err);
+    logger.error('Fatal dispatcher error', { error: err.message });
     process.exit(1);
   });
 }

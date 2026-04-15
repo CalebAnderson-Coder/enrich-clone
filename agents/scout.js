@@ -8,42 +8,30 @@ import { checkInstagram } from '../tools/brightDataInstagram.js';
 import { checkMetaAds } from '../tools/brightDataMetaAds.js';
 import { searchWeb, fetchPage, checkPageSpeed } from '../tools/webResearch.js';
 import { saveLead, saveMemory, recallMemory } from '../tools/database.js';
+import { withRetry, withTimeout } from '../lib/resilience.js';
 
-async function withRetryAndTimeout(fn, operationName, maxRetries = 3, timeoutMs = 8000) {
-  let lastError;
-  for (let attempt = 1; attempt <= maxRetries; attempt++) {
-    try {
-      const timeoutPromise = new Promise((_, reject) =>
-        setTimeout(() => reject(new Error('Timeout')), timeoutMs)
-      );
-      const result = await Promise.race([fn(), timeoutPromise]);
-      console.log(`[${operationName}] Intento ${attempt}/${maxRetries} exitoso`);
-      return result;
-    } catch (err) {
-      lastError = err;
-      console.warn(`[${operationName}] Intento ${attempt}/${maxRetries} falló: ${err.message}`);
-      if (attempt < maxRetries) {
-        await new Promise(res => setTimeout(res, 500 * 2 ** (attempt - 1)));
-      }
-    }
-  }
-  throw new Error(`[${operationName}] Falló después de ${maxRetries} intentos. Último error: ${lastError.message}`);
+// ── Resilient wrappers using shared module ───────────────────
+function safeCall(fn, args, label, timeoutMs = 8000, retries = 3) {
+  return withRetry(
+    () => withTimeout(fn(args), timeoutMs, label),
+    { maxRetries: retries, baseDelayMs: 500, label }
+  );
 }
 
 async function safeSearchWeb(query, numResults = 10) {
-  return withRetryAndTimeout(() => searchWeb({ query, num_results: numResults }), 'BUSCAR_WEB', 3, 8000);
+  return safeCall(searchWeb, { query, num_results: numResults }, 'searchWeb');
 }
 async function safeFetchPage(url) {
-  return withRetryAndTimeout(() => fetchPage({ url }), 'FETCH_PAGE', 2, 10000);
+  return safeCall(fetchPage, { url }, 'fetchPage', 10000, 2);
 }
 async function safeCheckPageSpeed(url) {
-  return withRetryAndTimeout(() => checkPageSpeed({ url }), 'CHECK_PAGESPEED', 2, 8000);
+  return safeCall(checkPageSpeed, { url }, 'checkPageSpeed');
 }
 async function safeCheckInstagram(username) {
-  return withRetryAndTimeout(() => checkInstagram({ username }), 'CHECK_INSTAGRAM', 2, 8000);
+  return safeCall(checkInstagram, { username }, 'checkInstagram');
 }
 async function safeCheckMetaAds(pageId) {
-  return withRetryAndTimeout(() => checkMetaAds({ pageId }), 'CHECK_METAADS', 2, 8000);
+  return safeCall(checkMetaAds, { pageId }, 'checkMetaAds');
 }
 
 export const scout = new Agent({

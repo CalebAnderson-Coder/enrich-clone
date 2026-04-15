@@ -15,16 +15,16 @@ export default function OutreachReviewModal({ lead, isOpen, onClose, onSave, onA
       const magnetData = campaign.lead_magnets_data || {};
       const outreach = lead.mega_profile?.outreach || {};
 
-      // SUBJECT priority: dedicated column → DaVinci JSONB → mega_profile → parse from outreach_copy
-      let resolvedSubject = campaign.email_draft_subject
-        || magnetData.angela_email_subject
+      // SUBJECT priority: new keys → legacy keys → mega_profile → parse from outreach_copy
+      let resolvedSubject = magnetData.email_draft_subject
+        || magnetData.angela_email_subject  // legacy key from older dispatcher runs
         || outreach.subject
         || outreach.asunto
         || '';
 
-      // BODY priority: dedicated column → DaVinci JSONB → mega_profile → outreach_copy text
-      let resolvedBody = campaign.email_draft_html
-        || magnetData.angela_email_body
+      // BODY priority: new keys → legacy keys → mega_profile → outreach_copy text
+      let resolvedBody = magnetData.email_draft_html
+        || magnetData.angela_email_body  // legacy key from older dispatcher runs
         || outreach.body
         || outreach.cuerpo
         || '';

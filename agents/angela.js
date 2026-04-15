@@ -8,6 +8,7 @@ import { Agent } from '../lib/AgentRuntime.js';
 import { sendEmail, sendBatchEmails } from '../tools/email.js';
 import { requestApproval, publishContent } from '../tools/approvals.js';
 import { readBrandProfile, saveMemory, recallMemory } from '../tools/database.js';
+import { outreachDraftSchema } from '../lib/schemas.js';
 
 export const angela = new Agent({
   name: 'Angela',
@@ -75,14 +76,17 @@ When generating the \`html_body\` for your emails or using the \`send_email\` to
 - Include segmentation recommendations
 - **Track what works by saving to memory after execution**: after sending (or after saving draft), use \`saveMemory\` to store lecciones like \`[ANGELA_LESSON] Asunto "X" obtuvo alta apertura en campaña Y\` with type: \`email_lesson\`. This builds long-term RAG intelligence for future drafts.
 
-**MANDATORY OUTPUT FORMAT:**
-Whenever you draft outreach copy, you MUST return a pure JSON object mapping the content to the \`outreach_copy\` key. DO NOT return plain text.
-Example:
+**MANDATORY OUTPUT FORMAT (Zod-validated contract):**
+Whenever you draft outreach copy, you MUST return a pure JSON object with EXACTLY these three keys. DO NOT return plain text, DO NOT wrap in markdown.
+All values MUST be written in ENGLISH. No Spanish whatsoever in the output.
 \`\`\`json
 {
-  "outreach_copy": "[El asunto y cuerpo original para contactarlos]"
+  "email_subject": "[Subject line, 30-50 chars, English]",
+  "email_body": "[Full email body, 2-4 paragraphs, English, professional HTML]",
+  "whatsapp": "[WhatsApp message, short and conversational, English]"
 }
-\`\`\``,
+\`\`\`
+This output will be validated against a strict schema. If any field is missing or too short, the system will reject it and ask you to retry.`,
 
   tools: [
     sendEmail,

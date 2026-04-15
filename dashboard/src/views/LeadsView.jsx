@@ -96,17 +96,34 @@ export default function LeadsView() {
         const camp = campArray[0] || null;
         const mega = lead.mega_profile || {};
 
-        // Normalize outreach copy: handle JSON-wrapped or plain-text drafts
-        let emailDraft = camp?.outreach_copy || null;
-        if (emailDraft && emailDraft.trim().startsWith('{')) {
-          try {
-            const parsed = JSON.parse(emailDraft);
-            const inner = parsed.outreach_copy || parsed;
-            emailDraft = inner.subject
-              ? `Subject: ${inner.subject}\n\n${inner.body || ''}`
-              : inner.body || emailDraft;
-          } catch (_) { /* keep as-is */ }
+        // Normalize outreach copy: check magnetData JSONB first (where dispatcher writes),
+        // then fall back to outreach_copy column and mega_profile
+        const magnetData = camp?.lead_magnets_data || {};
+        let emailDraft = null;
+
+        // Priority 1: Dispatcher writes email_draft_subject + email_draft_html into lead_magnets_data JSONB
+        // Also check legacy keys: angela_email_subject / angela_email_body (older dispatcher format)
+        const draftSubject = magnetData.email_draft_subject || magnetData.angela_email_subject;
+        const draftHtml = magnetData.email_draft_html || magnetData.angela_email_body;
+        if (draftSubject && draftHtml) {
+          emailDraft = `Subject: ${draftSubject}\n\n${draftHtml}`;
         }
+
+        // Priority 2: Raw outreach_copy column (legacy path)
+        if (!emailDraft && camp?.outreach_copy) {
+          emailDraft = camp.outreach_copy;
+          if (emailDraft.trim().startsWith('{')) {
+            try {
+              const parsed = JSON.parse(emailDraft);
+              const inner = parsed.outreach_copy || parsed;
+              emailDraft = inner.subject
+                ? `Subject: ${inner.subject}\n\n${inner.body || ''}`
+                : inner.body || emailDraft;
+            } catch (_) { /* keep as-is */ }
+          }
+        }
+
+        // Priority 3: mega_profile.outreach (legacy path)
         if (!emailDraft && mega?.outreach?.subject) {
           emailDraft = `Subject: ${mega.outreach.subject}\n\n${mega.outreach.body || ''}`;
         }

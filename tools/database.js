@@ -5,6 +5,7 @@
 
 import { Tool } from '../lib/AgentRuntime.js';
 import { supabase } from '../lib/supabase.js';
+import { saveLeadInputSchema, megaProfileInputSchema } from '../lib/schemas.js';
 
 import fs from 'fs-extra';
 import path from 'path';
@@ -58,6 +59,7 @@ function saveMockLeads() {
 export const saveLead = new Tool({
   name: 'save_lead',
   description: `Save a qualified lead to the database with its qualification score and tier. Use after Google Maps scraping and GATE filter verification. Returns the saved lead ID.`,
+  inputSchema: saveLeadInputSchema,
   parameters: {
     type: 'object',
     properties: {
@@ -95,7 +97,11 @@ export const saveLead = new Tool({
       has_website: !!args.website,
       qualification_score: args.qualification_score,
       lead_tier: args.lead_tier,
-      score_breakdown: args.score_breakdown ? JSON.parse(args.score_breakdown) : {},
+      score_breakdown: (() => {
+        if (!args.score_breakdown) return {};
+        try { return JSON.parse(args.score_breakdown); }
+        catch { return { raw: args.score_breakdown }; }
+      })(),
       scraped_by: 'scout',
     };
 
@@ -149,6 +155,7 @@ export const saveLead = new Tool({
 export const updateMegaProfile = new Tool({
   name: 'update_mega_profile',
   description: `Update a lead's MEGA profile with enrichment data. Call this after Helena, Sam, Kai, and Angela have completed their analysis.`,
+  inputSchema: megaProfileInputSchema,
   parameters: {
     type: 'object',
     properties: {

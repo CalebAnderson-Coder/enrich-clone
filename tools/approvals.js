@@ -7,11 +7,13 @@ import { Tool } from '../lib/AgentRuntime.js';
 import { updateJobStatus } from '../lib/supabase.js';
 import { sendEmail } from './email.js';
 import { updateLeadOutreach } from './database.js';
+import { approvalInputSchema } from '../lib/schemas.js';
 
 const BASE_URL = process.env.BASE_URL || 'http://localhost:3000';
 
 export const requestApproval = new Tool({
   name: 'request_human_approval',
+  inputSchema: approvalInputSchema,
   description: `Submit your draft work for human review. This pauses execution until the human clicks Approve or Reject via the magic link. Use this AFTER you have generated content (email, blog, ad copy, social post) and BEFORE publishing.`,
   parameters: {
     type: 'object',

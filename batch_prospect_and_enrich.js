@@ -273,10 +273,14 @@ INSTRUCCIONES DE DELEGACIÓN EN ORDEN:
 4. Con los hallazgos, delega a 'Carlos Empirika' para armar el 'Attack Angle' estratégico enfocado en el mercado hispano.
 5. Con el Angle de Carlos, delega a 'Angela' para crear el subject + body del email de contacto personalizado.
 
+INSTRUCCIÓN CRÍTICA DE IDIOMA:
+- \`radiography_technical\` y \`attack_angle\` son reportes internos para la agencia Empirika y DEBEN SER ESCRITOS ESTRICTAMENTE EN ESPAÑOL SIEMPRE, sin importar la ubicación del lead.
+- \`outreach_copy\` debe ser escrito en el idioma apropiado para contactar al lead (Inglés si están en USA, Español si su web/contenido indica que hablan español).
+
 Devuelve todo consolidado EN UN BLOQUE JSON dentro de \`\`\`json y \`\`\`:
 {
-  "radiography_technical": "1-2 párrafos de evaluación técnica (Helena+Sam+Kai)",
-  "attack_angle": "El ángulo de ventas de Carlos en 1 párrafo",
+  "radiography_technical": "1-2 párrafos de evaluación técnica EN ESPAÑOL (Helena+Sam+Kai)",
+  "attack_angle": "El ángulo de ventas de Carlos en 1 párrafo EN ESPAÑOL",
   "outreach_copy": "Subject: [asunto]\\n\\n[cuerpo del email de Angela]"
 }`;
 

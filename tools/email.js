@@ -7,6 +7,9 @@
 import { Tool } from '../lib/AgentRuntime.js';
 import nodemailer from 'nodemailer';
 import { createClient } from '@supabase/supabase-js';
+import { sendEmailInputSchema, sendBatchEmailsInputSchema } from '../lib/schemas.js';
+import { withRetry } from '../lib/resilience.js';
+import { logger } from '../lib/logger.js';
 import dotenv from 'dotenv';
 dotenv.config();
 
@@ -64,35 +67,40 @@ export async function syncToGHL(email, prospectData) {
 
   try {
     if (webhookUrl) {
-      await fetch(webhookUrl, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload)
-      });
-      console.log(`[GHL] ✨ Sincronizado vía Webhook para ${email}`);
+      await withRetry(
+        () => fetch(webhookUrl, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+        }),
+        { maxRetries: 2, baseDelayMs: 1000, label: 'GHL-webhook' }
+      );
+      logger.info('GHL synced via webhook', { email });
     } else if (ghlKey && locationId) {
       payload.locationId = locationId;
-      const res = await fetch('https://services.leadconnectorhq.com/contacts/', {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${ghlKey}`,
-          'Version': '2021-07-28',
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify(payload)
-      });
+      const res = await withRetry(
+        () => fetch('https://services.leadconnectorhq.com/contacts/', {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${ghlKey}`,
+            'Version': '2021-07-28',
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify(payload)
+        }),
+        { maxRetries: 2, baseDelayMs: 1000, label: 'GHL-api' }
+      );
       if (res.ok) {
-         console.log(`[GHL] ✨ Contacto creado en API v2 para ${email}`);
+         logger.info('GHL contact created via API v2', { email });
       } else {
-         console.error(`[GHL] Error API:`, await res.text());
+         logger.error('GHL API error', { email, body: await res.text() });
       }
     } else {
-      console.log(`[GHL] ⚠️ Credenciales de GHL no detectadas en .env. Simulación de sincronización para ${email}`);
-      console.log(`[GHL] Payload que se enviaría a GHL:`, payload);
+      logger.warn('GHL credentials missing — simulating sync', { email });
     }
     return true;
   } catch (err) {
-    console.error(`[GHL] Error durante la sincronización:`, err);
+    logger.error('GHL sync failed', { email, error: err.message });
     return false;
   }
 }
@@ -124,11 +132,11 @@ async function handlePostSendActions(to) {
         .update({ outreach_status: 'SENT' })
         .eq('id', lead.id);
     } else {
-      console.log(`[GHL] No se encontró el lead en Supabase para el email ${to}. Haciendo sync básico.`);
+      logger.warn('Lead not found in Supabase — doing basic GHL sync', { email: to });
       await syncToGHL(to, { business_name: 'Lead Desconocido' });
     }
   } catch (e) {
-    console.error('[Post-Send] Error ejecutando acciones post-envío:', e);
+    logger.error('Post-send actions failed', { error: e.message });
   }
 }
 
@@ -143,24 +151,30 @@ async function sendMail({ to, subject, html_body, from_name }) {
 
   let finalResult = null;
 
-  // Priority 1: Gmail SMTP
+  // Priority 1: Gmail SMTP — with retry for transient failures
   if (_transporter) {
-    const info = await _transporter.sendMail({
-      from:    fromField,
-      to:      [to],
-      subject,
-      html:    html_body,
-    });
+    const info = await withRetry(
+      () => _transporter.sendMail({
+        from:    fromField,
+        to:      [to],
+        subject,
+        html:    html_body,
+      }),
+      { maxRetries: 3, baseDelayMs: 1000, label: 'SMTP-send' }
+    );
     finalResult = { status: 'sent', email_id: info.messageId, to, subject, transport: 'smtp' };
   }
-  // Priority 2: Resend API
+  // Priority 2: Resend API — with retry
   else if (process.env.RESEND_API_KEY) {
     const apiKey = process.env.RESEND_API_KEY;
-    const res  = await fetch('https://api.resend.com/emails', {
-      method:  'POST',
-      headers: { 'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
-      body:    JSON.stringify({ from: fromField, to: [to], subject, html: html_body }),
-    });
+    const res  = await withRetry(
+      () => fetch('https://api.resend.com/emails', {
+        method:  'POST',
+        headers: { 'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ from: fromField, to: [to], subject, html: html_body }),
+      }),
+      { maxRetries: 2, baseDelayMs: 1000, label: 'Resend-send' }
+    );
     const data = await res.json();
     if (data.id) {
       finalResult = { status: 'sent', email_id: data.id, to, subject, transport: 'resend' };
@@ -170,7 +184,7 @@ async function sendMail({ to, subject, html_body, from_name }) {
   }
   // Priority 3: MOCK
   else {
-    console.log(`  📧 [MOCK] Would send email to ${to}: "${subject}"`);
+    logger.info('MOCK email', { to, subject });
     finalResult = {
       status: 'mock_sent',
       note:   'No email transport configured. Email logged but not sent.',
@@ -190,6 +204,7 @@ async function sendMail({ to, subject, html_body, from_name }) {
 
 export const sendEmail = new Tool({
   name: 'send_email',
+  inputSchema: sendEmailInputSchema,
   description: 'Send a single personalized email using the agency Gmail SMTP (José Sánchez / Empírika). Use after content has been approved.',
   parameters: {
     type: 'object',
@@ -215,6 +230,7 @@ export const sendEmail = new Tool({
 
 export const sendBatchEmails = new Tool({
   name: 'send_batch_emails',
+  inputSchema: sendBatchEmailsInputSchema,
   description: 'Send multiple personalized emails via Gmail SMTP. Each email in the batch goes to a different recipient.',
   parameters: {
     type: 'object',
