@@ -517,52 +517,144 @@ app.get('/api/leads/stats', async (req, res) => {
   }
 });
 
-// ---- List Leads ----
+// ---- List Leads (reads from prospects + campaign_enriched_data) ----
 app.get('/api/leads', async (req, res) => {
-  const { tier, metro, industry, outreach_status, limit, page } = req.query;
+  const { tier, metro, industry, outreach_status } = req.query;
+  const limit = parseInt(req.query.limit) || 50;
+  const page  = parseInt(req.query.page)  || 1;
+  const offset = (page - 1) * limit;
 
   try {
-    const { data: leads, total } = await getLeads({
-      tier,
-      metro,
-      industry,
-      outreach_status,
-      limit,
-      page,
+    // ── Read from real production tables ──────────────────────────────────────
+    const { createClient } = await import('@supabase/supabase-js');
+    const sb = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY);
+
+    // 1. Fetch prospects
+    let pQuery = sb
+      .from('prospects')
+      .select('*', { count: 'exact' })
+      .order('created_at', { ascending: false })
+      .range(offset, offset + limit - 1);
+
+    if (metro) pQuery = pQuery.ilike('city', `%${metro}%`);
+
+    const { data: prospects, count: total, error: pError } = await pQuery;
+    if (pError) throw pError;
+
+    if (!prospects || prospects.length === 0) {
+      return res.json({ total: 0, limit, page, leads: [] });
+    }
+
+    // 2. Fetch all campaign data for these prospects in one query
+    const ids = prospects.map(p => p.id);
+    const { data: campaigns, error: cError } = await sb
+      .from('campaign_enriched_data')
+      .select('*')
+      .in('prospect_id', ids);
+
+    if (cError) console.error('[Leads API] campaign fetch error:', cError.message);
+
+    // 3. Build a map for fast lookup
+    const campaignMap = {};
+    (campaigns || []).forEach(c => {
+      if (!campaignMap[c.prospect_id]) campaignMap[c.prospect_id] = [];
+      campaignMap[c.prospect_id].push(c);
     });
 
-    res.json({
-      total,
-      limit: parseInt(limit) || 20,
-      page: parseInt(page) || 1,
-      leads: leads.map(l => ({
-        id: l.id,
-        business_name: l.business_name,
-        owner_name: l.owner_name,
-        industry: l.industry,
-        metro_area: l.metro_area,
-        rating: l.rating,
-        review_count: l.review_count,
-        qualification_score: l.qualification_score,
-        lead_tier: l.lead_tier,
-        outreach_status: l.outreach_status,
-        has_mega_profile: !!l.mega_profile,
-        mega_profile: l.mega_profile,
-        score_breakdown: l.score_breakdown,
-        profiled_by: l.profiled_by,
-        phone: l.phone,
-        email: l.email,
-        website: l.website,
-        google_maps_url: l.google_maps_url,
-        facebook_url: l.facebook_url,
-        instagram_url: l.instagram_url,
-        linkedin_url: l.linkedin_url,
-        created_at: l.created_at,
-        campaign_enriched_data: l.campaign_enriched_data,
-      })),
+    // 4. Load niches for label lookup
+    const fs = await import('fs');
+    const niches = JSON.parse(fs.default.readFileSync('./niches.json', 'utf8'));
+    const nicheMap = {};
+    niches.forEach(n => { nicheMap[n.id] = n; });
+
+    // 5. Shape the response to match what the dashboard expects
+    const leads = prospects.map(p => {
+      const camp = (campaignMap[p.id] || []).sort((a, b) =>
+        new Date(b.created_at) - new Date(a.created_at)
+      )[0] || null;
+
+      const nicheRow = nicheMap[p.niche_id] || {};
+      const industry  = nicheRow.es || nicheRow.en || `Niche ${p.niche_id}`;
+      const rawData   = p.raw_data || {};
+
+      // Smart score: 85 default, or from raw_data if stored there
+      const score = rawData.radar_parsed?.qualification_score || 85;
+
+      // Determine tier
+      let lead_tier = 'WARM';
+      if (score >= 80) lead_tier = 'HOT';
+      else if (score < 65) lead_tier = 'COLD';
+
+      // Outreach status from campaign
+      const outreachStatus = camp?.outreach_status || camp?.status || 'PENDING';
+
+      // Build MEGA profile compatible structure from campaign_enriched_data
+      let mega_profile = null;
+      if (camp) {
+        // Parse "Subject: ...\n\nBody..." format stored in outreach_copy
+        let emailSubject = '';
+        let emailBody = camp.outreach_copy || '';
+        const subjectMatch = emailBody.match(/^Subject:\s*(.+?)(\n|$)/i);
+        if (subjectMatch) {
+          emailSubject = subjectMatch[1].trim();
+          emailBody = emailBody.replace(/^Subject:\s*.+(\n|$)/i, '').trim();
+        }
+
+        mega_profile = {
+          situational_summary: camp.radiography_technical || '',
+          pain_points:         camp.attack_angle || '',
+          sales_strategy:      camp.outreach_copy || '',
+          outreach: {
+            subject:   emailSubject,
+            body:      emailBody,
+            whatsapp:  '',
+            instagram: '',
+          },
+        };
+      }
+
+      return {
+        id:                  p.id,
+        business_name:       p.business_name,
+        owner_name:          null,
+        industry,
+        metro_area:          p.city,
+        city:                p.city,
+        rating:              p.rating || 4.5,
+        review_count:        p.reviews_count || p.review_count || 0,
+        reviews_count:       p.reviews_count || p.review_count || 0,
+        qualification_score: score,
+        score:               score,
+        lead_tier,
+        outreach_status:     outreachStatus,
+        has_mega_profile:    !!mega_profile,
+        mega_profile,
+        phone:               p.phone,
+        email:               camp?.email_sent_at ? 'sent' : null,
+        website:             p.website,
+        google_maps_url:     p.google_maps_url,
+        facebook_url:        rawData.radar_parsed?.facebook_url || null,
+        instagram_url:       rawData.radar_parsed?.instagram_url || null,
+        linkedin_url:        rawData.radar_parsed?.linkedin_url || null,
+        lead_magnet_path:    camp?.lead_magnets_data?.path || null,
+        lead_magnet_status:  camp?.lead_magnet_status || null,
+        campaign_id:         camp?.id || null,
+        created_at:          p.created_at,
+        campaign_enriched_data: campaignMap[p.id] || [],
+        niche_id:            p.niche_id,
+      };
     });
+
+    res.json({ total: total || leads.length, limit, page, leads });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    console.error('[Leads API] Error:', err.message);
+    // Fallback to legacy getLeads if something fails
+    try {
+      const { data: fallbackLeads, total: fallbackTotal } = await getLeads({ limit: req.query.limit, page: req.query.page });
+      res.json({ total: fallbackTotal, limit, page, leads: fallbackLeads || [] });
+    } catch (fallbackErr) {
+      res.status(500).json({ error: err.message });
+    }
   }
 });
 
