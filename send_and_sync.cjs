@@ -46,17 +46,33 @@ async function ghlPost(endpoint, body) {
   return data;
 }
 
+// ── Phone normalization: GHL requires +1 prefix for US numbers ──
+function normalizeUSPhone(raw) {
+  if (!raw) return '';
+  // Strip everything non-digit
+  const digits = raw.replace(/\D/g, '');
+  if (digits.length === 0) return '';
+  // If already has country code (11 digits starting with 1)
+  if (digits.length === 11 && digits.startsWith('1')) return '+' + digits;
+  // Standard 10-digit US number
+  if (digits.length === 10) return '+1' + digits;
+  // If someone already passed +1... just return cleaned
+  if (raw.startsWith('+1')) return '+1' + digits.replace(/^1/, '');
+  // Fallback: return with +1 prefix
+  return '+1' + digits;
+}
+
 async function createGHLContact(prospect, email) {
   return ghlPost('/contacts/', {
     firstName: prospect.business_name,
     email: email,
-    phone: prospect.phone || '',
+    phone: normalizeUSPhone(prospect.phone),
     locationId: GHL_LOCATION,
     tags: ['lead-automatizado', 'google-maps', 'empirika-engine'],
     source: 'Empirika Engine - Agentic IA',
     website: prospect.website || '',
     companyName: prospect.business_name,
-    city: prospect.city || ''
+    city: prospect.metro_area || ''
   });
 }
 
