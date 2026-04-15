@@ -69,6 +69,9 @@ app.use(cors({
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
+// Serve lead magnet images (assets/landing_niches/) as static files
+app.use('/assets', express.static(path.join(__dirname, 'assets')));
+
 // ---- Health Check ----
 app.get('/health', (req, res) => {
   const agents = Array.from(runtime.agents.keys());

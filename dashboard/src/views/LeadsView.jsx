@@ -220,7 +220,21 @@ export default function LeadsView() {
             
             const resumen = campaignData?.radiography_technical || rawMega.situational_summary || `Evaluando el potencial digital de ${lead.business_name}...`;
             const puntosDolor = campaignData?.attack_angle || rawMega.pain_points || `Identificando ineficiencias en el embudo actual de ${lead.business_name}...`;
-            const estrategia = campaignData?.outreach_copy || rawMega.strategic_recommendation || `Angela está diseñando la propuesta personalizada para este prospecto.`;
+            
+            // Clean up agent error messages for display
+            let rawEstrategia = campaignData?.outreach_copy || rawMega.strategic_recommendation || '';
+            const isAgentError = rawEstrategia.toLowerCase().includes('max iterations') 
+              || rawEstrategia.toLowerCase().includes('agent encountered an error')
+              || rawEstrategia.toLowerCase().includes('without a final response');
+            const estrategia = isAgentError 
+              ? '⏳ Angela no pudo completar la propuesta. Usa "Revisar Outreach" para regenerar manualmente.'
+              : (rawEstrategia || `Angela está diseñando la propuesta personalizada para este prospecto.`);
+
+            // Lead magnet image (if assigned by lead_magnet_worker)
+            const magnetData = campaignData?.lead_magnets_data || {};
+            const magnetImagePath = magnetData.image_path; // e.g. "assets/landing_niches/7. Paisajismo/img.png"
+            const backendUrl = import.meta.env.VITE_API_URL || 'http://localhost:4000';
+            const magnetImageUrl = magnetImagePath ? `${backendUrl}/${magnetImagePath}` : null;
 
             return (
               <div key={lead.id} className="lead-card">
@@ -289,6 +303,41 @@ export default function LeadsView() {
                     <p>{estrategia}</p>
                   </div>
                 </div>
+
+                {magnetImageUrl && (
+                  <div className="magnet-preview" style={{
+                    margin: '12px 0',
+                    borderRadius: '12px',
+                    overflow: 'hidden',
+                    border: '1px solid rgba(16, 185, 129, 0.3)',
+                    background: 'rgba(16, 185, 129, 0.05)',
+                  }}>
+                    <div style={{
+                      padding: '8px 12px',
+                      background: 'rgba(16, 185, 129, 0.1)',
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '6px',
+                      fontSize: '0.75rem',
+                      color: '#10b981',
+                      fontWeight: 600,
+                    }}>
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>
+                      LEAD MAGNET — {magnetData.niche_folder || 'Preview'}
+                    </div>
+                    <img 
+                      src={magnetImageUrl}
+                      alt={`Lead magnet for ${lead.business_name}`}
+                      style={{
+                        width: '100%',
+                        maxHeight: '200px',
+                        objectFit: 'cover',
+                        display: 'block',
+                      }}
+                      onError={(e) => { e.target.style.display = 'none'; }}
+                    />
+                  </div>
+                )}
 
                 <div className="lead-contact-channels">
                   <div className="outreach-action-row">
