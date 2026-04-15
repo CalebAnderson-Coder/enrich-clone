@@ -350,9 +350,12 @@ export default function LeadsView() {
             // Lead magnet image (if assigned by lead_magnet_worker)
             const magnetData = campaignData?.lead_magnets_data || {};
             const magnetImagePath = magnetData.image_path; // e.g. "assets/landing_niches/7. Paisajismo/img.png"
-            // Strip /api suffix to get server root, then encode path segments (handles spaces)
-            const rawApiUrl = import.meta.env.VITE_API_URL || 'http://localhost:4000';
-            const serverRoot = rawApiUrl.replace(/\/api$/, '') || 'http://localhost:4000';
+            // In production VITE_API_URL is "" so serverRoot is "" → relative URL like /assets/...
+            // In dev VITE_API_URL is undefined so we fall back to localhost:4000
+            const rawApiUrl = import.meta.env.VITE_API_URL !== undefined
+              ? import.meta.env.VITE_API_URL
+              : (import.meta.env.PROD ? '' : 'http://localhost:4000/api');
+            const serverRoot = rawApiUrl.replace(/\/api$/, '');
             const encodedPath = magnetImagePath
               ? magnetImagePath.split('/').map(encodeURIComponent).join('/')
               : null;
