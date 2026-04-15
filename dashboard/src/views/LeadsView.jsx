@@ -38,55 +38,80 @@ export default function LeadsView() {
   const fetchLeads = async () => {
     try {
       if (!supabase) {
-         console.warn("Supabase no configurado en frontend.");
-         if (loading) setLoading(false);
-         return;
-      }
-      
-      // Query prospects (actual data table) + campaign_enriched_data separately
-      const [prospectsRes, campaignsRes] = await Promise.all([
-        supabase.from('prospects').select('*').order('created_at', { ascending: false }),
-        supabase.from('campaign_enriched_data').select('*')
-      ]);
-
-      if (prospectsRes.error) {
-        console.error('Error supabase prospects:', prospectsRes.error);
+        console.warn('Supabase no configurado en frontend.');
+        if (loading) setLoading(false);
         return;
       }
 
-      // Manual join: attach campaign data to each prospect
-      const campaignsByProspect = {};
+      // ✅ Read from LEADS table (149 records) — the real source of truth
+      // campaign_enriched_data.prospect_id references leads.id
+      const [leadsRes, campaignsRes] = await Promise.all([
+        supabase
+          .from('leads')
+          .select('*')
+          .order('created_at', { ascending: false }),
+        supabase
+          .from('campaign_enriched_data')
+          .select('*'),
+      ]);
+
+      if (leadsRes.error) {
+        console.error('Error supabase leads:', leadsRes.error);
+        return;
+      }
+
+      // Build lookup: prospect_id (= leads.id) → campaign rows
+      const campaignsByLead = {};
       (campaignsRes.data || []).forEach(c => {
-        if (!campaignsByProspect[c.prospect_id]) campaignsByProspect[c.prospect_id] = [];
-        campaignsByProspect[c.prospect_id].push(c);
+        const key = c.prospect_id; // prospect_id references leads.id
+        if (!campaignsByLead[key]) campaignsByLead[key] = [];
+        campaignsByLead[key].push(c);
       });
 
-      const joinedLeads = (prospectsRes.data || []).map(p => {
-        const rp = p.raw_data?.radar_parsed || {};
-        const campArray = campaignsByProspect[p.id] || [];
+      const joinedLeads = (leadsRes.data || []).map(lead => {
+        const campArray = campaignsByLead[lead.id] || [];
+        const camp = campArray[0] || null;
+        const mega = lead.mega_profile || {};
+
+        // Normalize outreach copy: handle JSON-wrapped or plain-text drafts
+        let emailDraft = camp?.outreach_copy || null;
+        if (emailDraft && emailDraft.trim().startsWith('{')) {
+          try {
+            const parsed = JSON.parse(emailDraft);
+            const inner = parsed.outreach_copy || parsed;
+            emailDraft = inner.subject
+              ? `Subject: ${inner.subject}\n\n${inner.body || ''}`
+              : inner.body || emailDraft;
+          } catch (_) { /* keep as-is */ }
+        }
+        if (!emailDraft && mega?.outreach?.subject) {
+          emailDraft = `Subject: ${mega.outreach.subject}\n\n${mega.outreach.body || ''}`;
+        }
+
         return {
-          id: p.id,
-          business_name: p.business_name || rp.business_name || 'Sin Nombre',
-          phone: p.phone || rp.phone || null,
-          website: p.website || rp.website || null,
-          rating: p.rating || rp.rating || null,
-          reviews_count: p.reviews_count || rp.review_count || 0,
-          google_maps_url: p.google_maps_url || null,
-          city: p.city || rp.city || null,
-          industry: rp.category || p.niche_id || 'Servicios',
-          metro_area: p.city || 'Orlando, FL',
-          // Fields from campaign enriched data
+          id: lead.id,
+          business_name: lead.business_name || 'Sin Nombre',
+          owner_name: lead.owner_name || null,
+          phone: lead.phone || null,
+          email: lead.email || lead.email_address || null,
+          website: lead.website || null,
+          rating: lead.rating || null,
+          reviews_count: lead.review_count || 0,
+          google_maps_url: lead.google_maps_url || null,
+          city: lead.metro_area || null,
+          industry: lead.industry || 'Servicios',
+          metro_area: lead.metro_area || 'US',
+          qualification_score: lead.qualification_score || (lead.rating ? Math.round(lead.rating * 18) : 50),
+          score_breakdown: lead.score_breakdown || null,
+          mega_profile: mega,
+          facebook_url: lead.facebook_url || null,
+          instagram_url: lead.instagram_url || null,
+          linkedin_url: lead.linkedin_url || null,
+          // Campaign join fields
           campaign_enriched_data: campArray,
-          outreach_status: campArray[0]?.outreach_status || null,
-          _status: getLeadStatus(campArray[0]),
-          // Compatibility fields (used by card rendering)
-          qualification_score: rp.rating ? Math.round(rp.rating * 18) : 50,
-          mega_profile: {},
-          owner_name: null,
-          instagram_url: null,
-          facebook_url: null,
-          linkedin_url: null,
-          score_breakdown: null,
+          outreach_status: lead.outreach_status || camp?.outreach_status || null,
+          email_draft: emailDraft,
+          _status: getLeadStatus(camp),
         };
       });
 
@@ -338,8 +363,8 @@ export default function LeadsView() {
             // Strategy for card display: strategic recommendation (NOT the email draft, NOT the attack_angle which is shown above)
             let rawEstrategia = rawMega.strategic_recommendation || '';
             
-            // Check if the outreach email draft is ready (for status indicator)
-            const outreachCopy = campaignData?.outreach_copy || '';
+            // Check if the outreach email draft is ready (use pre-normalized field from fetchLeads)
+            const outreachCopy = lead.email_draft || campaignData?.outreach_copy || '';
             const hasEmailDraft = outreachCopy.length > 50 
               && !outreachCopy.toLowerCase().includes('max iterations')
               && !outreachCopy.toLowerCase().includes('agent encountered');
