@@ -108,7 +108,7 @@ async function main() {
   // 1. Fetch leads
   const { data: allLeads, error: leadsErr } = await sb
     .from('leads')
-    .select('id, business_name, metro_area, city, industry, website, phone, email, rating, review_count, mega_profile')
+    .select('id, business_name, metro_area, industry, website, phone, email, rating, review_count, mega_profile')
     .order('created_at', { ascending: false })
     .limit(MAX_LEADS + 20);
 
