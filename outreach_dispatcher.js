@@ -142,21 +142,21 @@ export async function dispatchPendingOutreach() {
         try {
           // ── Sanitize lead data BEFORE prompt injection ──
           const safeLead = sanitizeLeadData(lead);
-          const prompt = `Write a cold outreach message for a ${safeLead.industry || 'service'} business called "${safeLead.business_name || 'their business'}".
-Context: Our agency (Empírika) designed a free, professional website concept for them (magnet: website_screenshot).
-Mention that you found their business, thought it was great, but noticed they're missing an online presence — and tell them to check the attached website concept.
-Offer to deliver the finished version 100% free.
-Be assertive, professional, but very human.
+          const prompt = `Escribe un mensaje de outreach frío para un negocio de ${safeLead.industry || 'servicios'} llamado "${safeLead.business_name || 'su negocio'}".
+Contexto: Nuestra agencia (Empírika) diseñó un concepto de página web profesional gratuito para ellos (magnet: website_screenshot).
+Menciona que encontraste su negocio, que te pareció genial, pero notaste que les falta presencia online — y diles que revisen el concepto de página web adjunto.
+Ofrece entregarles la versión terminada 100% gratis.
+Sé asertivo, profesional, pero muy humano. Usa "tú" (informal pero respetuoso).
 
-Write TWO versions:
-1. A cold Email (Subject line + body, 2-3 paragraphs).
-2. A WhatsApp message (Short, direct, conversational, impactful).
+Escribe DOS versiones:
+1. Un Email frío (Línea de asunto + cuerpo, 2-3 párrafos).
+2. Un mensaje de WhatsApp (Corto, directo, conversacional, impactante).
 
-IMPORTANT: Write EVERYTHING in ENGLISH. Return ONLY a JSON object:
+IMPORTANTE: Escribe TODO en ESPAÑOL. Devuelve SOLO un objeto JSON:
 {
-  "email_subject": "[Subject line]",
-  "email_body": "[Email body with 2-3 paragraphs]",
-  "whatsapp": "[Short WhatsApp message]"
+  "email_subject": "[Línea de asunto en español]",
+  "email_body": "[Cuerpo del email con 2-3 párrafos en español]",
+  "whatsapp": "[Mensaje corto de WhatsApp en español]"
 }`;
           logger.info('Asking Angela for multi-channel copy', { business: lead.business_name });
           const aiResult = await runtime.run('Angela', prompt, { maxIterations: 3 });
