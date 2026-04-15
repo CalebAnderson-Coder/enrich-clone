@@ -297,14 +297,27 @@ export default function LeadsView() {
             const phoneLink = lead.phone ? `tel:${lead.phone.replace(/[^0-9+]/g, '')}` : null;
             const smsLink = lead.phone ? `sms:${lead.phone.replace(/[^0-9+]/g, '')}` : null;
             const websiteUrl = lead.website && !lead.website.startsWith('http') ? `https://${lead.website}` : lead.website;
-            
+
+            // Build social links: use DB values if present, otherwise construct smart search links
+            const mapsQuery = encodeURIComponent(`${lead.business_name} ${lead.city || lead.metro_area || ''}`);
+            const googleMapsLink = lead.google_maps_url
+              || `https://www.google.com/maps/search/?api=1&query=${mapsQuery}`;
+
+            const fbQuery = encodeURIComponent(lead.business_name || '');
+            const facebookLink = lead.facebook_url
+              || `https://www.facebook.com/search/top?q=${fbQuery}`;
+
             let instagramLink = lead.instagram_url || null;
             if (!instagramLink && lead.website && lead.website.includes('instagram.com/')) {
               instagramLink = lead.website;
             }
-            const facebookLink = lead.facebook_url || null;
+            // Fallback: Instagram search by business name
+            if (!instagramLink) {
+              const igQuery = encodeURIComponent((lead.business_name || '').replace(/\s+/g, ''));
+              instagramLink = `https://www.instagram.com/${igQuery}`;
+            }
+
             const linkedinLink = lead.linkedin_url || null;
-            const googleMapsLink = lead.google_maps_url || null;
 
             const campaignData = lead.campaign_enriched_data && lead.campaign_enriched_data[0] ? lead.campaign_enriched_data[0] : null;
             const rawMega = lead.mega_profile || {};
@@ -479,29 +492,31 @@ export default function LeadsView() {
 
                   <h5 className="channels-title small">CANALES DE CONTACTO DIRECTO</h5>
                   <div className="channels-row">
+                    {/* WhatsApp — only active if phone exists */}
                     {whatsappLink ? (
-                      <a href={whatsappLink} target="_blank" rel="noopener noreferrer" className="channel-btn">
+                      <a href={whatsappLink} target="_blank" rel="noopener noreferrer" className="channel-btn" title={`WhatsApp: ${lead.phone}`}>
                         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"></path></svg>
                       </a>
                     ) : (
-                      <div className="channel-btn" style={{ opacity: 0.3 }}><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"></path></svg></div>
+                      <div className="channel-btn" style={{ opacity: 0.25 }} title="No phone available">
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"></path></svg>
+                      </div>
                     )}
-                    
-                    {facebookLink ? (
-                      <a href={facebookLink} target="_blank" rel="noopener noreferrer" className="channel-btn">
-                        <svg className="channel-icon-blue" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M18 2h-3a5 5 0 0 0-5 5v3H7v4h3v8h4v-8h3l1-4h-4V7a1 1 0 0 1 1-1h3z"></path></svg>
-                      </a>
-                    ) : (
-                      <div className="channel-btn" style={{ opacity: 0.3 }}><svg className="channel-icon-blue" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M18 2h-3a5 5 0 0 0-5 5v3H7v4h3v8h4v-8h3l1-4h-4V7a1 1 0 0 1 1-1h3z"></path></svg></div>
-                    )}
-                    
-                    {googleMapsLink ? (
-                      <a href={googleMapsLink} target="_blank" rel="noopener noreferrer" className="channel-btn primary">
-                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"></path><circle cx="12" cy="10" r="3"></circle></svg>
-                      </a>
-                    ) : (
-                      <div className="channel-btn" style={{ opacity: 0.3 }}><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"></path><circle cx="12" cy="10" r="3"></circle></svg></div>
-                    )}
+
+                    {/* Facebook — always active (search fallback) */}
+                    <a href={facebookLink} target="_blank" rel="noopener noreferrer" className="channel-btn" title={`Search on Facebook: ${lead.business_name}`}>
+                      <svg className="channel-icon-blue" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M18 2h-3a5 5 0 0 0-5 5v3H7v4h3v8h4v-8h3l1-4h-4V7a1 1 0 0 1 1-1h3z"></path></svg>
+                    </a>
+
+                    {/* Instagram — always active (profile search fallback) */}
+                    <a href={instagramLink} target="_blank" rel="noopener noreferrer" className="channel-btn" title={`Search on Instagram: ${lead.business_name}`}>
+                      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="2" y="2" width="20" height="20" rx="5" ry="5"/><path d="M16 11.37A4 4 0 1 1 12.63 8 4 4 0 0 1 16 11.37z"/><line x1="17.5" y1="6.5" x2="17.51" y2="6.5"/></svg>
+                    </a>
+
+                    {/* Google Maps — always active (search fallback) */}
+                    <a href={googleMapsLink} target="_blank" rel="noopener noreferrer" className="channel-btn primary" title={`Find on Google Maps: ${lead.business_name}`}>
+                      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"></path><circle cx="12" cy="10" r="3"></circle></svg>
+                    </a>
                   </div>
                 </div>
               </div>
