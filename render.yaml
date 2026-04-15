@@ -2,20 +2,63 @@ services:
   - type: web
     name: agency-fleet-runtime
     env: node
-    region: ohio # Defaults to US East
+    region: ohio
     buildCommand: npm install && npm run heroku-postbuild
     startCommand: npm start
     envVars:
-      # Backend Keys
+      # ── Backend Runtime ──────────────────────────────────────────
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: "3001"
+
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: GROQ_API_KEY
+        sync: false
+      - key: FIRECRAWL_API_KEY
+        sync: false
+      - key: BRIGHTDATA_API_TOKEN
+        sync: false
+      - key: APIFY_API_TOKEN
+        sync: false
+
       - key: SUPABASE_URL
         sync: false
       - key: SUPABASE_SERVICE_KEY
         sync: false
-      - key: GEMINI_API_KEY
+      - key: SUPABASE_SERVICE_ROLE_KEY
         sync: false
-        
-      # Frontend Variables (Requeridos al momento del Build)
+      - key: SUPABASE_ANON_KEY
+        sync: false
+
+      - key: SMTP_USER
+        sync: false
+      - key: SMTP_PASS
+        sync: false
+      - key: SMTP_FROM_NAME
+        sync: false
+      - key: SMTP_HOST
+        value: smtp.gmail.com
+      - key: SMTP_PORT
+        value: "587"
+
+      - key: API_SECRET_KEY
+        sync: false
+
+      # FRONTEND_URL = Render public URL (set after first deploy)
+      - key: FRONTEND_URL
+        sync: false
+
+      # ── Frontend Build Variables (VITE_ prefix) ──────────────────
       - key: VITE_SUPABASE_URL
         sync: false
       - key: VITE_SUPABASE_ANON_KEY
         sync: false
+      - key: VITE_SUPABASE_SERVICE_KEY
+        sync: false
+      - key: VITE_API_SECRET_KEY
+        sync: false
+      # VITE_API_URL vacío => usa /api relativo en producción
+      - key: VITE_API_URL
+        value: ""
