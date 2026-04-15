@@ -22,7 +22,7 @@ export default function LeadsView() {
   const getLeadStatus = (campaignData) => {
     if (!campaignData) return 'pendiente';
     if (campaignData.outreach_status === 'REJECTED') return 'rechazado';
-    if (campaignData.outreach_status === 'APPROVED' || campaignData.email_sent_at) return 'enviado';
+    if (campaignData.outreach_status === 'APPROVED' || campaignData.outreach_status === 'SENT' || campaignData.email_sent_at) return 'enviado';
     return 'pendiente';
   };
 
@@ -448,6 +448,9 @@ export default function LeadsView() {
                     </button>
                     {lead.outreach_status === 'APPROVED' && (
                       <span className="status-label approved">✓ Aprobado</span>
+                    )}
+                    {lead.outreach_status === 'SENT' && (
+                      <span className="status-label approved" style={{ color: '#10b981', background: 'rgba(16, 185, 129, 0.1)', padding: '4px 8px', borderRadius: '4px', fontSize: '0.8rem', display: 'flex', alignItems: 'center', gap: '4px' }}>✉️ Enviado</span>
                     )}
                     {lead.outreach_status === 'REJECTED' && (
                       <span className="status-label rejected" style={{ color: '#ef4444', background: 'rgba(239, 68, 68, 0.1)', padding: '4px 8px', borderRadius: '4px', fontSize: '0.8rem', display: 'flex', alignItems: 'center' }}>✗ Rechazado</span>
