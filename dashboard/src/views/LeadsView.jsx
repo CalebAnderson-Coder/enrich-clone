@@ -10,12 +10,21 @@ export default function LeadsView() {
   const [loading, setLoading] = useState(true);
   const [selectedLead, setSelectedLead] = useState(null);
   const [isModalOpen, setIsModalOpen] = useState(false);
+  const [activeTab, setActiveTab] = useState('pendientes');
 
   useEffect(() => {
     fetchLeads();
     const interval = setInterval(fetchLeads, 15000);
     return () => clearInterval(interval);
   }, []);
+
+  // Determine lead status from campaign data
+  const getLeadStatus = (campaignData) => {
+    if (!campaignData) return 'pendiente';
+    if (campaignData.outreach_status === 'REJECTED') return 'rechazado';
+    if (campaignData.outreach_status === 'APPROVED' || campaignData.email_sent_at) return 'enviado';
+    return 'pendiente';
+  };
 
   const fetchLeads = async () => {
     try {
@@ -25,22 +34,74 @@ export default function LeadsView() {
          return;
       }
       
-      const { data: dbLeads, error } = await supabase
-        .from('leads')
-        .select('*, campaign_enriched_data(*)')
-        .order('qualification_score', { ascending: false });
+      // Query prospects (actual data table) + campaign_enriched_data separately
+      const [prospectsRes, campaignsRes] = await Promise.all([
+        supabase.from('prospects').select('*').order('created_at', { ascending: false }),
+        supabase.from('campaign_enriched_data').select('*')
+      ]);
 
-      if (error) {
-        console.error('Error supabase leads:', error);
+      if (prospectsRes.error) {
+        console.error('Error supabase prospects:', prospectsRes.error);
         return;
       }
 
-      setLeads(dbLeads);
+      // Manual join: attach campaign data to each prospect
+      const campaignsByProspect = {};
+      (campaignsRes.data || []).forEach(c => {
+        if (!campaignsByProspect[c.prospect_id]) campaignsByProspect[c.prospect_id] = [];
+        campaignsByProspect[c.prospect_id].push(c);
+      });
+
+      const joinedLeads = (prospectsRes.data || []).map(p => {
+        const rp = p.raw_data?.radar_parsed || {};
+        const campArray = campaignsByProspect[p.id] || [];
+        return {
+          id: p.id,
+          business_name: p.business_name || rp.business_name || 'Sin Nombre',
+          phone: p.phone || rp.phone || null,
+          website: p.website || rp.website || null,
+          rating: p.rating || rp.rating || null,
+          reviews_count: p.reviews_count || rp.review_count || 0,
+          google_maps_url: p.google_maps_url || null,
+          city: p.city || rp.city || null,
+          industry: rp.category || p.niche_id || 'Servicios',
+          metro_area: p.city || 'Orlando, FL',
+          // Fields from campaign enriched data
+          campaign_enriched_data: campArray,
+          outreach_status: campArray[0]?.outreach_status || null,
+          _status: getLeadStatus(campArray[0]),
+          // Compatibility fields (used by card rendering)
+          qualification_score: rp.rating ? Math.round(rp.rating * 18) : 50,
+          mega_profile: {},
+          owner_name: null,
+          instagram_url: null,
+          facebook_url: null,
+          linkedin_url: null,
+          score_breakdown: null,
+        };
+      });
+
+      setLeads(joinedLeads);
     } catch (err) {
       console.error('Error fetching leads:', err);
     } finally {
       if (loading) setLoading(false);
     }
+  };
+
+  // Filter leads by active tab
+  const filteredLeads = leads.filter(lead => {
+    if (activeTab === 'pendientes') return lead._status === 'pendiente';
+    if (activeTab === 'enviados') return lead._status === 'enviado';
+    if (activeTab === 'rechazados') return lead._status === 'rechazado';
+    return true; // 'todos'
+  });
+
+  const tabCounts = {
+    pendientes: leads.filter(l => l._status === 'pendiente').length,
+    enviados: leads.filter(l => l._status === 'enviado').length,
+    rechazados: leads.filter(l => l._status === 'rechazado').length,
+    todos: leads.length,
   };
 
   const getTierClass = (score) => {
@@ -80,20 +141,18 @@ export default function LeadsView() {
 
   const handleSaveOutreach = async (leadId, outreachData) => {
     try {
-      // We can use a dedicated endpoint or update directly if Supabase allows
-      const { error } = await supabase
-        .from('leads')
-        .update({
-          outreach_status: 'DRAFT',
-          mega_profile: {
-            ...selectedLead.mega_profile,
-            outreach: outreachData
-          },
-          updated_at: new Date().toISOString()
-        })
-        .eq('id', leadId);
-
-      if (error) throw error;
+      // Update campaign_enriched_data with the draft
+      const campaignId = selectedLead?.campaign_enriched_data?.[0]?.id;
+      if (campaignId) {
+        const { error } = await supabase
+          .from('campaign_enriched_data')
+          .update({
+            outreach_status: 'DRAFT',
+            outreach_copy: `Subject: ${outreachData.subject}\n\n${outreachData.body}`,
+          })
+          .eq('id', campaignId);
+        if (error) throw error;
+      }
       
       setIsModalOpen(false);
       fetchLeads();
@@ -172,23 +231,56 @@ export default function LeadsView() {
           <p>Contactabilidad multicanal y pipeline de prospección</p>
         </div>
         <div style={{ background: 'rgba(255,255,255,0.05)', padding: '8px 16px', borderRadius: '20px', fontSize: '0.9rem', color: 'var(--text-secondary)' }}>
-          <strong style={{ color: '#fff' }}>{leads.length}</strong> Leads Activos
+          <strong style={{ color: '#fff' }}>{leads.length}</strong> Leads Totales
         </div>
+      </div>
+
+      {/* Filter Tabs */}
+      <div className="leads-tabs" style={{ display: 'flex', gap: '4px', marginBottom: '20px', background: 'rgba(255,255,255,0.03)', borderRadius: '12px', padding: '4px', border: '1px solid rgba(255,255,255,0.06)' }}>
+        {[
+          { key: 'pendientes', label: 'Pendientes', icon: '📋', color: '#eab308' },
+          { key: 'enviados', label: 'Enviados', icon: '✅', color: '#10b981' },
+          { key: 'rechazados', label: 'Rechazados', icon: '✗', color: '#ef4444' },
+          { key: 'todos', label: 'Todos', icon: '📊', color: '#8b5cf6' },
+        ].map(tab => (
+          <button 
+            key={tab.key}
+            className={`tab-btn ${activeTab === tab.key ? 'active' : ''}`}
+            onClick={() => setActiveTab(tab.key)}
+            style={{
+              flex: 1,
+              padding: '10px 16px',
+              border: 'none',
+              borderRadius: '10px',
+              cursor: 'pointer',
+              fontSize: '0.85rem',
+              fontWeight: 600,
+              transition: 'all 0.2s ease',
+              background: activeTab === tab.key ? 'rgba(255,255,255,0.08)' : 'transparent',
+              color: activeTab === tab.key ? tab.color : 'var(--text-secondary)',
+              boxShadow: activeTab === tab.key ? '0 2px 8px rgba(0,0,0,0.2)' : 'none',
+            }}
+          >
+            {tab.icon} {tab.label} <span style={{ opacity: 0.7, marginLeft: '4px', fontSize: '0.8rem' }}>({tabCounts[tab.key]})</span>
+          </button>
+        ))}
       </div>
 
       {loading ? (
         <div className="leads-grid">
           {[1, 2, 3].map(i => <div key={i} className="skeleton-card" />)}
         </div>
-      ) : leads.length === 0 ? (
+      ) : filteredLeads.length === 0 ? (
         <div className="empty-leads-container">
           <svg width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path><circle cx="9" cy="7" r="4"></circle><path d="M23 21v-2a4 4 0 0 0-3-3.87"></path><path d="M16 3.13a4 4 0 0 1 0 7.75"></path></svg>
-          <h3>No hay leads precualificados</h3>
-          <p>Los agentes están buscando activamente posibles prospectos en segundo plano. Aparecerán aquí pronto.</p>
+          <h3>{activeTab === 'pendientes' ? '¡Todo aprobado!' : 'No hay leads en esta categoría'}</h3>
+          <p>{activeTab === 'pendientes' 
+            ? 'Todos los leads han sido procesados. Revisa la pestaña "Enviados" para ver el historial.' 
+            : 'Los agentes están buscando activamente posibles prospectos en segundo plano.'}</p>
         </div>
       ) : (
         <div className="leads-grid">
-          {leads.map(lead => {
+          {filteredLeads.map(lead => {
             const score = lead.qualification_score || 0;
             const tierClass = getTierClass(score);
             
