@@ -684,12 +684,33 @@ app.post('/api/leads/:id/regenerate-outreach', async (req, res) => {
       copy = { body: result.response };
     }
 
-    // Persist the new version
+    // Persist to leads.mega_profile.outreach
     await updateLeadOutreach(lead.id, copy);
+
+    // Also sync to campaign_enriched_data so dashboard shows updated content
+    try {
+      const outreachText = copy.subject 
+        ? `Subject: ${copy.subject}\n\n${copy.body || ''}` 
+        : (copy.body || result.response);
+      
+      const { error: syncError } = await supabase
+        .from('campaign_enriched_data')
+        .update({ 
+          outreach_copy: outreachText,
+        })
+        .eq('prospect_id', lead.id);
+      
+      if (syncError) console.warn('⚠️ Could not sync to campaign_enriched_data:', syncError.message);
+      else console.log(`  ✅ [Sync] campaign_enriched_data updated for ${lead.business_name}`);
+    } catch (syncErr) {
+      console.warn('⚠️ campaign_enriched_data sync failed:', syncErr.message);
+    }
 
     res.json({
       success: true,
-      outreach: copy
+      outreach: copy,
+      provider: result.provider || 'unknown',
+      fallbackUsed: result.fallbackUsed || false,
     });
   } catch (err) {
     console.error('Regenerate error:', err);
