@@ -3,7 +3,7 @@ services:
     name: agency-fleet-runtime
     env: node
     region: ohio
-    buildCommand: npm install && npm run heroku-postbuild
+    buildCommand: npm install --include=dev && npm run heroku-postbuild
     startCommand: npm start
     envVars:
       # ── Backend Runtime ──────────────────────────────────────────
