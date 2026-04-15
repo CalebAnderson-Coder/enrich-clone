@@ -10,8 +10,9 @@ import dotenv from 'dotenv';
 dotenv.config();
 
 const runtime = new AgentRuntime({
-  geminiApiKey: process.env.GEMINI_API_KEY,
+  apiKey: process.env.GEMINI_API_KEY,
   model: 'gemini-2.0-flash',
+  baseURL: 'https://generativelanguage.googleapis.com/v1beta/openai/',
 });
 
 // Register all agents
