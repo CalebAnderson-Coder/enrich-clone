@@ -328,8 +328,10 @@ export default function LeadsView() {
             // Lead magnet image (if assigned by lead_magnet_worker)
             const magnetData = campaignData?.lead_magnets_data || {};
             const magnetImagePath = magnetData.image_path; // e.g. "assets/landing_niches/7. Paisajismo/img.png"
-            const backendUrl = import.meta.env.VITE_API_URL || 'http://localhost:4000';
-            const magnetImageUrl = magnetImagePath ? `${backendUrl}/${magnetImagePath}` : null;
+            // Strip /api suffix from API URL to get static file server root
+            const rawApiUrl = import.meta.env.VITE_API_URL || 'http://localhost:4000';
+            const serverRoot = rawApiUrl.replace(/\/api$/, '') || 'http://localhost:4000';
+            const magnetImageUrl = magnetImagePath ? `${serverRoot}/${magnetImagePath}` : null;
 
             return (
               <div key={lead.id} className="lead-card">

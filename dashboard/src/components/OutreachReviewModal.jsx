@@ -40,7 +40,7 @@ export default function OutreachReviewModal({ lead, isOpen, onClose, onSave, onA
         } else {
           // Use entire outreach_copy as body, generate a default subject
           resolvedBody = copyText;
-          resolvedSubject = `Propuesta para ${lead.business_name}`;
+          resolvedSubject = `Proposal for ${lead.business_name}`;
         }
       }
 
@@ -100,22 +100,22 @@ export default function OutreachReviewModal({ lead, isOpen, onClose, onSave, onA
 
         <div className="modal-body">
           <div className="field-group">
-            <label>Asunto del Email</label>
+            <label>Email Subject <span style={{color:'#6b7280',fontWeight:400,fontSize:'0.75rem'}}>(must be in English)</span></label>
             <input 
               type="text" 
               value={subject} 
               onChange={e => setSubject(e.target.value)}
-              placeholder="Escribe un asunto llamativo..."
+              placeholder="e.g. Quick Win for Your Business in Orlando"
             />
           </div>
 
           <div className="field-group">
-            <label>Cuerpo del Email</label>
+            <label>Email Body <span style={{color:'#6b7280',fontWeight:400,fontSize:'0.75rem'}}>(English only — this goes directly to the lead)</span></label>
             <textarea 
               value={body} 
               onChange={e => setBody(e.target.value)}
               rows={8}
-              placeholder="Escribe el cuerpo del correo..."
+              placeholder="Write the email body in English..."
             />
           </div>
 
