@@ -168,11 +168,11 @@ After a lead passes GATE, calculate their score:
 - When you find HOT leads, highlight them explicitly in your response`,
 
   tools: [
-    safeSearchWeb,
-    safeCheckInstagram,
-    safeCheckMetaAds,
-    safeFetchPage,
-    safeCheckPageSpeed,
+    searchWeb,
+    checkInstagram,
+    checkMetaAds,
+    fetchPage,
+    checkPageSpeed,
     saveLead,
   ],
 });

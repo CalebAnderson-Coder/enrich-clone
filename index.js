@@ -525,28 +525,91 @@ app.get('/api/leads', async (req, res) => {
   const offset = (page - 1) * limit;
 
   try {
-    // ── Read from real production tables ──────────────────────────────────────
+    // ── CAMPAIGN-FIRST JOIN STRATEGY ──
+    // Always show leads WITH enrichment data first so the client sees drafts immediately.
     const { createClient } = await import('@supabase/supabase-js');
     const sb = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY);
 
-    // 1. Fetch prospects
-    let pQuery = sb
-      .from('prospects')
-      .select('*', { count: 'exact' })
-      .order('created_at', { ascending: false })
-      .range(offset, offset + limit - 1);
+    // STEP 1: Get prospect_ids that have campaign data (outreach drafts)
+    const { data: enrichedCampRows } = await sb
+      .from('campaign_enriched_data')
+      .select('prospect_id, created_at')
+      .not('outreach_copy', 'is', null)
+      .order('created_at', { ascending: false });
 
-    if (metro) pQuery = pQuery.ilike('city', `%${metro}%`);
+    const enrichedLeadIds = [...new Set((enrichedCampRows || []).map(c => c.prospect_id))];
+    console.log(`[Leads API] Found ${enrichedLeadIds.length} enriched lead IDs`);
 
-    const { data: prospects, count: total, error: pError } = await pQuery;
-    if (pError) throw pError;
+    let leadsRows = [];
+    let total = 0;
 
-    if (!prospects || prospects.length === 0) {
-      return res.json({ total: 0, limit, page, leads: [] });
+    if (enrichedLeadIds.length > 0) {
+      // STEP 2a: Query enriched leads first
+      let enrichedQuery = sb
+        .from('leads')
+        .select('*', { count: 'exact' })
+        .in('id', enrichedLeadIds)
+        .order('created_at', { ascending: false });
+
+      if (metro)    enrichedQuery = enrichedQuery.ilike('metro_area', `%${metro}%`);
+      if (tier)     enrichedQuery = enrichedQuery.eq('lead_tier', tier);
+      if (industry) enrichedQuery = enrichedQuery.ilike('industry', `%${industry}%`);
+
+      const { data: enrichedLeads, count: enrichedCount, error: eErr } = await enrichedQuery;
+      if (eErr) console.error('[Leads API] enriched query error:', eErr.message);
+
+      leadsRows = (enrichedLeads || []).slice(offset, offset + limit);
+      total = enrichedCount || 0;
+
+      // STEP 2b: Fill remaining slots with unenriched leads if we need more
+      const remaining = limit - leadsRows.length;
+      if (remaining > 0 && !outreach_status) {
+        const existingIds = enrichedLeadIds.join(',') || '00000000-0000-0000-0000-000000000000';
+        let fillQuery = sb
+          .from('leads')
+          .select('*', { count: 'exact' })
+          .not('id', 'in', `(${existingIds})`)
+          .order('created_at', { ascending: false })
+          .limit(remaining);
+
+        if (metro)    fillQuery = fillQuery.ilike('metro_area', `%${metro}%`);
+        if (tier)     fillQuery = fillQuery.eq('lead_tier', tier);
+        if (industry) fillQuery = fillQuery.ilike('industry', `%${industry}%`);
+
+        const { data: fillLeads, count: fillCount } = await fillQuery;
+        leadsRows = [...leadsRows, ...(fillLeads || [])];
+        total = (enrichedCount || 0) + (fillCount || 0);
+      }
+    } else {
+      // STEP 2c: No campaigns exist — regular pagination fallback
+      let pQuery = sb
+        .from('leads')
+        .select('*', { count: 'exact' })
+        .order('created_at', { ascending: false })
+        .range(offset, offset + limit - 1);
+
+      if (metro)           pQuery = pQuery.ilike('metro_area', `%${metro}%`);
+      if (tier)            pQuery = pQuery.eq('lead_tier', tier);
+      if (industry)        pQuery = pQuery.ilike('industry', `%${industry}%`);
+      if (outreach_status) pQuery = pQuery.eq('outreach_status', outreach_status);
+
+      const { data: fallback, count: fbCount, error: pError } = await pQuery;
+      if (pError) throw pError;
+      leadsRows = fallback || [];
+      total = fbCount || 0;
     }
 
-    // 2. Fetch all campaign data for these prospects in one query
-    const ids = prospects.map(p => p.id);
+    if (!leadsRows || leadsRows.length === 0) {
+      // Legacy table fallback
+      const { data: fallbackProspects } = await sb.from('prospects').select('*').order('created_at', { ascending: false }).limit(limit);
+      if (!fallbackProspects || fallbackProspects.length === 0) {
+        return res.json({ total: 0, limit, page, leads: [] });
+      }
+      return res.json({ total: fallbackProspects.length, limit, page, leads: fallbackProspects });
+    }
+
+    // STEP 3: Fetch all campaign data for the resolved lead set
+    const ids = leadsRows.map(p => p.id);
     const { data: campaigns, error: cError } = await sb
       .from('campaign_enriched_data')
       .select('*')
@@ -567,43 +630,62 @@ app.get('/api/leads', async (req, res) => {
     const nicheMap = {};
     niches.forEach(n => { nicheMap[n.id] = n; });
 
-    // 5. Shape the response to match what the dashboard expects
-    const leads = prospects.map(p => {
+    // 5. Shape the response
+    const leads = leadsRows.map(p => {
       const camp = (campaignMap[p.id] || []).sort((a, b) =>
         new Date(b.created_at) - new Date(a.created_at)
       )[0] || null;
 
+      // In 'leads' table: mega_profile stores the raw_data blob
+      const megaProfileData = p.mega_profile || {};
+      const radarParsed     = megaProfileData.radar_parsed || {};
+
+      // Industry: from field directly or niche map
       const nicheRow = nicheMap[p.niche_id] || {};
-      const industry  = nicheRow.es || nicheRow.en || `Niche ${p.niche_id}`;
-      const rawData   = p.raw_data || {};
+      const industryLabel = p.industry || nicheRow.es || nicheRow.en || 'General Services';
 
-      // Smart score: 85 default, or from raw_data if stored there
-      const score = rawData.radar_parsed?.qualification_score || 85;
+      // Score & tier
+      const score = p.qualification_score || 85;
+      let lead_tier = p.lead_tier || 'WARM';
 
-      // Determine tier
-      let lead_tier = 'WARM';
-      if (score >= 80) lead_tier = 'HOT';
-      else if (score < 65) lead_tier = 'COLD';
+      // Outreach status from campaign or lead directly
+      const outreachStatus = p.outreach_status || camp?.status || 'PENDING';
 
-      // Outreach status from campaign
-      const outreachStatus = camp?.outreach_status || camp?.status || 'PENDING';
-
-      // Build MEGA profile compatible structure from campaign_enriched_data
+      // Build mega_profile for dashboard from campaign data
       let mega_profile = null;
       if (camp) {
-        // Parse "Subject: ...\n\nBody..." format stored in outreach_copy
+        // ── Normalize outreach_copy (handles JSON-wrapped legacy drafts) ──────
+        let rawCopy = camp.outreach_copy || '';
+        if (rawCopy.startsWith('{') || rawCopy.includes('```json')) {
+          try {
+            // Strip markdown code fences
+            const jsonStr = rawCopy.replace(/```json\s*/gi, '').replace(/```\s*/g, '').trim();
+            const parsed  = JSON.parse(jsonStr);
+            // Handle nested {'outreach_copy': {'subject','body'}} or {'outreach_copy': 'string'}
+            const inner = parsed.outreach_copy ?? parsed;
+            if (typeof inner === 'string') {
+              rawCopy = inner;
+            } else if (inner.subject || inner.body) {
+              rawCopy = `Subject: ${inner.subject || ''}\n\n${inner.body || ''}`;
+            } else if (inner.email_body || inner.email) {
+              rawCopy = `Subject: ${inner.subject || ''}\n\n${inner.email_body || inner.email || ''}`;
+            }
+          } catch (_) {
+            // Not valid JSON — use as-is
+          }
+        }
+
         let emailSubject = '';
-        let emailBody = camp.outreach_copy || '';
+        let emailBody    = rawCopy;
         const subjectMatch = emailBody.match(/^Subject:\s*(.+?)(\n|$)/i);
         if (subjectMatch) {
           emailSubject = subjectMatch[1].trim();
-          emailBody = emailBody.replace(/^Subject:\s*.+(\n|$)/i, '').trim();
+          emailBody    = emailBody.replace(/^Subject:\s*.+(\n|$)/i, '').trim();
         }
-
         mega_profile = {
           situational_summary: camp.radiography_technical || '',
           pain_points:         camp.attack_angle || '',
-          sales_strategy:      camp.outreach_copy || '',
+          sales_strategy:      rawCopy,
           outreach: {
             subject:   emailSubject,
             body:      emailBody,
@@ -616,26 +698,30 @@ app.get('/api/leads', async (req, res) => {
       return {
         id:                  p.id,
         business_name:       p.business_name,
-        owner_name:          null,
-        industry,
-        metro_area:          p.city,
-        city:                p.city,
+        owner_name:          p.owner_name || null,
+        industry:            industryLabel,
+        metro_area:          p.metro_area || p.city || 'Unknown',
+        city:                p.metro_area || p.city || 'Unknown',
         rating:              p.rating || 4.5,
-        review_count:        p.reviews_count || p.review_count || 0,
-        reviews_count:       p.reviews_count || p.review_count || 0,
+        review_count:        p.review_count || p.reviews_count || 0,
+        reviews_count:       p.review_count || p.reviews_count || 0,
         qualification_score: score,
-        score:               score,
+        score,
         lead_tier,
         outreach_status:     outreachStatus,
         has_mega_profile:    !!mega_profile,
         mega_profile,
+        // Email draft — use normalized plain text (rawCopy extracted above)
+        email_draft:         (mega_profile?.outreach?.subject ? `Subject: ${mega_profile.outreach.subject}\n\n${mega_profile.outreach.body}` : camp?.outreach_copy) || null,
         phone:               p.phone,
-        email:               camp?.email_sent_at ? 'sent' : null,
+        // leads table has 'email' column (not email_address)
+        email:               p.email || p.email_address || null,
         website:             p.website,
-        google_maps_url:     p.google_maps_url,
-        facebook_url:        rawData.radar_parsed?.facebook_url || null,
-        instagram_url:       rawData.radar_parsed?.instagram_url || null,
-        linkedin_url:        rawData.radar_parsed?.linkedin_url || null,
+        // Social URLs — read directly from leads table columns (set by supabaseUtils.js)
+        google_maps_url:     p.google_maps_url || radarParsed.google_maps_url || null,
+        facebook_url:        p.facebook_url    || radarParsed.facebook_url    || null,
+        instagram_url:       p.instagram_url   || radarParsed.instagram_url   || null,
+        linkedin_url:        p.linkedin_url    || radarParsed.linkedin_url    || null,
         lead_magnet_path:    camp?.lead_magnets_data?.path || null,
         lead_magnet_status:  camp?.lead_magnet_status || null,
         campaign_id:         camp?.id || null,

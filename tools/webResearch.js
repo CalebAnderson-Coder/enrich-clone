@@ -1,9 +1,65 @@
 // ============================================================
 // tools/webResearch.js — Web research tools for agents
-// Uses BrightData or Fetch for real-time web intelligence
+// Uses BrightData → DuckDuckGo → Gemini Grounding fallback chain
 // ============================================================
 
 import { Tool } from '../lib/AgentRuntime.js';
+
+/**
+ * Strategy 3 (last resort): Use Gemini's native Google Search Grounding
+ * to perform a real-time search and return structured results.
+ */
+async function searchWithGeminiGrounding(query, numResults = 5) {
+  const apiKey = process.env.GEMINI_API_KEY;
+  if (!apiKey) throw new Error('GEMINI_API_KEY not set');
+
+  const response = await fetch(
+    `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        contents: [{ parts: [{ text: `Search for: ${query}\n\nReturn a JSON array of ${numResults} results with fields: title, description, url. Only return the JSON array, nothing else.` }] }],
+        tools: [{ google_search: {} }],
+        generationConfig: { temperature: 0.1 },
+      }),
+    }
+  );
+
+  if (!response.ok) {
+    const err = await response.text();
+    throw new Error(`Gemini API error (${response.status}): ${err}`);
+  }
+
+  const data = await response.json();
+  const text = data.candidates?.[0]?.content?.parts?.[0]?.text || '';
+
+  // Try to parse the JSON array from the response
+  const jsonMatch = text.match(/\[[\s\S]*\]/);
+  if (jsonMatch) {
+    try {
+      const results = JSON.parse(jsonMatch[0]);
+      return results.slice(0, numResults);
+    } catch {}
+  }
+
+  // Fallback: extract grounding metadata if direct parse fails
+  const groundingChunks = data.candidates?.[0]?.groundingMetadata?.groundingChunks || [];
+  if (groundingChunks.length > 0) {
+    return groundingChunks.slice(0, numResults).map(c => ({
+      title: c.web?.title || '',
+      description: '',
+      url: c.web?.uri || '',
+    }));
+  }
+
+  // Last resort: return text as single result so agent has SOMETHING to work with
+  if (text.length > 50) {
+    return [{ title: `Gemini search result for: ${query}`, description: text.slice(0, 500), url: '' }];
+  }
+
+  throw new Error('Gemini grounding returned no usable results');
+}
 
 export const searchWeb = new Tool({
   name: 'search_web',
@@ -62,57 +118,64 @@ export const searchWeb = new Tool({
 
       // Strategy 2: DuckDuckGo HTML fallback (no API key needed)
       console.log(`  🦆 [webResearch] Searching via DuckDuckGo for: "${query}"`);
-      const ddgUrl = `https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`;
-      const ddgResponse = await fetch(ddgUrl, {
-        headers: {
-          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-        },
-      });
+      try {
+        const ddgUrl = `https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`;
+        const ddgResponse = await fetch(ddgUrl, {
+          headers: {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+          },
+          signal: AbortSignal.timeout(10000),
+        });
 
-      if (!ddgResponse.ok) {
-        return JSON.stringify({ error: `DuckDuckGo search failed (${ddgResponse.status})` });
-      }
+        if (ddgResponse.ok) {
+          const html = await ddgResponse.text();
+          
+          const results = [];
+          const resultPattern = /<a[^>]+class="result__a"[^>]*href="([^"]*)"[^>]*>(.*?)<\/a>[\s\S]*?<a[^>]+class="result__snippet"[^>]*>(.*?)<\/a>/gi;
+          let match;
+          while ((match = resultPattern.exec(html)) !== null && results.length < num_results) {
+            let url = match[1];
+            const uddgMatch = url.match(/uddg=([^&]+)/);
+            if (uddgMatch) url = decodeURIComponent(uddgMatch[1]);
+            const title = match[2].replace(/<[^>]+>/g, '').trim();
+            const description = match[3].replace(/<[^>]+>/g, '').trim();
+            if (title && url) results.push({ title, description, url });
+          }
+          
+          if (results.length === 0) {
+            const linkPattern = /<a[^>]+class="result__a"[^>]*href="([^"]*)"[^>]*>([\s\S]*?)<\/a>/gi;
+            while ((match = linkPattern.exec(html)) !== null && results.length < num_results) {
+              let url = match[1];
+              const uddgMatch = url.match(/uddg=([^&]+)/);
+              if (uddgMatch) url = decodeURIComponent(uddgMatch[1]);
+              const title = match[2].replace(/<[^>]+>/g, '').trim();
+              if (title && url && url.startsWith('http')) results.push({ title, description: '', url });
+            }
+          }
 
-      const html = await ddgResponse.text();
-      
-      // Parse DuckDuckGo HTML results
-      const results = [];
-      const resultPattern = /<a[^>]+class="result__a"[^>]*href="([^"]*)"[^>]*>(.*?)<\/a>[\s\S]*?<a[^>]+class="result__snippet"[^>]*>(.*?)<\/a>/gi;
-      let match;
-      while ((match = resultPattern.exec(html)) !== null && results.length < num_results) {
-        let url = match[1];
-        // DuckDuckGo wraps URLs in a redirect — extract the real URL
-        const uddgMatch = url.match(/uddg=([^&]+)/);
-        if (uddgMatch) url = decodeURIComponent(uddgMatch[1]);
-        
-        const title = match[2].replace(/<[^>]+>/g, '').trim();
-        const description = match[3].replace(/<[^>]+>/g, '').trim();
-        
-        if (title && url) {
-          results.push({ title, description, url });
-        }
-      }
-      
-      // Simpler fallback parsing if the regex above didn't match
-      if (results.length === 0) {
-        const linkPattern = /<a[^>]+class="result__a"[^>]*href="([^"]*)"[^>]*>([\s\S]*?)<\/a>/gi;
-        while ((match = linkPattern.exec(html)) !== null && results.length < num_results) {
-          let url = match[1];
-          const uddgMatch = url.match(/uddg=([^&]+)/);
-          if (uddgMatch) url = decodeURIComponent(uddgMatch[1]);
-          const title = match[2].replace(/<[^>]+>/g, '').trim();
-          if (title && url && url.startsWith('http')) {
-            results.push({ title, description: '', url });
+          if (results.length > 0) {
+            console.log(`  ✅ [webResearch] DuckDuckGo returned ${results.length} results`);
+            return JSON.stringify({ results });
           }
         }
+      } catch (ddgErr) {
+        console.log(`  ⚠️ [webResearch] DuckDuckGo failed: ${ddgErr.message}`);
       }
 
-      if (results.length === 0) {
-        return JSON.stringify({ error: "No results found for query across all search providers." });
+      // Strategy 3: Gemini Google Search Grounding (most reliable, uses Gemini key we already have)
+      console.log(`  🤖 [webResearch] Using Gemini Search Grounding for: "${query}"`);
+      try {
+        const geminiResults = await searchWithGeminiGrounding(query, num_results);
+        if (geminiResults && geminiResults.length > 0) {
+          console.log(`  ✅ [webResearch] Gemini Grounding returned ${geminiResults.length} results`);
+          return JSON.stringify({ results: geminiResults });
+        }
+      } catch (geminiErr) {
+        console.log(`  ⚠️ [webResearch] Gemini Grounding failed: ${geminiErr.message}`);
       }
 
-      console.log(`  ✅ [webResearch] DuckDuckGo returned ${results.length} results`);
-      return JSON.stringify({ results });
+      return JSON.stringify({ error: "No results found for query across all search providers." });
+
     } catch (err) {
       return `Search failed: ${err.message}`;
     }
@@ -133,13 +196,11 @@ export const fetchPage = new Tool({
     let { url } = args;
 
     try {
-      // 1. Limpieza básica de la URL
       url = url.trim();
       if (!url.startsWith('http://') && !url.startsWith('https://')) {
         url = 'https://' + url;
       }
 
-      // Validar si la URL tiene un formato aceptable
       try {
         new URL(url);
       } catch (e) {
@@ -170,7 +231,6 @@ export const fetchPage = new Tool({
       
       if (data.success && data.data && data.data.markdown) {
         const markdown = data.data.markdown.trim();
-        // Ampliamos el límite porque Markdown limpio es denso en contexto
         return markdown.slice(0, 8000); 
       } else {
         return 'Page content could not be extracted by Firecrawl.';

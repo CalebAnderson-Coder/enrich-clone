@@ -76,23 +76,30 @@ export async function saveProspect(prospectData) {
       phone: prospectData.phone || '',
       rating: prospectData.rating || 0,
       review_count: prospectData.reviews_count || prospectData.review_count || 0,
-      google_maps_url: prospectData.raw_data?.radar_parsed?.google_maps_url || null,
-      facebook_url: prospectData.raw_data?.radar_parsed?.facebook_url || null,
-      instagram_url: prospectData.raw_data?.radar_parsed?.instagram_url || null,
-      linkedin_url: prospectData.raw_data?.radar_parsed?.linkedin_url || null,
+      // Social URLs: read from nested raw_data.radar_parsed OR top-level fields directly
+      google_maps_url: prospectData.raw_data?.radar_parsed?.google_maps_url
+                      || prospectData.google_maps_url || null,
+      facebook_url:   prospectData.raw_data?.radar_parsed?.facebook_url
+                      || prospectData.facebook_url || null,
+      instagram_url:  prospectData.raw_data?.radar_parsed?.instagram_url
+                      || prospectData.instagram_url || null,
+      linkedin_url:   prospectData.raw_data?.radar_parsed?.linkedin_url
+                      || prospectData.linkedin_url || null,
       mega_profile: prospectData.raw_data || {},
-      metro_area: prospectData.city || 'Desconocido',
+      metro_area: prospectData.metro_area || prospectData.city || 'Desconocido',
       industry: prospectData.industry || 'Servicios',
       qualification_score: prospectData.qualification_score || 0,
       lead_tier: prospectData.lead_tier || 'COLD',
-      email_address: prospectData.email_address || null
+      email_address: prospectData.email_address || prospectData.email || null
     };
 
     let safePayload;
     try {
         safePayload = leadSchema.parse(leadPayload);
     } catch (e) {
-        console.error("❌ Zod Validation Error en saveProspect:", e.errors);
+        // Zod v4 uses e.issues; fallback to e.errors for v3 compatibility
+        const zodErrors = e.issues || e.errors || e.message;
+        console.error("❌ Zod Validation Error en saveProspect:", JSON.stringify(zodErrors, null, 2));
         return null;
     }
 
@@ -139,7 +146,8 @@ export async function saveCampaignData(campaignData) {
     try {
         safePayload = campaignDataSchema.parse(campaignPayload);
     } catch (e) {
-        console.error("❌ Zod Validation Error en saveCampaignData:", e.errors);
+        const zodErrors = e.issues || e.errors || e.message;
+        console.error("❌ Zod Validation Error en saveCampaignData:", JSON.stringify(zodErrors, null, 2));
         return null;
     }
 
