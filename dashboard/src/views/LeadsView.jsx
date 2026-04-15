@@ -221,14 +221,17 @@ export default function LeadsView() {
             const resumen = campaignData?.radiography_technical || rawMega.situational_summary || `Evaluando el potencial digital de ${lead.business_name}...`;
             const puntosDolor = campaignData?.attack_angle || rawMega.pain_points || `Identificando ineficiencias en el embudo actual de ${lead.business_name}...`;
             
-            // Clean up agent error messages for display
-            let rawEstrategia = campaignData?.outreach_copy || rawMega.strategic_recommendation || '';
-            const isAgentError = rawEstrategia.toLowerCase().includes('max iterations') 
-              || rawEstrategia.toLowerCase().includes('agent encountered an error')
-              || rawEstrategia.toLowerCase().includes('without a final response');
-            const estrategia = isAgentError 
-              ? '⏳ Angela no pudo completar la propuesta. Usa "Revisar Outreach" para regenerar manualmente.'
-              : (rawEstrategia || `Angela está diseñando la propuesta personalizada para este prospecto.`);
+            // Strategy for card display: strategic recommendation (NOT the email draft, NOT the attack_angle which is shown above)
+            let rawEstrategia = rawMega.strategic_recommendation || '';
+            
+            // Check if the outreach email draft is ready (for status indicator)
+            const outreachCopy = campaignData?.outreach_copy || '';
+            const hasEmailDraft = outreachCopy.length > 50 
+              && !outreachCopy.toLowerCase().includes('max iterations')
+              && !outreachCopy.toLowerCase().includes('agent encountered');
+            
+            const estrategia = rawEstrategia 
+              || (hasEmailDraft ? 'Propuesta lista para revisión ↓' : `Angela está diseñando la propuesta personalizada para este prospecto.`);
 
             // Lead magnet image (if assigned by lead_magnet_worker)
             const magnetData = campaignData?.lead_magnets_data || {};
@@ -301,6 +304,12 @@ export default function LeadsView() {
 
                     <h5 className="green">Estrategia de Venta:</h5>
                     <p>{estrategia}</p>
+                    
+                    {hasEmailDraft && (
+                      <p style={{ color: '#10b981', fontSize: '0.8rem', marginTop: '8px', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                        ✉️ Email draft listo — haz click en "Revisar Outreach" para ver y editar
+                      </p>
+                    )}
                   </div>
                 </div>
 
