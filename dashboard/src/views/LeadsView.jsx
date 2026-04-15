@@ -27,12 +27,35 @@ export default function LeadsView() {
     return () => clearInterval(interval);
   }, []);
 
-  // Determine lead status from campaign data
-  const getLeadStatus = (campaignData) => {
-    if (!campaignData) return 'pendiente';
-    if (campaignData.outreach_status === 'REJECTED') return 'rechazado';
-    if (campaignData.outreach_status === 'APPROVED' || campaignData.outreach_status === 'SENT' || campaignData.email_sent_at) return 'enviado';
-    return 'pendiente';
+  // Strip markdown fences and extract clean readable text from AI-generated fields
+  const cleanText = (raw) => {
+    if (!raw || typeof raw !== 'string') return raw;
+    // Remove markdown code fences like ```json ... ``` or ``` ... ```
+    let cleaned = raw.replace(/```json\s*/gi, '').replace(/```\s*/g, '').trim();
+    // If the remaining text looks like a JSON object, try to extract meaningful string
+    if (cleaned.startsWith('{')) {
+      try {
+        const parsed = JSON.parse(cleaned);
+        const val = parsed.attack_angle || parsed.summary || parsed.radiography_technical
+          || parsed.text || Object.values(parsed).find(v => typeof v === 'string' && v.length > 20);
+        if (val) cleaned = val.trim();
+      } catch (_) { /* keep cleaned as-is */ }
+    }
+    return cleaned;
+  };
+
+  // Determine lead status from campaign data + email draft availability
+  // "pendiente" = ONLY when there is a valid English draft ready for client approval
+  // "procesando" = agents still working (no draft yet)
+  const getLeadStatus = (campaignData, emailDraft) => {
+    if (campaignData?.outreach_status === 'REJECTED') return 'rechazado';
+    if (campaignData?.outreach_status === 'APPROVED' || campaignData?.outreach_status === 'SENT' || campaignData?.email_sent_at) return 'enviado';
+    const draft = emailDraft || '';
+    const isValidDraft = draft.length > 50
+      && !draft.toLowerCase().includes('max iterations')
+      && !draft.toLowerCase().includes('agent encountered')
+      && !draft.toLowerCase().includes('error');
+    return isValidDraft ? 'pendiente' : 'procesando';
   };
 
   const fetchLeads = async () => {
@@ -111,7 +134,7 @@ export default function LeadsView() {
           campaign_enriched_data: campArray,
           outreach_status: lead.outreach_status || camp?.outreach_status || null,
           email_draft: emailDraft,
-          _status: getLeadStatus(camp),
+          _status: getLeadStatus(camp, emailDraft),
         };
       });
 
@@ -357,8 +380,8 @@ export default function LeadsView() {
             if (rawMega?.meta_ads && rawMega.meta_ads.hasActiveAds === false) hasAdsIndicator = "No";
             if (rawMega?.meta_ads && rawMega.meta_ads.hasActiveAds === true) hasAdsIndicator = "Sí";
             
-            const resumen = campaignData?.radiography_technical || rawMega.situational_summary || `Evaluando el potencial digital de ${lead.business_name}...`;
-            const puntosDolor = campaignData?.attack_angle || rawMega.pain_points || `Identificando ineficiencias en el embudo actual de ${lead.business_name}...`;
+            const resumen = cleanText(campaignData?.radiography_technical || rawMega.situational_summary) || `Evaluando el potencial digital de ${lead.business_name}...`;
+            const puntosDolor = cleanText(campaignData?.attack_angle || rawMega.pain_points) || `Identificando ineficiencias en el embudo actual de ${lead.business_name}...`;
             
             // Strategy for card display: strategic recommendation (NOT the email draft, NOT the attack_angle which is shown above)
             let rawEstrategia = rawMega.strategic_recommendation || '';
