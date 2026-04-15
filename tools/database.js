@@ -6,6 +6,7 @@
 import { Tool } from '../lib/AgentRuntime.js';
 import { supabase } from '../lib/supabase.js';
 import { saveLeadInputSchema, megaProfileInputSchema } from '../lib/schemas.js';
+import { isDomainReachable, extractDomain } from '../lib/domainValidator.js';
 
 import fs from 'fs-extra';
 import path from 'path';
@@ -82,6 +83,46 @@ export const saveLead = new Tool({
     required: ['business_name', 'metro_area', 'qualification_score', 'lead_tier'],
   },
   fn: async (args) => {
+    // ── GATE: Domain Validation ─────────────────────────────
+    // Reject leads with fabricated/unreachable domains before saving
+    if (args.website) {
+      const reachability = await isDomainReachable(args.website, 5000);
+      if (!reachability.reachable) {
+        console.log(`  🚫 [GATE] Domain unreachable: ${args.website} — ${reachability.error || `HTTP ${reachability.statusCode}`}. Lead REJECTED.`);
+        return JSON.stringify({
+          success: false,
+          rejected: true,
+          reason: 'DOMAIN_UNREACHABLE',
+          detail: reachability.error || `HTTP ${reachability.statusCode}`,
+          business_name: args.business_name,
+        });
+      }
+    }
+
+    // ── GATE: Dedup by Website URL ──────────────────────────
+    // Prevent duplicates by domain (not just business_name)
+    if (args.website && supabase) {
+      const domain = extractDomain(args.website);
+      if (domain) {
+        const { data: existing } = await supabase
+          .from('leads')
+          .select('id, business_name')
+          .ilike('website', `%${domain}%`)
+          .limit(1);
+
+        if (existing && existing.length > 0) {
+          console.log(`  🔄 [DEDUP] Domain ${domain} already exists as "${existing[0].business_name}" (id: ${existing[0].id}). Lead SKIPPED.`);
+          return JSON.stringify({
+            success: false,
+            rejected: true,
+            reason: 'DUPLICATE_DOMAIN',
+            existing_id: existing[0].id,
+            existing_name: existing[0].business_name,
+          });
+        }
+      }
+    }
+
     const leadData = {
       business_name: args.business_name,
       owner_name: args.owner_name || null,

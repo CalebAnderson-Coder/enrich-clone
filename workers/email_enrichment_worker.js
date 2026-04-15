@@ -259,6 +259,35 @@ async function enrichLead(lead) {
   // Domain-match filter (reject unrelated emails like service@atom.com)
   allEmails = filterByDomain(allEmails, base);
 
+  // 5) ★ HUNTER.IO FALLBACK — Professional API enrichment
+  if (allEmails.length === 0 && process.env.HUNTER_API_KEY) {
+    console.log(`    🔎 Trying Hunter.io API enrichment...`);
+    try {
+      const { enrichLeadWithHunter } = await import('../tools/hunterEnrichment.js');
+      const hunterResult = await enrichLeadWithHunter({
+        website: base,
+        contact_name: lead.owner_name || lead.contact_name || null,
+      });
+
+      if (hunterResult.email) {
+        allEmails.push(hunterResult.email);
+        console.log(`    🎯 Hunter.io found: ${hunterResult.email} (${hunterResult.confidence}% confidence, via ${hunterResult.source})`);
+
+        // Update contact name if Hunter discovered one
+        if (hunterResult.contactName && supabase) {
+          await supabase
+            .from('leads')
+            .update({ owner_name: hunterResult.contactName })
+            .eq('id', id);
+        }
+      } else {
+        console.log(`    ❌ Hunter.io: no email found`);
+      }
+    } catch (hunterErr) {
+      console.log(`    ⚠️ Hunter.io error: ${hunterErr.message}`);
+    }
+  }
+
   if (allEmails.length === 0) {
     console.log(`    ❌ No email found for ${business_name}`);
     return { id, business_name, status: 'NO_EMAIL_FOUND' };
@@ -325,7 +354,8 @@ async function main() {
   console.log(`\n📊 Total leads without email: ${leads.length}`);
   console.log(`📊 Enrichable (have website): ${enrichable.length}`);
   console.log(`📊 Batch size: ${BATCH_SIZE} | Delay: ${DELAY_MS}ms`);
-  console.log(`📊 Firecrawl API: ${FIRECRAWL_API_KEY ? '✅ configured' : '❌ missing'}\n`);
+  console.log(`📊 Firecrawl API: ${FIRECRAWL_API_KEY ? '✅ configured' : '❌ missing'}`);
+  console.log(`📊 Hunter.io API: ${process.env.HUNTER_API_KEY ? '✅ configured (fallback active)' : '⏭️ not configured (skipping)'}\n`);
 
   const results = {
     enriched: 0,
