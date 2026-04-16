@@ -26,6 +26,7 @@ import { processIdleMagnets } from './lead_magnet_worker.js';
 import { startTranscriptionWorker } from './workers/transcription_worker.js';
 import { dispatchPendingOutreach } from './outreach_dispatcher.js';
 import { runEmailEnrichment } from './workers/email_enrichment_worker.js';
+import { startManagerDaemon } from './agents/manager-daemon.js';
 
 
 import path from 'path';
@@ -1083,6 +1084,10 @@ setInterval(async () => {
 }, 6 * 60 * 60_000);
 
 startTranscriptionWorker();
+
+if (process.env.MANAGER_DAEMON_ENABLED !== 'false') {
+  startManagerDaemon();
+}
 
 // ============================================================
 // 4. Serve Frontend & Start Server
