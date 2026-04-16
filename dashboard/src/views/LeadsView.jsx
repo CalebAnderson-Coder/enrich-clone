@@ -1,9 +1,10 @@
 import React, { useState, useEffect } from 'react';
 import './LeadsView.css';
-import { supabase } from '../supabaseClient';
 import OutreachReviewModal from '../components/OutreachReviewModal';
 
 const API_BASE_URL = import.meta.env.VITE_API_URL || (import.meta.env.PROD ? '/api' : 'http://localhost:4000/api');
+const API_SECRET   = import.meta.env.VITE_API_SECRET_KEY;
+const authHeaders  = () => ({ 'Authorization': `Bearer ${API_SECRET}` });
 
 export default function LeadsView() {
   const [leads, setLeads] = useState([]);
@@ -60,39 +61,16 @@ export default function LeadsView() {
 
   const fetchLeads = async () => {
     try {
-      if (!supabase) {
-        console.warn('Supabase no configurado en frontend.');
-        if (loading) setLoading(false);
+      const res = await fetch(`${API_BASE_URL}/leads?limit=500`, { headers: authHeaders() });
+      if (!res.ok) {
+        console.error(`Error fetching /api/leads: ${res.status}`);
         return;
       }
+      const payload = await res.json();
+      const backendLeads = payload.leads || [];
 
-      // ✅ Read from LEADS table (149 records) — the real source of truth
-      // campaign_enriched_data.prospect_id references leads.id
-      const [leadsRes, campaignsRes] = await Promise.all([
-        supabase
-          .from('leads')
-          .select('*')
-          .order('created_at', { ascending: false }),
-        supabase
-          .from('campaign_enriched_data')
-          .select('*'),
-      ]);
-
-      if (leadsRes.error) {
-        console.error('Error supabase leads:', leadsRes.error);
-        return;
-      }
-
-      // Build lookup: prospect_id (= leads.id) → campaign rows
-      const campaignsByLead = {};
-      (campaignsRes.data || []).forEach(c => {
-        const key = c.prospect_id; // prospect_id references leads.id
-        if (!campaignsByLead[key]) campaignsByLead[key] = [];
-        campaignsByLead[key].push(c);
-      });
-
-      const joinedLeads = (leadsRes.data || []).map(lead => {
-        const campArray = campaignsByLead[lead.id] || [];
+      const joinedLeads = backendLeads.map(lead => {
+        const campArray = lead.campaign_enriched_data || [];
         const camp = campArray[0] || null;
         const mega = lead.mega_profile || {};
 
@@ -199,10 +177,7 @@ export default function LeadsView() {
     try {
       const response = await fetch(`${API_BASE_URL}/leads/${leadId}/regenerate-outreach`, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${import.meta.env.VITE_API_SECRET_KEY}`
-        },
+        headers: { 'Content-Type': 'application/json', ...authHeaders() },
         body: JSON.stringify({ notes: agentNotes })
       });
       const data = await response.json();
@@ -215,19 +190,16 @@ export default function LeadsView() {
 
   const handleSaveOutreach = async (leadId, outreachData) => {
     try {
-      // Update campaign_enriched_data with the draft
-      const campaignId = selectedLead?.campaign_enriched_data?.[0]?.id;
-      if (campaignId) {
-        const { error } = await supabase
-          .from('campaign_enriched_data')
-          .update({
-            outreach_status: 'DRAFT',
-            outreach_copy: `Subject: ${outreachData.subject}\n\n${outreachData.body}`,
-          })
-          .eq('id', campaignId);
-        if (error) throw error;
-      }
-      
+      const response = await fetch(`${API_BASE_URL}/leads/${leadId}/outreach`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...authHeaders() },
+        body: JSON.stringify({
+          outreach: outreachData,
+          status: 'DRAFT'
+        })
+      });
+      if (!response.ok) throw new Error(`Save draft failed: ${response.status}`);
+
       setIsModalOpen(false);
       fetchLeads();
     } catch (err) {
@@ -240,10 +212,7 @@ export default function LeadsView() {
     try {
       const response = await fetch(`${API_BASE_URL}/leads/${leadId}/outreach`, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${import.meta.env.VITE_API_SECRET_KEY}`
-        },
+        headers: { 'Content-Type': 'application/json', ...authHeaders() },
         body: JSON.stringify({
           outreach: outreachData,
           status: 'APPROVED'
@@ -264,10 +233,7 @@ export default function LeadsView() {
     try {
       const response = await fetch(`${API_BASE_URL}/leads/${leadId}/outreach`, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${import.meta.env.VITE_API_SECRET_KEY}`
-        },
+        headers: { 'Content-Type': 'application/json', ...authHeaders() },
         body: JSON.stringify({
           outreach: selectedLead?.mega_profile?.outreach || {},
           status: 'REJECTED',

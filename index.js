@@ -651,17 +651,17 @@ app.get('/api/leads', async (req, res) => {
       // Outreach status from campaign or lead directly
       const outreachStatus = p.outreach_status || camp?.status || 'PENDING';
 
-      // Build mega_profile for dashboard from campaign data
-      let mega_profile = null;
+      // Synth a minimal outreach envelope (used only to shape email_draft below).
+      // The raw DB mega_profile (with strategic_recommendation, meta_ads,
+      // radar_parsed, etc.) is returned unmodified to the dashboard.
+      let synthOutreachSubject = '';
+      let synthOutreachBody    = '';
       if (camp) {
-        // ── Normalize outreach_copy (handles JSON-wrapped legacy drafts) ──────
         let rawCopy = camp.outreach_copy || '';
         if (rawCopy.startsWith('{') || rawCopy.includes('```json')) {
           try {
-            // Strip markdown code fences
             const jsonStr = rawCopy.replace(/```json\s*/gi, '').replace(/```\s*/g, '').trim();
             const parsed  = JSON.parse(jsonStr);
-            // Handle nested {'outreach_copy': {'subject','body'}} or {'outreach_copy': 'string'}
             const inner = parsed.outreach_copy ?? parsed;
             if (typeof inner === 'string') {
               rawCopy = inner;
@@ -670,29 +670,14 @@ app.get('/api/leads', async (req, res) => {
             } else if (inner.email_body || inner.email) {
               rawCopy = `Subject: ${inner.subject || ''}\n\n${inner.email_body || inner.email || ''}`;
             }
-          } catch (_) {
-            // Not valid JSON — use as-is
-          }
+          } catch (_) { /* not JSON */ }
         }
-
-        let emailSubject = '';
-        let emailBody    = rawCopy;
-        const subjectMatch = emailBody.match(/^Subject:\s*(.+?)(\n|$)/i);
+        synthOutreachBody = rawCopy;
+        const subjectMatch = synthOutreachBody.match(/^Subject:\s*(.+?)(\n|$)/i);
         if (subjectMatch) {
-          emailSubject = subjectMatch[1].trim();
-          emailBody    = emailBody.replace(/^Subject:\s*.+(\n|$)/i, '').trim();
+          synthOutreachSubject = subjectMatch[1].trim();
+          synthOutreachBody    = synthOutreachBody.replace(/^Subject:\s*.+(\n|$)/i, '').trim();
         }
-        mega_profile = {
-          situational_summary: camp.radiography_technical || '',
-          pain_points:         camp.attack_angle || '',
-          sales_strategy:      rawCopy,
-          outreach: {
-            subject:   emailSubject,
-            body:      emailBody,
-            whatsapp:  '',
-            instagram: '',
-          },
-        };
       }
 
       return {
@@ -709,10 +694,9 @@ app.get('/api/leads', async (req, res) => {
         score,
         lead_tier,
         outreach_status:     outreachStatus,
-        has_mega_profile:    !!mega_profile,
-        mega_profile,
-        // Email draft — use normalized plain text (rawCopy extracted above)
-        email_draft:         (mega_profile?.outreach?.subject ? `Subject: ${mega_profile.outreach.subject}\n\n${mega_profile.outreach.body}` : camp?.outreach_copy) || null,
+        has_mega_profile:    !!(p.mega_profile),
+        mega_profile:        p.mega_profile || null,
+        email_draft:         (synthOutreachSubject ? `Subject: ${synthOutreachSubject}\n\n${synthOutreachBody}` : camp?.outreach_copy) || null,
         phone:               p.phone,
         // leads table has 'email' column (not email_address)
         email:               p.email || p.email_address || null,
