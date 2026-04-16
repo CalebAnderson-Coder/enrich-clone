@@ -90,7 +90,11 @@ export async function dispatchPendingOutreach() {
         id,
         business_name,
         industry,
-        email_address
+        metro_area,
+        email_address,
+        phone,
+        instagram_url,
+        facebook_url
       )
     `)
     .eq('lead_magnet_status', 'COMPLETED')
@@ -118,12 +122,19 @@ export async function dispatchPendingOutreach() {
     const lead       = record.leads;
     const magnetData = record.lead_magnets_data;
 
-    // Guard: skip if no email address
-    if (!lead?.email_address) {
-      logger.warn('Lead missing email_address — SKIP', { business: lead?.business_name });
+    // Identify available outreach channels (email + alt channels: phone/IG/FB)
+    const hasEmail = Boolean(lead?.email_address);
+    const hasPhone = Boolean(lead?.phone);
+    const hasIG    = Boolean(lead?.instagram_url);
+    const hasFB    = Boolean(lead?.facebook_url);
+    const hasAltChannel = hasPhone || hasIG || hasFB;
+
+    // Skip only if the lead has NO reachable channel at all
+    if (!hasEmail && !hasAltChannel) {
+      logger.warn('Lead has no contact channel — SKIP', { business: lead?.business_name });
       await supabase
         .from('campaign_enriched_data')
-        .update({ outreach_status: 'SKIPPED_NO_EMAIL' })
+        .update({ outreach_status: 'SKIPPED_NO_CONTACT' })
         .eq('id', record.id);
       stats.skipped++;
       continue;
@@ -213,41 +224,55 @@ IMPORTANTE: Escribe TODO en ESPAÑOL. Devuelve SOLO un objeto JSON:
         }
       }
 
-      // ── 3. Render HTML email (pre-render only, no send) ───
-      const { subject, html, attachments } = renderMagnetEmail(magnetData, lead, { angelaSubject, angelaBody });
+      // ── 3. Render output: email path OR phone/social path ─
+      if (hasEmail) {
+        // Email path — pre-render HTML, save as DRAFT
+        const { subject, html, attachments } = renderMagnetEmail(magnetData, lead, { angelaSubject, angelaBody });
+        logger.info('Pre-rendered email', { to: lead.email_address, business: lead.business_name, type: magnetData.magnet_type });
 
-      logger.info('Pre-rendered email', { to: lead.email_address, business: lead.business_name, type: magnetData.magnet_type });
+        const attachmentMeta = attachments.map(a => ({
+          filename: a.filename,
+          path: a.path,
+          cid: a.cid,
+        }));
 
-      // ── 4. Save draft to Supabase for client preview ──────
-      const attachmentMeta = attachments.map(a => ({
-        filename: a.filename,
-        path: a.path,
-        cid: a.cid,
-      }));
+        magnetData.approval_status = 'DRAFT';
+        magnetData.email_draft_subject = subject;
+        magnetData.email_draft_html = html;
+        magnetData.email_attachments = attachmentMeta.length > 0 ? attachmentMeta : null;
 
-      magnetData.approval_status = 'DRAFT';
-      magnetData.email_draft_subject = subject;
-      magnetData.email_draft_html = html;
-      magnetData.email_attachments = attachmentMeta.length > 0 ? attachmentMeta : null;
+        await supabase
+          .from('campaign_enriched_data')
+          .update({ outreach_status: 'DRAFT', lead_magnets_data: magnetData })
+          .eq('id', record.id);
+        await supabase
+          .from('leads')
+          .update({ outreach_status: 'DRAFT' })
+          .eq('id', lead.id);
 
-      // Update the campaign table
-      await supabase
-        .from('campaign_enriched_data')
-        .update({
-          outreach_status: 'DRAFT',
-          lead_magnets_data: magnetData
-        })
-        .eq('id', record.id);
+        logger.info('Draft saved — ready for approval', { business: lead.business_name });
+      } else {
+        // Phone/social path — no email to render, queue for manual outreach
+        magnetData.approval_status = 'DRAFT_PHONE';
+        magnetData.outreach_channels = {
+          phone:     lead.phone || null,
+          instagram: lead.instagram_url || null,
+          facebook:  lead.facebook_url || null,
+        };
+        // Carry Angela's whatsapp copy (set earlier when magnet_type=website_screenshot)
+        // If absent, the human team calls with their own script using magnetData context.
 
-      // Update the leads table to reflect status in the main dashboard UI
-      await supabase
-        .from('leads')
-        .update({
-          outreach_status: 'DRAFT'
-        })
-        .eq('id', lead.id);
+        await supabase
+          .from('campaign_enriched_data')
+          .update({ outreach_status: 'DRAFT_PHONE', lead_magnets_data: magnetData })
+          .eq('id', record.id);
+        await supabase
+          .from('leads')
+          .update({ outreach_status: 'DRAFT_PHONE' })
+          .eq('id', lead.id);
 
-      logger.info('Draft saved — ready for approval', { business: lead.business_name });
+        logger.info('Phone/social draft saved — call-sheet ready', { business: lead.business_name, phone: lead.phone });
+      }
       stats.rendered++;
 
     } catch (err) {

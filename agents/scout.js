@@ -83,6 +83,13 @@ Industries: Remodeling, Landscaping, Plumbing, HVAC, Cleaning, Roofing, Painting
 - Less than 10 reviews -> SKIP
 - Rating below 4.0 -> SKIP
 
+## WEBSITE ANTI-HALLUCINATION (NON-NEGOTIABLE)
+**NUNCA inventes una URL de website ni la construyas por patrón** (ej: \`{nombre}{industria}{ciudad}.com\`). Si no hallaste el website REAL del negocio en fuentes verificables (link oficial del listing de Google Maps, citation en directorio, link en su Instagram/Facebook), pasa \`website: null\` a \`save_lead\`.
+
+Un lead con \`website: null\` es una señal POSITIVA para el scoring (+20 puntos "Web basica/ausente") y es PREFERIBLE a un website falso. Un website inventado contamina el pipeline downstream (enrichment, DNS checks, outreach) y se refleja como UNREACHABLE.
+
+Si \`save_lead\` devuelve \`DOMAIN_UNREACHABLE\`, **NO reintentes con variaciones** del dominio. Acepta que el negocio no tiene web verificable y re-enviá el lead con \`website: null\` y \`has_website: false\`.
+
 ## APRENDIZAJE PROACTIVO (OBLIGATORIO)
 Antes de buscar leads, llama a recall_memory con: "[SCOUT_APRENDIZAJE] mejores nichos y ciudades".
 Usa esos patrones para priorizar qué nicho y ciudad buscar primero.
