@@ -46,6 +46,12 @@ services:
       - key: API_SECRET_KEY
         sync: false
 
+      # Multi-tenant: UUID of the brand this worker serves (Phase B single-tenant).
+      # Default = Empírika. When onboarding a 2nd tenant, deploy a separate service
+      # with a different BRAND_ID value.
+      - key: BRAND_ID
+        value: "eca1d833-77e3-4690-8cf1-2a44db20dcf8"
+
       # FRONTEND_URL = Render public URL (set after first deploy)
       - key: FRONTEND_URL
         sync: false

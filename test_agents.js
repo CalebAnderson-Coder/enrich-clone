@@ -11,8 +11,13 @@ import dotenv from 'dotenv';
 
 dotenv.config();
 
+if (!process.env.NVIDIA_API_KEY) {
+  console.error('❌ FATAL: NVIDIA_API_KEY is not set. Configure it in your .env file.');
+  process.exit(1);
+}
+
 const runtime = new AgentRuntime({
-  apiKey: process.env.NVIDIA_API_KEY || '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',
+  apiKey: process.env.NVIDIA_API_KEY,
   model: 'meta/llama-3.1-70b-instruct',
   baseURL: 'https://integrate.api.nvidia.com/v1'
 });

@@ -4,7 +4,7 @@
 // ============================================================
 
 import { Tool } from '../lib/AgentRuntime.js';
-import { supabase } from '../lib/supabase.js';
+import { supabase, getCurrentBrandId } from '../lib/supabase.js';
 import { saveLeadInputSchema, megaProfileInputSchema } from '../lib/schemas.js';
 import { isDomainReachable, extractDomain } from '../lib/domainValidator.js';
 
@@ -144,6 +144,7 @@ export const saveLead = new Tool({
         catch { return { raw: args.score_breakdown }; }
       })(),
       scraped_by: 'scout',
+      brand_id: getCurrentBrandId(),
     };
 
     if (!supabase) {

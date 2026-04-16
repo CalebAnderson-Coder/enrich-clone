@@ -207,8 +207,11 @@ export const fetchPage = new Tool({
         return `Error: URL inválida proporcionada (${url}).`;
       }
 
-      const apiKey = process.env.FIRECRAWL_API_KEY || 'fc-eac1599ed25044feb68df593f82e6a32';
-      
+      const apiKey = process.env.FIRECRAWL_API_KEY;
+      if (!apiKey) {
+        return 'Error: FIRECRAWL_API_KEY is not configured in the environment.';
+      }
+
       console.log(`  🌐 [webResearch] Scraping website with Firecrawl: ${url}`);
       const response = await fetch('https://api.firecrawl.dev/v1/scrape', {
         method: 'POST',

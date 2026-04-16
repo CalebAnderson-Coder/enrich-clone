@@ -36,9 +36,19 @@ build/
 **/yarn-error.log*
 
 # Project specific
-enrich-dashboard/node_modules/
-enrich-dashboard/.env
-enrich-dashboard/.env.local
 output/
 reports/
 temp_skills_analysis/
+
+# Archived / abandoned code (kept as historical reference, but node_modules + secrets not tracked)
+_archive/**/node_modules/
+_archive/**/.env
+_archive/**/.env.*
+_archive/**/dist/
+_archive/**/build/
+
+# Local runtime artifacts (ran from repo root)
+*_state.json
+campaign_output.txt
+scraped_*.txt
+scraped_*.html

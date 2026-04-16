@@ -10,7 +10,11 @@ dotenv.config();
 import { supabase } from '../lib/supabase.js';
 
 // ── Config ───────────────────────────────────────────────────
-const FIRECRAWL_API_KEY = process.env.FIRECRAWL_API_KEY || 'fc-eac1599ed25044feb68df593f82e6a32';
+const FIRECRAWL_API_KEY = process.env.FIRECRAWL_API_KEY;
+if (!FIRECRAWL_API_KEY) {
+  console.error('❌ FATAL: FIRECRAWL_API_KEY is not set. Configure it in your environment.');
+  process.exit(1);
+}
 const BATCH_SIZE = 10;      // leads per batch
 const DELAY_MS  = 1500;     // delay between scrapes (rate limiting)
 const MAX_LEADS = parseInt(process.env.ENRICHMENT_MAX_LEADS || '500', 10);

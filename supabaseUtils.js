@@ -9,6 +9,7 @@ const supabaseKey = supabaseService || supabaseAnon;
 export const supabase = supabaseUrl ? createClient(supabaseUrl, supabaseKey) : null;
 
 import { leadSchema, campaignDataSchema } from './lib/schemas.js';
+import { getCurrentBrandId } from './lib/supabase.js';
 
 /**
  * Creates a new marketing job in the async job queue.
@@ -103,9 +104,12 @@ export async function saveProspect(prospectData) {
         return null;
     }
 
+    // Tenant scoping — injected AFTER schema parse (schema uses .strip())
+    const rowToInsert = { ...safePayload, brand_id: getCurrentBrandId() };
+
     const { data, error } = await supabase
         .from('leads')
-        .insert([safePayload])
+        .insert([rowToInsert])
         .select();
     
     if(error) {
@@ -151,7 +155,10 @@ export async function saveCampaignData(campaignData) {
         return null;
     }
 
-    const campaignResult = await supabase.from('campaign_enriched_data').insert([safePayload]).select();
+    // Tenant scoping — injected AFTER schema parse (schema uses .strip())
+    const rowToInsert = { ...safePayload, brand_id: getCurrentBrandId() };
+
+    const campaignResult = await supabase.from('campaign_enriched_data').insert([rowToInsert]).select();
     
     if (campaignResult.error) {
         console.error("Error saving campaign enriched data into campaign_enriched_data", campaignResult.error);

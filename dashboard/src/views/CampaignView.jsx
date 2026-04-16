@@ -19,7 +19,9 @@ export default function CampaignView() {
 
   const fetchJobs = async () => {
     try {
-      const res = await fetch(`${API_BASE}/jobs`);
+      const res = await fetch(`${API_BASE}/jobs`, {
+        headers: { 'Authorization': `Bearer ${import.meta.env.VITE_API_SECRET_KEY}` }
+      });
       if (res.ok) {
         const data = await res.json();
         setJobs(data.jobs || []);
@@ -46,7 +48,10 @@ export default function CampaignView() {
     try {
       const res = await fetch(`${API_BASE}/campaign/pipeline`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${import.meta.env.VITE_API_SECRET_KEY}`
+        },
         body: JSON.stringify({ industry, city })
       });
       const data = await res.json();

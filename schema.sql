@@ -49,6 +49,9 @@ CREATE TABLE IF NOT EXISTS leads (
     mega_profile JSONB,                      -- Full enrichment payload from all specialist agents
     profiled_by VARCHAR,                     -- Agents that contributed to mega_profile
 
+    -- Multi-tenancy
+    brand_id UUID NOT NULL REFERENCES brands(id),  -- Tenant (client) that owns this lead
+
     -- Social presence URLs (discovered during enrichment)
     facebook_url VARCHAR,
     instagram_url VARCHAR,
@@ -77,6 +80,7 @@ CREATE TABLE IF NOT EXISTS leads (
 CREATE TABLE IF NOT EXISTS campaign_enriched_data (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     prospect_id UUID REFERENCES leads(id) ON DELETE CASCADE,  -- FK to leads table
+    brand_id UUID NOT NULL REFERENCES brands(id),             -- Tenant (client) that owns this campaign
 
     -- Agent-generated content
     radiography_technical TEXT,              -- Technical audit: SEO, speed, ads, social presence
@@ -162,15 +166,17 @@ CREATE TABLE IF NOT EXISTS agent_memory (
 -- INDEXES — Performance optimization for common query patterns
 -- ════════════════════════════════════════════════════════════
 
--- Leads: filter by market, tier, outreach status, and rating
+-- Leads: filter by market, tier, outreach status, rating, and tenant
 CREATE INDEX IF NOT EXISTS idx_leads_metro ON leads(metro_area);
 CREATE INDEX IF NOT EXISTS idx_leads_tier ON leads(lead_tier);
 CREATE INDEX IF NOT EXISTS idx_leads_outreach ON leads(outreach_status);
 CREATE INDEX IF NOT EXISTS idx_leads_rating ON leads(rating);
+CREATE INDEX IF NOT EXISTS idx_leads_brand ON leads(brand_id);
 
--- Campaign: lookup by status and FK joins
+-- Campaign: lookup by status, FK joins, and tenant
 CREATE INDEX IF NOT EXISTS idx_campaign_status ON campaign_enriched_data(status);
 CREATE INDEX IF NOT EXISTS idx_campaign_prospect ON campaign_enriched_data(prospect_id);
+CREATE INDEX IF NOT EXISTS idx_campaign_brand ON campaign_enriched_data(brand_id);
 
 -- Outreach dispatcher: find leads ready for email (magnet done, not yet sent)
 CREATE INDEX IF NOT EXISTS idx_outreach_dispatch
@@ -195,8 +201,12 @@ ALTER TABLE brands ENABLE ROW LEVEL SECURITY;
 ALTER TABLE marketing_jobs ENABLE ROW LEVEL SECURITY;
 ALTER TABLE agent_memory ENABLE ROW LEVEL SECURITY;
 
--- Permissive policies: service_role has unrestricted access
--- TODO: Add restrictive policies per brand_id for multi-tenant support
+-- Permissive policies: service_role has unrestricted access.
+-- Tenant isolation is enforced at the APPLICATION layer (via brand_id injected
+-- on every INSERT and filtered on every SELECT). The service_role bypasses RLS
+-- because the backend handles scoping deterministically.
+-- Phase C (per-tenant JWT auth) will introduce restrictive RLS policies that
+-- match a `brand_id` claim from the JWT against each row's brand_id column.
 CREATE POLICY "Enable all operations for service_role on leads" on leads FOR ALL USING (true) WITH CHECK (true);
 CREATE POLICY "Enable all operations for service_role on campaign" on campaign_enriched_data FOR ALL USING (true) WITH CHECK (true);
 CREATE POLICY "Enable all operations for service_role on brands" on brands FOR ALL USING (true) WITH CHECK (true);

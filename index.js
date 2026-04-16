@@ -36,8 +36,13 @@ const __dirname = path.dirname(__filename);
 // ============================================================
 // 1. Initialize Agent Runtime
 // ============================================================
+if (!process.env.NVIDIA_API_KEY) {
+  console.error('❌ FATAL: NVIDIA_API_KEY is not set. Configure it in your environment (Render env vars or local .env).');
+  process.exit(1);
+}
+
 const runtime = new AgentRuntime({
-  apiKey: process.env.NVIDIA_API_KEY || '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',
+  apiKey: process.env.NVIDIA_API_KEY,
   model: 'meta/llama-3.1-70b-instruct',
   baseURL: 'https://integrate.api.nvidia.com/v1'
 });
@@ -85,28 +90,23 @@ app.get('/health', (req, res) => {
 });
 
 // ---- Authentication Middleware for API routes ----
+// All /api/* endpoints require Bearer token. No path-based bypasses.
+if (!process.env.API_SECRET_KEY) {
+  console.error('❌ FATAL: API_SECRET_KEY is not set. Configure it in your environment.');
+  process.exit(1);
+}
+
 app.use('/api', (req, res, next) => {
-  // Allow OPTIONS preflight
+  // Allow OPTIONS preflight (CORS)
   if (req.method === 'OPTIONS') return next();
 
   const authHeader = req.headers.authorization;
-  const isAuthorized = authHeader === `Bearer ${process.env.API_SECRET_KEY}`;
-  
-  if (isAuthorized) {
-    return next();
-  }
-
-  // Bypasses for public / local dashboard access
-  const isLeadPath = req.path.startsWith('/leads/');
-  const publicPaths = ['/approve', '/approve-email', '/leads', '/health'];
-  
-  if (isLeadPath || publicPaths.includes(req.path)) {
-    console.log(`✅ [Auth] Bypassing auth for path: ${req.path}`);
+  if (authHeader === `Bearer ${process.env.API_SECRET_KEY}`) {
     return next();
   }
 
   console.warn(`🔒 [Auth] Blocked request: ${req.method} ${req.path}`);
-  res.status(401).json({ error: 'Unauthorized' });
+  return res.status(401).json({ error: 'Unauthorized' });
 });
 
 // ---- Agents Endpoint ----
