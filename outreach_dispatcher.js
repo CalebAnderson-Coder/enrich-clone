@@ -10,6 +10,8 @@ import dotenv         from 'dotenv';
 import { renderMagnetEmail } from './lib/emailRenderer.js';
 import { AgentRuntime } from './lib/AgentRuntime.js';
 import { angela } from './agents/angela.js';
+import { verifier } from './agents/verifier.js';
+import { verifyAndRewrite } from './lib/verifierGate.js';
 import { outreachDraftSchema } from './lib/schemas.js';
 import { sanitizeLeadData } from './lib/sanitize.js';
 import { logger } from './lib/logger.js';
@@ -24,6 +26,7 @@ const runtime = new AgentRuntime({
   baseURL: 'https://generativelanguage.googleapis.com/v1beta/openai/',
 });
 runtime.registerAgent(angela);
+runtime.registerAgent(verifier);
 
 const supabaseUrl = process.env.SUPABASE_URL;
 const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_SERVICE_KEY || process.env.SUPABASE_ANON_KEY || process.env.VITE_SUPABASE_ANON_KEY;
@@ -166,9 +169,41 @@ IMPORTANTE: Escribe TODO en ESPAÑOL. Devuelve SOLO un objeto JSON:
 
           if (parseResult.success) {
             const parsed = parseResult.data;
-            angelaSubject = parsed.email_subject;
-            angelaBody = parsed.email_body;
-            magnetData.whatsapp_draft = parsed.whatsapp;
+
+            // ── Verifier Gate ──────────────────────────────
+            const draftPayload = {
+              subject:   parsed.email_subject,
+              body:      parsed.email_body,
+              whatsapp:  parsed.whatsapp,
+              instagram: '',
+            };
+            const leadContext = {
+              businessName: lead.business_name,
+              industry:     lead.industry || '',
+              metro:        lead.metro_area || '',
+              tier:         '',
+            };
+            const gateResult = await verifyAndRewrite(draftPayload, leadContext, runtime);
+
+            if (gateResult.blocked) {
+              console.warn(`  ⚠️  [Verifier] Blocked draft for ${lead.business_name} — low quality after retries.`);
+              await supabase
+                .from('campaign_enriched_data')
+                .update({
+                  outreach_status: 'BLOCKED_LOW_QUALITY',
+                  verifier_report: gateResult.verifier_history,
+                })
+                .eq('id', record.id);
+              stats.skipped++;
+              continue;
+            }
+
+            // Use (possibly rewritten) draft
+            const finalDraft = gateResult.draft;
+            angelaSubject = finalDraft.subject;
+            angelaBody    = finalDraft.body;
+            magnetData.whatsapp_draft  = finalDraft.whatsapp;
+            magnetData.verifier_report = gateResult.verifier_history;
             logger.info('Angela generated validated copy', { business: lead.business_name });
           } else {
             logger.warn('Angela output failed schema validation', { error: parseResult.error });

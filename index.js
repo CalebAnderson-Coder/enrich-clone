@@ -17,12 +17,15 @@ import { manager } from './agents/manager.js';
 import { scout } from './agents/scout.js';
 import { carlos } from './agents/carlos.js';
 import { davinci } from './agents/davinci.js';
+import { verifier } from './agents/verifier.js';
 import { getPendingJobs, updateJobStatus, getActiveBrands, createJob, getJobById } from './lib/supabase.js';
+import { authMiddleware } from './lib/auth.js';
 import { getLeads, getLeadById, updateOutreachStatus, getLeadsStats, updateLeadOutreach } from './tools/database.js';
 import { fetchPage } from './tools/webResearch.js';
 import { processIdleMagnets } from './lead_magnet_worker.js';
 import { startTranscriptionWorker } from './workers/transcription_worker.js';
 import { dispatchPendingOutreach } from './outreach_dispatcher.js';
+import { runEmailEnrichment } from './workers/email_enrichment_worker.js';
 
 
 import path from 'path';
@@ -56,6 +59,7 @@ runtime.registerAgent(sam);
 runtime.registerAgent(kai);
 runtime.registerAgent(carlos);
 runtime.registerAgent(davinci);
+runtime.registerAgent(verifier);
 
 console.log(`🧠 Agent Runtime initialized with ${runtime.agents.size} agents`);
 console.log(`   Agents: ${Array.from(runtime.agents.keys()).join(', ')}`);
@@ -90,24 +94,15 @@ app.get('/health', (req, res) => {
 });
 
 // ---- Authentication Middleware for API routes ----
-// All /api/* endpoints require Bearer token. No path-based bypasses.
+// Accepts Supabase JWT (new) and legacy shared Bearer (fallback during
+// Bloque 1 transition). Populates req.user = { userId, brandId, role, authMode }.
+// See lib/auth.js.
 if (!process.env.API_SECRET_KEY) {
   console.error('❌ FATAL: API_SECRET_KEY is not set. Configure it in your environment.');
   process.exit(1);
 }
 
-app.use('/api', (req, res, next) => {
-  // Allow OPTIONS preflight (CORS)
-  if (req.method === 'OPTIONS') return next();
-
-  const authHeader = req.headers.authorization;
-  if (authHeader === `Bearer ${process.env.API_SECRET_KEY}`) {
-    return next();
-  }
-
-  console.warn(`🔒 [Auth] Blocked request: ${req.method} ${req.path}`);
-  return res.status(401).json({ error: 'Unauthorized' });
-});
+app.use('/api', authMiddleware);
 
 // ---- Agents Endpoint ----
 app.get('/api/agents', (req, res) => {
@@ -184,17 +179,17 @@ app.post('/api/dispatch', async (req, res) => {
 // ---- Native Agent Integration: Draft Campaign ----
 app.post('/api/leads/:id/draft-campaign', async (req, res) => {
   try {
-    const lead = await getLeadById(req.params.id);
+    const brandId = req.user.brandId;
+    const lead = await getLeadById(req.params.id, brandId);
     if (!lead) return res.status(404).json({ error: 'Lead not found' });
-    
+
     const leadName = lead.business_name || lead.empresa || lead.empresa_nombre || lead.nombre || 'Business Owner';
     const industry = lead.industry || lead.nicho || 'general services';
     const link = lead.website || lead.google_maps_url || lead.url || 'No link';
 
     console.log(`\n📧 [Native Outreach] Redactando correo con Angela para: ${leadName}`);
-    
+
     // Create the pending job first
-    const brandId = process.env.BRAND_ID;
     const job = await createJob(brandId, 'Angela', 'cold_outreach', {
       leadId: lead.id,
       leadName: leadName
@@ -221,7 +216,8 @@ CRITICAL: You MUST provide this exactly as the job_id parameter: ${job.id}`;
 // ---- Deep Analysis (AI Strategist) ----
 app.post('/api/leads/:id/analyze', async (req, res) => {
   try {
-    const lead = await getLeadById(req.params.id);
+    const brandId = req.user.brandId;
+    const lead = await getLeadById(req.params.id, brandId);
     if (!lead) return res.status(404).json({ error: 'Lead not found' });
     
     console.log(`\n🧠 [Deep Analysis] Iniciando auditoría estratégica de: ${lead.business_name || lead.empresa || 'Prospecto'}`);
@@ -236,7 +232,7 @@ app.post('/api/leads/:id/analyze', async (req, res) => {
 
     const prompt = `Contexto del lead: ${context}`;
 
-    const result = await runtime.run('Carlos', prompt, { currentAgent: 'Carlos' });
+    const result = await runtime.run('Carlos', prompt, { currentAgent: 'Carlos', brandId });
 
     let parsedResponse = {};
     try {
@@ -265,10 +261,10 @@ app.post('/api/prospect', async (req, res) => {
   }
 
   try {
-    const brandId = process.env.BRAND_ID || 'default-brand';
+    const brandId = req.user.brandId;
     // Create an asynchronous job for prospection
     const task = `Search for maximum ${limit || 20} Latino-owned businesses in the ${niche} niche in ${metro}. Extract their info and use save_lead. Proceed to qualify them.${autoEnrich ? " IMPORTANT: You MUST set the parameter 'auto_enrich' to true when calling save_lead for each lead you find!" : ""}`;
-    
+
     // We start the run async so the UI doesn't hang.
     runtime.run('scout', task, { currentAgent: 'scout', brandId })
       .catch(e => console.error("Error in async scout run:", e));
@@ -307,17 +303,15 @@ app.get('/api/approve', async (req, res) => {
       // This ensures that approvals via "Magic Link" (email) also update the dashboard's lead state.
       if (job && job.payload && job.payload.outreach && job.payload.outreach.lead_id) {
         const { lead_id, subject, body, whatsapp, instagram } = job.payload.outreach;
+        const jobBrandId = req.user.brandId; // job.brand_id is TEXT legacy; trust the authenticated context
         console.log(`  📝 [Sync] Syncing approved outreach for Lead ${lead_id}...`);
-        await updateLeadOutreach(lead_id, { 
-          subject: subject || '', 
-          body: body || '', 
-          whatsapp: whatsapp || '', 
-          instagram: instagram || '' 
-        });
-        // Optionally mark the lead as "CONTACTED" if it was approved and we assume immediate dispatch
-        // Or keep as "PENDING_APPROVAL" if the agent still needs to run the "publish_content" tool.
-        // For structured consistency, we mark it as CONTACTED here if it's an outreach job.
-        await updateOutreachStatus(lead_id, 'CONTACTED');
+        await updateLeadOutreach(lead_id, {
+          subject: subject || '',
+          body: body || '',
+          whatsapp: whatsapp || '',
+          instagram: instagram || ''
+        }, null, null, jobBrandId);
+        await updateOutreachStatus(lead_id, 'CONTACTED', null, jobBrandId);
       }
 
       if (job && job.payload && job.payload.reviewsText) {
@@ -406,16 +400,17 @@ app.post('/api/approve-email', async (req, res) => {
   console.log(`\n📬 [Dashboard Approve] Lead ${targetLeadId} → ${action.toUpperCase()}`);
 
   try {
+    const brandId = req.user.brandId;
     const newStatus = action === 'approve' ? 'CONTACTED' : 'REJECTED';
-    
+
     // If outreach copy was edited in the modal, persist it first
     if (outreach) {
       console.log(`  📝 Persisting edited outreach copy for ${targetLeadId}`);
-      await updateLeadOutreach(targetLeadId, outreach);
+      await updateLeadOutreach(targetLeadId, outreach, null, null, brandId);
     }
 
     // Update the final status
-    const result = await updateOutreachStatus(targetLeadId, newStatus, finalNotes);
+    const result = await updateOutreachStatus(targetLeadId, newStatus, finalNotes, brandId);
 
     if (!result) {
       return res.status(404).json({ success: false, error: 'Lead not found' });
@@ -442,13 +437,14 @@ app.post('/api/campaign/pipeline', async (req, res) => {
     return res.status(400).json({ error: 'industry and city are required' });
   }
 
+  const brandId = req.user.brandId;
   res.json({ success: true, message: 'Pipeline started in background for first qualified lead.' });
 
   // Ejecución en segundo plano gobernada por el Agente Manager
   (async () => {
     try {
-      console.log(`\n🚀 [Pipeline] Starting Macro-Flow via Manager Agent for ${industry} in ${city}...`);
-      
+      console.log(`\n🚀 [Pipeline] Starting Macro-Flow via Manager Agent for ${industry} in ${city} (brand ${brandId})...`);
+
       const managerPrompt = `Por favor, ejecuta un Macro-Flujo de prospectación (El Radar) para el Nicho: "${industry}" en la Ciudad: "${city}".
 
 INSTRUCCIONES PARA TI (Orquestador):
@@ -459,7 +455,7 @@ INSTRUCCIONES PARA TI (Orquestador):
 Recuerda: Este flujo es puro volumen y prospección. Solo interactúa con 'scout'. NO analices ni escribas correos todavía.`;
 
       // Aumentamos maxIterations a 20 para permitir delegación múltiple secuencial
-      const result = await runtime.run('Manager', managerPrompt, { currentAgent: 'Manager', maxIterations: 20 });
+      const result = await runtime.run('Manager', managerPrompt, { currentAgent: 'Manager', maxIterations: 20, brandId });
       
       console.log(`\n✅ [Pipeline] Finalizado Exitosamente!\n\n=== REPORTE FINAL DEL MANAGER ===\n${result.response}\n`);
       
@@ -480,9 +476,10 @@ app.post('/api/prospect', async (req, res) => {
   console.log(`\n🎯 [Prospect] Launching: ${niche} in ${metro} (limit: ${limit})`);
 
   try {
+    const brandId = req.user.brandId;
     const result = await runtime.run('scout',
       `Prospect for ${niche} businesses in ${metro}. Find up to ${limit} leads. Search both English and Spanish terms. Apply all GATE filters and scoring. Save qualified leads to the database. Provide a summary in Spanish.`,
-      { currentAgent: 'scout' }
+      { currentAgent: 'scout', brandId }
     );
 
     const { autoEnrich } = req.body;
@@ -498,7 +495,7 @@ app.post('/api/prospect', async (req, res) => {
     });
 
     if (autoEnrich) {
-      autoEnrichBackgroundLoop(metro, niche);
+      autoEnrichBackgroundLoop(metro, niche, brandId);
     }
   } catch (err) {
     console.error('Prospect error:', err);
@@ -509,7 +506,7 @@ app.post('/api/prospect', async (req, res) => {
 // ---- Get Leads Stats ----
 app.get('/api/leads/stats', async (req, res) => {
   try {
-    const stats = await getLeadsStats();
+    const stats = await getLeadsStats(req.user.brandId);
     res.json({ success: true, stats });
   } catch (err) {
     console.error('Error fetching leads stats:', err);
@@ -525,15 +522,17 @@ app.get('/api/leads', async (req, res) => {
   const offset = (page - 1) * limit;
 
   try {
+    const brandId = req.user.brandId;
     // ── CAMPAIGN-FIRST JOIN STRATEGY ──
     // Always show leads WITH enrichment data first so the client sees drafts immediately.
     const { createClient } = await import('@supabase/supabase-js');
     const sb = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY);
 
-    // STEP 1: Get prospect_ids that have campaign data (outreach drafts)
+    // STEP 1: Get prospect_ids that have campaign data (outreach drafts) for this tenant
     const { data: enrichedCampRows } = await sb
       .from('campaign_enriched_data')
       .select('prospect_id, created_at')
+      .eq('brand_id', brandId)
       .not('outreach_copy', 'is', null)
       .order('created_at', { ascending: false });
 
@@ -544,10 +543,11 @@ app.get('/api/leads', async (req, res) => {
     let total = 0;
 
     if (enrichedLeadIds.length > 0) {
-      // STEP 2a: Query enriched leads first
+      // STEP 2a: Query enriched leads first (scoped to tenant)
       let enrichedQuery = sb
         .from('leads')
         .select('*', { count: 'exact' })
+        .eq('brand_id', brandId)
         .in('id', enrichedLeadIds)
         .order('created_at', { ascending: false });
 
@@ -561,13 +561,14 @@ app.get('/api/leads', async (req, res) => {
       leadsRows = (enrichedLeads || []).slice(offset, offset + limit);
       total = enrichedCount || 0;
 
-      // STEP 2b: Fill remaining slots with unenriched leads if we need more
+      // STEP 2b: Fill remaining slots with unenriched leads if we need more (same tenant)
       const remaining = limit - leadsRows.length;
       if (remaining > 0 && !outreach_status) {
         const existingIds = enrichedLeadIds.join(',') || '00000000-0000-0000-0000-000000000000';
         let fillQuery = sb
           .from('leads')
           .select('*', { count: 'exact' })
+          .eq('brand_id', brandId)
           .not('id', 'in', `(${existingIds})`)
           .order('created_at', { ascending: false })
           .limit(remaining);
@@ -581,10 +582,11 @@ app.get('/api/leads', async (req, res) => {
         total = (enrichedCount || 0) + (fillCount || 0);
       }
     } else {
-      // STEP 2c: No campaigns exist — regular pagination fallback
+      // STEP 2c: No campaigns exist — regular pagination fallback (scoped)
       let pQuery = sb
         .from('leads')
         .select('*', { count: 'exact' })
+        .eq('brand_id', brandId)
         .order('created_at', { ascending: false })
         .range(offset, offset + limit - 1);
 
@@ -600,19 +602,16 @@ app.get('/api/leads', async (req, res) => {
     }
 
     if (!leadsRows || leadsRows.length === 0) {
-      // Legacy table fallback
-      const { data: fallbackProspects } = await sb.from('prospects').select('*').order('created_at', { ascending: false }).limit(limit);
-      if (!fallbackProspects || fallbackProspects.length === 0) {
-        return res.json({ total: 0, limit, page, leads: [] });
-      }
-      return res.json({ total: fallbackProspects.length, limit, page, leads: fallbackProspects });
+      // Legacy `prospects` table has no brand_id; skip tenant fallback to avoid cross-tenant leak
+      return res.json({ total: 0, limit, page, leads: [] });
     }
 
-    // STEP 3: Fetch all campaign data for the resolved lead set
+    // STEP 3: Fetch all campaign data for the resolved lead set (scoped)
     const ids = leadsRows.map(p => p.id);
     const { data: campaigns, error: cError } = await sb
       .from('campaign_enriched_data')
       .select('*')
+      .eq('brand_id', brandId)
       .in('prospect_id', ids);
 
     if (cError) console.error('[Leads API] campaign fetch error:', cError.message);
@@ -720,7 +719,7 @@ app.get('/api/leads', async (req, res) => {
     console.error('[Leads API] Error:', err.message);
     // Fallback to legacy getLeads if something fails
     try {
-      const { data: fallbackLeads, total: fallbackTotal } = await getLeads({ limit: req.query.limit, page: req.query.page });
+      const { data: fallbackLeads, total: fallbackTotal } = await getLeads({ brandId: req.user.brandId, limit: req.query.limit, page: req.query.page });
       res.json({ total: fallbackTotal, limit, page, leads: fallbackLeads || [] });
     } catch (fallbackErr) {
       res.status(500).json({ error: err.message });
@@ -731,7 +730,7 @@ app.get('/api/leads', async (req, res) => {
 // ---- Get Lead Detail (MEGA Profile) ----
 app.get('/api/leads/:id', async (req, res) => {
   try {
-    const lead = await getLeadById(req.params.id);
+    const lead = await getLeadById(req.params.id, req.user.brandId);
     if (!lead) return res.status(404).json({ error: 'Lead not found' });
     res.json(lead);
   } catch (err) {
@@ -742,7 +741,8 @@ app.get('/api/leads/:id', async (req, res) => {
 // ---- Enrich Lead (MEGA Profile) ----
 app.post('/api/leads/:id/enrich', async (req, res) => {
   try {
-    const lead = await getLeadById(req.params.id);
+    const brandId = req.user.brandId;
+    const lead = await getLeadById(req.params.id, brandId);
     if (!lead) return res.status(404).json({ error: 'Lead not found' });
 
     console.log(`\n🔬 [Enrich] Deep profiling: ${lead.business_name}`);
@@ -774,20 +774,21 @@ OUTREACH_JSON_END`;
 
     const result = await runtime.run('Manager', enrichPrompt, {
       currentAgent: 'Manager',
-      maxIterations: 30
+      maxIterations: 30,
+      brandId
     });
 
     // ---- Persistencia Estructurada ----
     let parsedOutreach = null;
     const jsonMatch = result.response.match(/OUTREACH_JSON_START([\s\S]*?)OUTREACH_JSON_END/);
-    
+
     if (jsonMatch && jsonMatch[1]) {
       try {
         parsedOutreach = JSON.parse(jsonMatch[1].trim());
         console.log(`📦 [Enrich] Parsed outreach drafts for ${lead.business_name}`);
-        
+
         // Save to DB
-        await updateLeadOutreach(lead.id, parsedOutreach, 'PENDING');
+        await updateLeadOutreach(lead.id, parsedOutreach, 'PENDING', null, brandId);
       } catch (e) {
         console.error('❌ [Enrich] Failed to parse outreach JSON:', e.message);
       }
@@ -810,7 +811,8 @@ OUTREACH_JSON_END`;
 // ---- Regenerate Outreach (Angela) ----
 app.post('/api/leads/:id/regenerate-outreach', async (req, res) => {
   try {
-    const lead = await getLeadById(req.params.id);
+    const brandId = req.user.brandId;
+    const lead = await getLeadById(req.params.id, brandId);
     if (!lead) return res.status(404).json({ error: 'Lead not found' });
 
     console.log(`\n📬 [Regenerate] Rewriting copy for: ${lead.business_name}`);
@@ -829,7 +831,8 @@ app.post('/api/leads/:id/regenerate-outreach', async (req, res) => {
     - Use Spanish (warm, professional, Empírika tone).`;
 
     const result = await runtime.run('Angela', prompt, {
-      currentAgent: 'Angela'
+      currentAgent: 'Angela',
+      brandId
     });
 
     let copy;
@@ -847,7 +850,7 @@ app.post('/api/leads/:id/regenerate-outreach', async (req, res) => {
     }
 
     // Persist to leads.mega_profile.outreach
-    await updateLeadOutreach(lead.id, copy);
+    await updateLeadOutreach(lead.id, copy, null, null, brandId);
 
     // Also sync to campaign_enriched_data so dashboard shows updated content
     try {
@@ -857,10 +860,11 @@ app.post('/api/leads/:id/regenerate-outreach', async (req, res) => {
       
       const { error: syncError } = await supabase
         .from('campaign_enriched_data')
-        .update({ 
+        .update({
           outreach_copy: outreachText,
         })
-        .eq('prospect_id', lead.id);
+        .eq('prospect_id', lead.id)
+        .eq('brand_id', brandId);
       
       if (syncError) console.warn('⚠️ Could not sync to campaign_enriched_data:', syncError.message);
       else console.log(`  ✅ [Sync] campaign_enriched_data updated for ${lead.business_name}`);
@@ -889,13 +893,14 @@ app.post('/api/leads/:id/outreach', async (req, res) => {
   }
 
   try {
+    const brandId = req.user.brandId;
     let updated;
-    
+
     // If full outreach data is provided, save it into the mega_profile
     if (targetOutreach) {
-      updated = await updateLeadOutreach(req.params.id, targetOutreach, status, notes);
+      updated = await updateLeadOutreach(req.params.id, targetOutreach, status, notes, brandId);
     } else {
-      updated = await updateOutreachStatus(req.params.id, status, notes);
+      updated = await updateOutreachStatus(req.params.id, status, notes, brandId);
     }
 
     if (!updated) return res.status(404).json({ error: 'Lead not found' });
@@ -926,6 +931,8 @@ app.post('/api/run-cycle', async (req, res) => {
     skip_email     = false,
   } = req.body;
 
+  const brandId = req.user.brandId;
+
   // Respond immediately — pipeline runs in background
   res.json({
     success: true,
@@ -935,7 +942,7 @@ app.post('/api/run-cycle', async (req, res) => {
 
   (async () => {
     console.log(`\n🔄 [RunCycle] ══════════════════════════════`);
-    console.log(`   metro=${metro} | industry=${industry}`);
+    console.log(`   metro=${metro} | industry=${industry} | brand=${brandId}`);
     console.log(`🔄 [RunCycle] ══════════════════════════════\n`);
 
     // ── Step 1: Prospect ───────────────────────────────────
@@ -944,7 +951,7 @@ app.post('/api/run-cycle', async (req, res) => {
       try {
         await runtime.run('scout',
           `Prospect for ${industry} businesses in ${metro}. Find up to ${prospect_limit} leads. Apply all GATE filters and scoring. Save qualified leads to the database.`,
-          { currentAgent: 'scout' }
+          { currentAgent: 'scout', brandId }
         );
         console.log('✅ [RunCycle] Step 1 done.');
       } catch (e) {
@@ -1067,6 +1074,12 @@ setInterval(async () => {
   catch (e) { console.error('Interval error (outreach):', e.message); }
 }, 15 * 60_000);
 
+// Email enrichment — every 6 hours
+setInterval(async () => {
+  try { await runEmailEnrichment(); }
+  catch (e) { console.error('Interval error (email enrichment):', e.message); }
+}, 6 * 60 * 60_000);
+
 startTranscriptionWorker();
 
 // ============================================================
@@ -1110,15 +1123,15 @@ app.listen(port, () => {
 // AUTO ENRICHMENT BACKGROUND LOOP
 // ============================================================
 
-async function autoEnrichBackgroundLoop(metro, niche) {
+async function autoEnrichBackgroundLoop(metro, niche, brandId) {
   console.log(`\n🤖 [Auto-Enrich] INICIANDO AUTOMATIZACIÓN EXTREMA: Esperando 5s a que Scout asiente DB...`);
-  
+
   try {
     // Dar unos segundos para garantizar inserción
     await new Promise(r => setTimeout(r, 5000));
 
-    // Obtener la data actual
-    const { data: leads } = await getLeads({ limit: 100, metro, industry: niche });
+    // Obtener la data actual (scoped al tenant)
+    const { data: leads } = await getLeads({ brandId, limit: 100, metro, industry: niche });
     
     // Filtrar los que no tienen el mega profile o están en status nulo/vacio
     const pendingLeads = (leads || []).filter(l => !l.mega_profile && (!l.outreach_status || l.outreach_status === ''));
@@ -1147,7 +1160,8 @@ DELEGACIÓN:
 
         await runtime.run('Manager', enrichPrompt, {
           currentAgent: 'Manager',
-          maxIterations: 20
+          maxIterations: 20,
+          brandId
         });
 
         console.log(`\n✅ [Auto-Enrich] Perfil Mega actualizado para ${lead.business_name}.`);
@@ -1164,7 +1178,8 @@ Al hacerlo, usa el argumento lead_id: "${lead.id}" y en html_content el contenid
 
         await runtime.run('Angela', angelaPrompt, {
           currentAgent: 'Angela',
-          maxIterations: 8
+          maxIterations: 8,
+          brandId
         });
 
         console.log(`✅ [Auto-Enrich] Email guardado en estado DRAFT para: ${lead.business_name}`);

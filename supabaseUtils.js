@@ -59,8 +59,9 @@ export async function createMarketingJob(brandId, taskType, payload) {
  * @param {string} [prospectData.email_address] - Verified outreach email.
  * @returns {Promise<Object|null>} The inserted lead row, or null on validation/DB error.
  */
-export async function saveProspect(prospectData) {
+export async function saveProspect(prospectData, brandId) {
     if(!supabase) return null;
+    const bid = brandId || getCurrentBrandId();
 
     // ──────────────────────────────────────────────────────────────
     // IMPORTANT: Column names below match the PRODUCTION Supabase
@@ -105,13 +106,13 @@ export async function saveProspect(prospectData) {
     }
 
     // Tenant scoping — injected AFTER schema parse (schema uses .strip())
-    const rowToInsert = { ...safePayload, brand_id: getCurrentBrandId() };
+    const rowToInsert = { ...safePayload, brand_id: bid };
 
     const { data, error } = await supabase
         .from('leads')
         .insert([rowToInsert])
         .select();
-    
+
     if(error) {
         console.error("Error saving prospect into leads", error);
         return null;
@@ -135,8 +136,9 @@ export async function saveProspect(prospectData) {
  * @param {string} [campaignData.status='ENRICHED'] - Status: 'PENDING' | 'ENRICHED' | 'SENT' | 'FAILED'.
  * @returns {Promise<Object|null>} The inserted campaign row, or null on validation/DB error.
  */
-export async function saveCampaignData(campaignData) {
+export async function saveCampaignData(campaignData, brandId) {
     if(!supabase) return null;
+    const bid = brandId || getCurrentBrandId();
 
     const campaignPayload = {
         prospect_id: campaignData.prospect_id,
@@ -156,7 +158,7 @@ export async function saveCampaignData(campaignData) {
     }
 
     // Tenant scoping — injected AFTER schema parse (schema uses .strip())
-    const rowToInsert = { ...safePayload, brand_id: getCurrentBrandId() };
+    const rowToInsert = { ...safePayload, brand_id: bid };
 
     const campaignResult = await supabase.from('campaign_enriched_data').insert([rowToInsert]).select();
     

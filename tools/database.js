@@ -4,7 +4,7 @@
 // ============================================================
 
 import { Tool } from '../lib/AgentRuntime.js';
-import { supabase, getCurrentBrandId } from '../lib/supabase.js';
+import { supabase, getCurrentBrandId, saveAgentMemory, getAgentMemory } from '../lib/supabase.js';
 import { saveLeadInputSchema, megaProfileInputSchema } from '../lib/schemas.js';
 import { isDomainReachable, extractDomain } from '../lib/domainValidator.js';
 
@@ -82,7 +82,7 @@ export const saveLead = new Tool({
     },
     required: ['business_name', 'metro_area', 'qualification_score', 'lead_tier'],
   },
-  fn: async (args) => {
+  fn: async (args, context = {}) => {
     // ── GATE: Domain Validation ─────────────────────────────
     // Reject leads with fabricated/unreachable domains before saving
     if (args.website) {
@@ -99,14 +99,17 @@ export const saveLead = new Tool({
       }
     }
 
-    // ── GATE: Dedup by Website URL ──────────────────────────
-    // Prevent duplicates by domain (not just business_name)
+    // ── GATE: Dedup by Website URL (scoped per brand) ──────
+    // Prevent duplicates by domain within the current tenant.
+    // brandId comes from runtime context; fall back to env during transition.
+    const currentBrandId = context.brandId || getCurrentBrandId();
     if (args.website && supabase) {
       const domain = extractDomain(args.website);
       if (domain) {
         const { data: existing } = await supabase
           .from('leads')
           .select('id, business_name')
+          .eq('brand_id', currentBrandId)
           .ilike('website', `%${domain}%`)
           .limit(1);
 
@@ -144,7 +147,7 @@ export const saveLead = new Tool({
         catch { return { raw: args.score_breakdown }; }
       })(),
       scraped_by: 'scout',
-      brand_id: getCurrentBrandId(),
+      brand_id: currentBrandId,
     };
 
     if (!supabase) {
@@ -207,10 +210,11 @@ export const updateMegaProfile = new Tool({
     },
     required: ['lead_id', 'mega_profile'],
   },
-  fn: async (args) => {
+  fn: async (args, context = {}) => {
     const { lead_id, mega_profile, profiled_by = 'helena+sam+kai+angela' } = args;
+    const brandId = context.brandId || getCurrentBrandId();
     let profileData;
-    
+
     try {
       profileData = JSON.parse(mega_profile);
     } catch {
@@ -218,7 +222,7 @@ export const updateMegaProfile = new Tool({
     }
 
     if (!supabase) {
-      const idx = mockLeads.findIndex(l => l.id === lead_id);
+      const idx = mockLeads.findIndex(l => l.id === lead_id && l.brand_id === brandId);
       if (idx !== -1) {
         mockLeads[idx].mega_profile = profileData;
         mockLeads[idx].profiled_by = profiled_by;
@@ -237,7 +241,8 @@ export const updateMegaProfile = new Tool({
           profiled_by,
           updated_at: new Date().toISOString(),
         })
-        .eq('id', lead_id);
+        .eq('id', lead_id)
+        .eq('brand_id', brandId);
 
       if (error) throw error;
 
@@ -245,7 +250,7 @@ export const updateMegaProfile = new Tool({
       return JSON.stringify({ success: true, lead_id });
     } catch (err) {
       console.error(`  ❌ [DB] MEGA profile update error: ${err.message}. Falling back to mock DB.`);
-      const idx = mockLeads.findIndex(l => l.id === lead_id);
+      const idx = mockLeads.findIndex(l => l.id === lead_id && l.brand_id === brandId);
       if (idx !== -1) {
         mockLeads[idx].mega_profile = profileData;
         mockLeads[idx].profiled_by = profiled_by;
@@ -258,61 +263,71 @@ export const updateMegaProfile = new Tool({
 });
 
 // --- Helper functions for API endpoints (not agent tools) ---
+// All helpers below accept an optional `brandId` for tenant scoping.
+// If omitted, fall back to process.env.BRAND_ID via getCurrentBrandId()
+// (single-tenant mode during Bloque 1 transition).
+// During cutover (task #11), make brandId required and remove fallback.
 
-export async function getLeads(filters = {}) {
+export async function getLeads({ brandId, ...filters } = {}) {
+  const bid = brandId || getCurrentBrandId();
   const limit = parseInt(filters.limit) || 20;
   const page = parseInt(filters.page) || 1;
   const offset = (page - 1) * limit;
 
   if (!supabase) {
-    let results = [...mockLeads];
+    let results = mockLeads.filter(l => l.brand_id === bid);
     if (filters.tier) results = results.filter(l => l.lead_tier === filters.tier);
     if (filters.metro) results = results.filter(l => l.metro_area?.includes(filters.metro));
     if (filters.industry) results = results.filter(l => l.industry?.includes(filters.industry));
     if (filters.outreach_status) results = results.filter(l => l.outreach_status === filters.outreach_status);
-    
+
     results = results.sort((a, b) => (b.qualification_score || 0) - (a.qualification_score || 0));
-    
+
     const paginated = results.slice(offset, offset + limit);
     return { data: paginated, total: results.length };
   }
 
-  let query = supabase.from('leads').select('*', { count: 'exact' });
-  
+  let query = supabase.from('leads').select('*', { count: 'exact' }).eq('brand_id', bid);
+
   if (filters.tier) query = query.eq('lead_tier', filters.tier);
   if (filters.metro) query = query.ilike('metro_area', `%${filters.metro}%`);
   if (filters.industry) query = query.ilike('industry', `%${filters.industry}%`);
   if (filters.outreach_status) query = query.eq('outreach_status', filters.outreach_status);
-  
+
   query = query.order('qualification_score', { ascending: false });
   query = query.range(offset, offset + limit - 1);
 
   const { data, count, error } = await query;
-  if (error) { 
-    console.error('❌ Get leads error:', error.message); 
-    const fallbackResults = mockLeads.slice(offset, offset + limit);
-    return { data: fallbackResults, total: mockLeads.length };
+  if (error) {
+    console.error('❌ Get leads error:', error.message);
+    const fallbackResults = mockLeads.filter(l => l.brand_id === bid).slice(offset, offset + limit);
+    return { data: fallbackResults, total: fallbackResults.length };
   }
-  
+
   return { data: data || [], total: count || 0 };
 }
 
-export async function getLeadById(leadId) {
+export async function getLeadById(leadId, brandId) {
+  const bid = brandId || getCurrentBrandId();
+
   if (!supabase) {
-    return mockLeads.find(l => l.id === leadId) || null;
+    const lead = mockLeads.find(l => l.id === leadId);
+    return (lead && lead.brand_id === bid) ? lead : null;
   }
 
   const { data, error } = await supabase
     .from('leads')
     .select('*')
     .eq('id', leadId)
+    .eq('brand_id', bid)
     .single();
 
   if (error) return null;
   return data;
 }
 
-export async function getLeadsStats() {
+export async function getLeadsStats(brandId) {
+  const bid = brandId || getCurrentBrandId();
   const stats = {
     byTier: {},
     byMetro: {},
@@ -320,7 +335,7 @@ export async function getLeadsStats() {
   };
 
   if (!supabase) {
-    mockLeads.forEach(lead => {
+    mockLeads.filter(l => l.brand_id === bid).forEach(lead => {
       if (lead.lead_tier) stats.byTier[lead.lead_tier] = (stats.byTier[lead.lead_tier] || 0) + 1;
       if (lead.metro_area) stats.byMetro[lead.metro_area] = (stats.byMetro[lead.metro_area] || 0) + 1;
       if (lead.industry) stats.byIndustry[lead.industry] = (stats.byIndustry[lead.industry] || 0) + 1;
@@ -328,7 +343,10 @@ export async function getLeadsStats() {
     return stats;
   }
 
-  const { data, error } = await supabase.from('leads').select('lead_tier, metro_area, industry');
+  const { data, error } = await supabase
+    .from('leads')
+    .select('lead_tier, metro_area, industry')
+    .eq('brand_id', bid);
   if (error) {
     console.error('❌ Get leads stats error:', error.message);
     return stats;
@@ -343,7 +361,8 @@ export async function getLeadsStats() {
   return stats;
 }
 
-export async function updateOutreachStatus(leadId, status, notes = null) {
+export async function updateOutreachStatus(leadId, status, notes = null, brandId) {
+  const bid = brandId || getCurrentBrandId();
   const updates = {
     outreach_status: status,
     updated_at: new Date().toISOString(),
@@ -355,7 +374,7 @@ export async function updateOutreachStatus(leadId, status, notes = null) {
   updates.last_contact_date = new Date().toISOString();
 
   if (!supabase) {
-    const idx = mockLeads.findIndex(l => l.id === leadId);
+    const idx = mockLeads.findIndex(l => l.id === leadId && l.brand_id === bid);
     if (idx !== -1) {
       Object.assign(mockLeads[idx], updates);
       saveMockLeads();
@@ -367,6 +386,7 @@ export async function updateOutreachStatus(leadId, status, notes = null) {
     .from('leads')
     .update(updates)
     .eq('id', leadId)
+    .eq('brand_id', bid)
     .select()
     .single();
 
@@ -374,36 +394,28 @@ export async function updateOutreachStatus(leadId, status, notes = null) {
   return data;
 }
 
-export async function updateLeadOutreach(leadId, outreachData, status = null, notes = null) {
+export async function updateLeadOutreach(leadId, outreachData, status = null, notes = null, brandId) {
+  const bid = brandId || getCurrentBrandId();
+
   if (!supabase) {
-    const idx = mockLeads.findIndex(l => l.id === leadId);
+    const idx = mockLeads.findIndex(l => l.id === leadId && l.brand_id === bid);
     if (idx === -1) return null;
-    
-    // Ensure mega_profile exists
+
     if (!mockLeads[idx].mega_profile) mockLeads[idx].mega_profile = {};
-    
-    // Update the outreach key specifically
     mockLeads[idx].mega_profile.outreach = outreachData;
-    
-    // Optionally update top-level status and notes
-    if (status) {
-      mockLeads[idx].outreach_status = status;
-    }
-    if (notes) {
-      mockLeads[idx].notes = notes;
-    }
-    
+    if (status) mockLeads[idx].outreach_status = status;
+    if (notes) mockLeads[idx].notes = notes;
     mockLeads[idx].updated_at = new Date().toISOString();
     saveMockLeads();
     return mockLeads[idx];
   }
 
   try {
-    // 1. Fetch current mega_profile
     const { data: lead, error: fetchError } = await supabase
       .from('leads')
       .select('mega_profile')
       .eq('id', leadId)
+      .eq('brand_id', bid)
       .single();
 
     if (fetchError) throw fetchError;
@@ -415,19 +427,14 @@ export async function updateLeadOutreach(leadId, outreachData, status = null, no
       mega_profile: currentProfile,
       updated_at: new Date().toISOString()
     };
-    
-    if (status) {
-      updates.outreach_status = status;
-    }
-    if (notes) {
-      updates.notes = notes;
-    }
+    if (status) updates.outreach_status = status;
+    if (notes)  updates.notes = notes;
 
-    // 2. Update with combined data
     const { data, error } = await supabase
       .from('leads')
       .update(updates)
       .eq('id', leadId)
+      .eq('brand_id', bid)
       .select()
       .single();
 
@@ -435,8 +442,7 @@ export async function updateLeadOutreach(leadId, outreachData, status = null, no
     return data;
   } catch (err) {
     console.error('❌ updateLeadOutreach error:', err.message);
-    // Fallback to mock update if Supabase fails
-    const idx = mockLeads.findIndex(l => l.id === leadId);
+    const idx = mockLeads.findIndex(l => l.id === leadId && l.brand_id === bid);
     if (idx !== -1) {
       if (!mockLeads[idx].mega_profile) mockLeads[idx].mega_profile = {};
       mockLeads[idx].mega_profile.outreach = outreachData;
@@ -509,8 +515,9 @@ export const saveMemory = new Tool({
     },
     required: ['key', 'value'],
   },
-  fn: async (args) => {
+  fn: async (args, context = {}) => {
     const { key, value, agent = 'unknown' } = args;
+    const brandId = context.brand_id || process.env.BRAND_ID || 'unknown';
 
     if (!supabase) {
       console.log(`  🧠 [Memory-MOCK] ${agent} saved: "${key}" = "${value.slice(0, 60)}..."`);
@@ -518,11 +525,7 @@ export const saveMemory = new Tool({
     }
 
     try {
-      const { error } = await supabase
-        .from('agent_memory')
-        .upsert([{ key, value, agent, updated_at: new Date().toISOString() }], { onConflict: 'key' });
-
-      if (error) throw error;
+      await saveAgentMemory(agent, brandId, key, value);
       console.log(`  🧠 [Memory] ${agent} saved: "${key}"`);
       return JSON.stringify({ success: true, key });
     } catch (err) {
@@ -533,30 +536,43 @@ export const saveMemory = new Tool({
 
 export const recallMemory = new Tool({
   name: 'recall_memory',
-  description: 'Recall a previously saved memory by key or search term.',
+  description: 'Recall a previously saved memory by key or search term. Optionally filter by agent.',
   parameters: {
     type: 'object',
     properties: {
-      key: { type: 'string', description: 'Memory key to recall' },
+      key: { type: 'string', description: 'Memory key to recall. Prefix with "[" for prefix scan (e.g. "[email_" matches all keys starting with "email_")' },
+      agent: { type: 'string', description: 'Which agent\'s memory to search (optional, defaults to all agents)' },
     },
     required: ['key'],
   },
-  fn: async (args) => {
-    const { key } = args;
+  fn: async (args, context = {}) => {
+    const { key, agent } = args;
+    const brandId = context.brand_id || process.env.BRAND_ID || 'unknown';
 
     if (!supabase) {
-      return JSON.stringify({ key, value: null, note: 'No memory found (mock mode)' });
+      return JSON.stringify([]);
     }
 
     try {
-      const { data, error } = await supabase
+      let query = supabase
         .from('agent_memory')
-        .select('*')
-        .eq('key', key)
-        .single();
+        .select('memory_key, memory_value, updated_at')
+        .eq('brand_id', brandId);
 
-      if (error) return JSON.stringify({ key, value: null });
-      return JSON.stringify(data);
+      if (agent) {
+        query = query.eq('agent_name', agent);
+      }
+
+      if (key.startsWith('[')) {
+        const prefix = key.slice(1);
+        query = query.like('memory_key', prefix + '%');
+      } else {
+        query = query.eq('memory_key', key);
+      }
+
+      const { data, error } = await query;
+      if (error) return JSON.stringify({ error: error.message });
+      return JSON.stringify(data || []);
     } catch (err) {
       return JSON.stringify({ error: err.message });
     }

@@ -1,12 +1,11 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { 
-  MessageSquare, User, Calendar, Megaphone, Activity, FileText, 
-  Settings, Search, PlusCircle, CheckCircle, XCircle, Loader2, Send
+import {
+  MessageSquare, User, Calendar, Megaphone, Activity, FileText,
+  Settings, Search, PlusCircle, CheckCircle, XCircle, Loader2, Send, LogOut
 } from 'lucide-react';
 // import { motion, AnimatePresence } from 'framer-motion';
 
-// Import Views (if they exist and export components, we assume they are safe to import. 
-// Otherwise we might need to apply Tailwind to their files as well, but we focus on App.jsx layout first.)
+// Import Views
 import PerformanceView from './views/PerformanceView';
 import CalendarView from './views/CalendarView';
 import IntegrationsView from './views/IntegrationsView';
@@ -15,10 +14,29 @@ import ProfileView from './views/ProfileView';
 import HistoryView from './views/HistoryView';
 import LeadsView from './views/LeadsView';
 import CampaignView from './views/CampaignView';
-
-const API_BASE = import.meta.env.VITE_API_URL || (import.meta.env.PROD ? '/api' : 'http://localhost:4000/api');
+import LoginView from './views/LoginView';
+import { useAuth } from './components/AuthProvider';
+import { apiGet, apiPost } from './lib/apiClient';
 
 function App() {
+  const { session, loading: authLoading, signOut } = useAuth();
+
+  if (authLoading) {
+    return (
+      <div className="min-h-screen bg-surface-950 flex items-center justify-center text-surface-400 text-sm">
+        Cargando sesión…
+      </div>
+    );
+  }
+
+  if (!session) {
+    return <LoginView />;
+  }
+
+  return <AppAuthed signOut={signOut} />;
+}
+
+function AppAuthed({ signOut }) {
   const [currentView, setCurrentView] = useState('chat');
   const [activeChannel, setActiveChannel] = useState('general');
   const [agents, setAgents] = useState([]);
@@ -52,9 +70,7 @@ function App() {
 
   const fetchAgents = async () => {
     try {
-      const res = await fetch(`${API_BASE}/agents`, {
-        headers: { 'Authorization': `Bearer ${import.meta.env.VITE_API_SECRET_KEY}` }
-      });
+      const res = await apiGet('/agents');
       if(!res.ok) return;
       const data = await res.json();
       setAgents(data.agents || []);
@@ -70,9 +86,7 @@ function App() {
 
   const fetchJobs = async () => {
     try {
-      const res = await fetch(`${API_BASE}/jobs`, {
-        headers: { 'Authorization': `Bearer ${import.meta.env.VITE_API_SECRET_KEY}` }
-      });
+      const res = await apiGet('/jobs');
       if(!res.ok) return;
       const data = await res.json();
       setJobs(data.jobs || []);
@@ -97,17 +111,9 @@ function App() {
     setIsTyping(true);
 
     try {
-      const res = await fetch(`${API_BASE}/chat`, {
-        method: 'POST',
-        headers: { 
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${import.meta.env.VITE_API_SECRET_KEY}`
-        },
-        body: JSON.stringify({
-          message: userMessage.text,
-          agent: selectedAgent,
-          brandId: 'brand_test_123' 
-        })
+      const res = await apiPost('/chat', {
+        message: userMessage.text,
+        agent: selectedAgent,
       });
       const data = await res.json();
       
@@ -133,10 +139,8 @@ function App() {
 
   const handleApprovalAction = async (jobId, action) => {
     try {
-      const res = await fetch(`${API_BASE}/approve?jobId=${jobId}&action=${action}`, {
-        headers: { 'Authorization': `Bearer ${import.meta.env.VITE_API_SECRET_KEY}` }
-      });
-      if (res.ok) setTimeout(() => fetchJobs(), 1000); 
+      const res = await apiGet(`/approve?jobId=${jobId}&action=${action}`);
+      if (res.ok) setTimeout(() => fetchJobs(), 1000);
     } catch (err) {
       console.error('Action error:', err);
     }
@@ -357,6 +361,7 @@ function App() {
         <div className="p-4 border-t border-surface-800 bg-surface-900 shrink-0 space-y-1">
           <NavItem icon={FileText} label="Archivos" isActive={currentView==='files'} onClick={() => setCurrentView('files')} />
           <NavItem icon={Settings} label="Integraciones" isActive={currentView==='integrations'} onClick={() => setCurrentView('integrations')} />
+          <NavItem icon={LogOut} label="Cerrar sesión" isActive={false} onClick={signOut} />
         </div>
       </div>
 

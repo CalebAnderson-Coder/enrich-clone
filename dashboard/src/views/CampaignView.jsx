@@ -1,7 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import './CampaignView.css';
-
-const API_BASE = import.meta.env.VITE_API_URL || (import.meta.env.PROD ? '/api' : 'http://localhost:4000/api');
+import { apiGet, apiPost } from '../lib/apiClient';
 
 export default function CampaignView() {
   const [jobs, setJobs] = useState([]);
@@ -19,9 +18,7 @@ export default function CampaignView() {
 
   const fetchJobs = async () => {
     try {
-      const res = await fetch(`${API_BASE}/jobs`, {
-        headers: { 'Authorization': `Bearer ${import.meta.env.VITE_API_SECRET_KEY}` }
-      });
+      const res = await apiGet('/jobs');
       if (res.ok) {
         const data = await res.json();
         setJobs(data.jobs || []);
@@ -46,14 +43,7 @@ export default function CampaignView() {
     e.preventDefault();
     setPipelineStatus('Lanzando pipeline... revisa la consola del servidor de Node.js para logs en vivo.');
     try {
-      const res = await fetch(`${API_BASE}/campaign/pipeline`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${import.meta.env.VITE_API_SECRET_KEY}`
-        },
-        body: JSON.stringify({ industry, city })
-      });
+      const res = await apiPost('/campaign/pipeline', { industry, city });
       const data = await res.json();
       setPipelineStatus(data.message || 'Pipeline finalizado.');
     } catch(e) {

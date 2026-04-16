@@ -12,8 +12,7 @@ import { supabase } from '../lib/supabase.js';
 // ── Config ───────────────────────────────────────────────────
 const FIRECRAWL_API_KEY = process.env.FIRECRAWL_API_KEY;
 if (!FIRECRAWL_API_KEY) {
-  console.error('❌ FATAL: FIRECRAWL_API_KEY is not set. Configure it in your environment.');
-  process.exit(1);
+  console.warn('⚠️  [email_enrichment] FIRECRAWL_API_KEY not set — skipping run');
 }
 const BATCH_SIZE = 10;      // leads per batch
 const DELAY_MS  = 1500;     // delay between scrapes (rate limiting)
@@ -329,13 +328,17 @@ function sleep(ms) {
 // ── Main ─────────────────────────────────────────────────────
 
 async function main() {
+  if (!FIRECRAWL_API_KEY) {
+    return { skipped: true, reason: 'FIRECRAWL_API_KEY missing' };
+  }
+
   console.log('╔══════════════════════════════════════════════════╗');
   console.log('║   📧 Email Enrichment Worker                    ║');
   console.log('╚══════════════════════════════════════════════════╝');
 
   if (!supabase) {
-    console.error('❌ Supabase not configured. Exiting.');
-    process.exit(1);
+    console.error('❌ Supabase not configured.');
+    return { error: 'Supabase not configured', processed: 0 };
   }
 
   // Fetch leads with website but no email
@@ -349,7 +352,7 @@ async function main() {
 
   if (error) {
     console.error('❌ Failed to query leads:', error.message);
-    process.exit(1);
+    return { error: error.message, processed: 0 };
   }
 
   // Filter to only those with actual HTTP URLs
@@ -424,7 +427,5 @@ async function main() {
   }
 }
 
-main().catch(err => {
-  console.error('💥 Fatal error:', err);
-  process.exit(1);
-});
+// Export as named function — server embeds it; do NOT auto-run on import.
+export { main as runEmailEnrichment };

@@ -1,10 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import './LeadsView.css';
 import OutreachReviewModal from '../components/OutreachReviewModal';
-
-const API_BASE_URL = import.meta.env.VITE_API_URL || (import.meta.env.PROD ? '/api' : 'http://localhost:4000/api');
-const API_SECRET   = import.meta.env.VITE_API_SECRET_KEY;
-const authHeaders  = () => ({ 'Authorization': `Bearer ${API_SECRET}` });
+import { apiGet, apiPost } from '../lib/apiClient';
 
 export default function LeadsView() {
   const [leads, setLeads] = useState([]);
@@ -61,7 +58,7 @@ export default function LeadsView() {
 
   const fetchLeads = async () => {
     try {
-      const res = await fetch(`${API_BASE_URL}/leads?limit=500`, { headers: authHeaders() });
+      const res = await apiGet('/leads?limit=500');
       if (!res.ok) {
         console.error(`Error fetching /api/leads: ${res.status}`);
         return;
@@ -175,11 +172,7 @@ export default function LeadsView() {
 
   const handleRegenerate = async (leadId, agentNotes) => {
     try {
-      const response = await fetch(`${API_BASE_URL}/leads/${leadId}/regenerate-outreach`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', ...authHeaders() },
-        body: JSON.stringify({ notes: agentNotes })
-      });
+      const response = await apiPost(`/leads/${leadId}/regenerate-outreach`, { notes: agentNotes });
       const data = await response.json();
       return data;
     } catch (err) {
@@ -190,13 +183,9 @@ export default function LeadsView() {
 
   const handleSaveOutreach = async (leadId, outreachData) => {
     try {
-      const response = await fetch(`${API_BASE_URL}/leads/${leadId}/outreach`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', ...authHeaders() },
-        body: JSON.stringify({
-          outreach: outreachData,
-          status: 'DRAFT'
-        })
+      const response = await apiPost(`/leads/${leadId}/outreach`, {
+        outreach: outreachData,
+        status: 'DRAFT'
       });
       if (!response.ok) throw new Error(`Save draft failed: ${response.status}`);
 
@@ -210,13 +199,9 @@ export default function LeadsView() {
 
   const handleApproveOutreach = async (leadId, outreachData) => {
     try {
-      const response = await fetch(`${API_BASE_URL}/leads/${leadId}/outreach`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', ...authHeaders() },
-        body: JSON.stringify({
-          outreach: outreachData,
-          status: 'APPROVED'
-        })
+      const response = await apiPost(`/leads/${leadId}/outreach`, {
+        outreach: outreachData,
+        status: 'APPROVED'
       });
 
       if (!response.ok) throw new Error('Failed to approve');
@@ -231,14 +216,10 @@ export default function LeadsView() {
 
   const handleRejectLead = async (leadId, agentNotes) => {
     try {
-      const response = await fetch(`${API_BASE_URL}/leads/${leadId}/outreach`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', ...authHeaders() },
-        body: JSON.stringify({
-          outreach: selectedLead?.mega_profile?.outreach || {},
-          status: 'REJECTED',
-          notes: agentNotes || ''
-        })
+      const response = await apiPost(`/leads/${leadId}/outreach`, {
+        outreach: selectedLead?.mega_profile?.outreach || {},
+        status: 'REJECTED',
+        notes: agentNotes || ''
       });
 
       if (!response.ok) throw new Error('Failed to reject');
