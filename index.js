@@ -1074,7 +1074,9 @@ setInterval(async () => {
   catch (e) { console.error('Interval error (outreach):', e.message); }
 }, 15 * 60_000);
 
-// Email enrichment — every 6 hours
+// Email enrichment — kickoff inmediato + cada 6 horas
+// Kickoff arranca al boot/redeploy para no esperar 6h tras cada restart.
+runEmailEnrichment().catch(e => console.error('Startup error (email enrichment):', e.message));
 setInterval(async () => {
   try { await runEmailEnrichment(); }
   catch (e) { console.error('Interval error (email enrichment):', e.message); }
