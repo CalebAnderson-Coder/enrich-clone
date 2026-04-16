@@ -50,5 +50,7 @@ _archive/**/build/
 # Local runtime artifacts (ran from repo root)
 *_state.json
 campaign_output.txt
+test_output.txt
 scraped_*.txt
 scraped_*.html
+scraped_*.md
