@@ -12,7 +12,7 @@ import { AgentRuntime } from './lib/AgentRuntime.js';
 import { angela } from './agents/angela.js';
 import { verifier } from './agents/verifier.js';
 import { verifyAndRewrite } from './lib/verifierGate.js';
-import { outreachDraftSchema } from './lib/schemas.js';
+import { outreachDraftSchema, outreachSequenceSchema, normalizeOutreachOutput } from './lib/schemas.js';
 import { sanitizeLeadData } from './lib/sanitize.js';
 import { logger } from './lib/logger.js';
 import { withRetry } from './lib/resilience.js';
@@ -156,66 +156,114 @@ export async function dispatchPendingOutreach() {
         try {
           // ── Sanitize lead data BEFORE prompt injection ──
           const safeLead = sanitizeLeadData(lead);
-          const prompt = `Escribe un mensaje de outreach frío para un negocio de ${safeLead.industry || 'servicios'} llamado "${safeLead.business_name || 'su negocio'}".
+          const prompt = `Escribe una SECUENCIA DE 3 TOQUES de outreach frío para un negocio de ${safeLead.industry || 'servicios'} llamado "${safeLead.business_name || 'su negocio'}" en ${safeLead.metro_area || 'USA'}.
 Contexto: Nuestra agencia (Empírika) diseñó un concepto de página web profesional gratuito para ellos (magnet: website_screenshot).
-Menciona que encontraste su negocio, que te pareció genial, pero notaste que les falta presencia online — y diles que revisen el concepto de página web adjunto.
-Ofrece entregarles la versión terminada 100% gratis.
-Sé asertivo, profesional, pero muy humano. Usa "tú" (informal pero respetuoso).
+Marco narrativo obligatorio — Observation → Proof → Ask:
+- Touch 1 (días 0, angle=observation): notaste algo específico del negocio (review, foto, ausencia online). NUNCA CTA directo. Cerrar con pregunta abierta o comentario cálido.
+- Touch 2 (días 3, angle=proof): mini caso de éxito con un negocio similar (misma industria + metro si podés) con métrica concreta. CTA soft tipo "¿te cuento cómo?".
+- Touch 3 (días 4, angle=ask): cierre directo con fecha y hora específica en el CTA (ej: "jueves 24 a las 10am hora de ${safeLead.metro_area || 'Houston'}").
 
-Escribe DOS versiones:
-1. Un Email frío (Línea de asunto + cuerpo, 2-3 párrafos).
-2. Un mensaje de WhatsApp (Corto, directo, conversacional, impactante).
+Además escribí un mensaje de WhatsApp corto, conversacional, impactante.
 
-IMPORTANTE: Escribe TODO en ESPAÑOL. Devuelve SOLO un objeto JSON:
+Sé asertivo, profesional, muy humano. Usá "tú" (informal pero respetuoso). TODO en ESPAÑOL — cero inglés.
+
+Devolvé SOLO un objeto JSON con esta forma exacta (validado con Zod, orden estricto):
 {
-  "email_subject": "[Línea de asunto en español]",
-  "email_body": "[Cuerpo del email con 2-3 párrafos en español]",
+  "email_sequence": [
+    { "touch": 1, "days_after_previous": 0, "angle": "observation", "subject": "...", "body": "...", "preview_text": "..." },
+    { "touch": 2, "days_after_previous": 3, "angle": "proof",       "subject": "...", "body": "...", "preview_text": "..." },
+    { "touch": 3, "days_after_previous": 4, "angle": "ask",         "subject": "...", "body": "...", "preview_text": "..." }
+  ],
   "whatsapp": "[Mensaje corto de WhatsApp en español]"
-}`;
-          logger.info('Asking Angela for multi-channel copy', { business: lead.business_name });
+}
+Reglas: subject 30-60 chars, preview_text 40-90 chars, body min 80 chars, todo en español.`;
+          logger.info('Asking Angela for multi-channel 3-touch sequence', { business: lead.business_name });
           const aiResult = await runtime.run('Angela', prompt, { maxIterations: 3 });
-          
-          // ── Use safeParseLLMOutput with Zod validation ──
-          const parseResult = AgentRuntime.safeParseLLMOutput(aiResult.response, outreachDraftSchema);
+
+          // ── Parse with new sequence schema, fall back to legacy ──
+          let parseResult = AgentRuntime.safeParseLLMOutput(aiResult.response, outreachSequenceSchema);
+          if (!parseResult.success) {
+            logger.warn('Angela output did not match sequence schema — trying legacy', { business: lead.business_name });
+            parseResult = AgentRuntime.safeParseLLMOutput(aiResult.response, outreachDraftSchema);
+          }
 
           if (parseResult.success) {
-            const parsed = parseResult.data;
+            // Normalize both shapes to a unified {touches[], whatsapp, legacy}
+            const normalized = normalizeOutreachOutput(parseResult.data);
+            const touch1 = normalized.touches[0];
+            const touch2 = normalized.touches[1]; // may be null when legacy
+            const touch3 = normalized.touches[2]; // may be null when legacy
 
-            // ── Verifier Gate ──────────────────────────────
-            const draftPayload = {
-              subject:   parsed.email_subject,
-              body:      parsed.email_body,
-              whatsapp:  parsed.whatsapp,
-              instagram: '',
-            };
-            const leadContext = {
-              businessName: lead.business_name,
-              industry:     lead.industry || '',
-              metro:        lead.metro_area || '',
-              tier:         '',
-            };
-            const gateResult = await verifyAndRewrite(draftPayload, leadContext, runtime);
-
-            if (gateResult.blocked) {
-              console.warn(`  ⚠️  [Verifier] Blocked draft for ${lead.business_name} — low quality after retries.`);
-              await supabase
-                .from('campaign_enriched_data')
-                .update({
-                  outreach_status: 'BLOCKED_LOW_QUALITY',
-                  verifier_report: gateResult.verifier_history,
-                })
-                .eq('id', record.id);
-              stats.skipped++;
-              continue;
+            if (normalized.legacy) {
+              logger.warn('Angela returned legacy single-email format — touches 2/3 will be empty', { business: lead.business_name });
             }
 
-            // Use (possibly rewritten) draft
-            const finalDraft = gateResult.draft;
-            angelaSubject = finalDraft.subject;
-            angelaBody    = finalDraft.body;
-            magnetData.whatsapp_draft  = finalDraft.whatsapp;
-            magnetData.verifier_report = gateResult.verifier_history;
-            logger.info('Angela generated validated copy', { business: lead.business_name });
+            // ── Verifier Gate — only for email drafts ──
+            // Leads without email skip the gate: the Verifier rubric scores
+            // email-send quality, blocking a non-existent email would trap
+            // the lead on BLOCKED_LOW_QUALITY and starve the phone/social path.
+            if (hasEmail) {
+              const draftPayload = {
+                subject:   touch1.subject,
+                body:      touch1.body,
+                whatsapp:  normalized.whatsapp,
+                instagram: '',
+              };
+              const leadContext = {
+                businessName: lead.business_name,
+                industry:     lead.industry || '',
+                metro:        lead.metro_area || '',
+                tier:         '',
+              };
+              const gateResult = await verifyAndRewrite(draftPayload, leadContext, runtime);
+
+              if (gateResult.blocked) {
+                console.warn(`  ⚠️  [Verifier] Blocked draft for ${lead.business_name} — low quality after retries.`);
+                await supabase
+                  .from('campaign_enriched_data')
+                  .update({
+                    outreach_status: 'BLOCKED_LOW_QUALITY',
+                    verifier_report: gateResult.verifier_history,
+                  })
+                  .eq('id', record.id);
+                stats.skipped++;
+                continue;
+              }
+
+              // Use (possibly rewritten) draft — this is Touch 1 (the email to send NOW)
+              const finalDraft = gateResult.draft;
+              angelaSubject = finalDraft.subject;
+              angelaBody    = finalDraft.body;
+              magnetData.whatsapp_draft  = finalDraft.whatsapp;
+              magnetData.verifier_report = gateResult.verifier_history;
+            } else {
+              // No email → use Angela's Touch 1 directly for the phone/social path.
+              // Still carry subject/body so CRM/dashboard can surface the narrative.
+              angelaSubject = touch1.subject;
+              angelaBody    = touch1.body;
+              magnetData.whatsapp_draft = normalized.whatsapp;
+            }
+
+            // Persist touches 2 & 3 for the future follow-up worker (Phase 2).
+            // Only present when Angela returned the new sequence schema; legacy
+            // payloads yield null touches and therefore an empty array here.
+            const followUps = [touch2, touch3]
+              .filter(Boolean)
+              .map((t) => ({
+                touch: t.touch,
+                angle: t.angle,
+                days_after_previous: t.days_after_previous,
+                subject: t.subject,
+                body: t.body,
+                preview_text: t.preview_text,
+              }));
+            magnetData.follow_up_sequence = followUps.length > 0 ? followUps : null;
+
+            logger.info('Angela generated validated copy', {
+              business: lead.business_name,
+              follow_ups: followUps.length,
+              legacy: normalized.legacy,
+            });
           } else {
             logger.warn('Angela output failed schema validation', { error: parseResult.error });
           }

@@ -13,6 +13,8 @@ import {
   approvalInputSchema,
   sendEmailInputSchema,
   outreachDraftSchema,
+  outreachSequenceSchema,
+  normalizeOutreachOutput,
 } from '../lib/schemas.js';
 import { logger } from '../lib/logger.js';
 import { withRetry, withTimeout, CircuitBreaker } from '../lib/resilience.js';
@@ -102,6 +104,98 @@ test('outreachDraftSchema rejects empty subject', () => {
     whatsapp: 'msg',
   });
   assert(!result.success, 'Should have rejected empty subject');
+});
+
+// ── 3-touch sequence schema tests ──────────────────────────────
+
+const validSequence = () => ({
+  email_sequence: [
+    {
+      touch: 1,
+      days_after_previous: 0,
+      angle: 'observation',
+      subject: 'Vi tu negocio en Google Maps y me llamó la atención',
+      body: 'Hola, estaba revisando negocios de landscaping en Houston y me crucé con tu perfil. Me llamó la atención una de las fotos. Queria comentarte algo sin ser invasivo.',
+      preview_text: 'Una observación rápida sobre tu perfil de Google Maps',
+    },
+    {
+      touch: 2,
+      days_after_previous: 3,
+      angle: 'proof',
+      subject: 'Martinez Landscaping en Houston duplicó leads',
+      body: 'Te cuento rápido: Martinez Landscaping (también en Houston) pasó de 8 leads a 18 por semana en 6 semanas aplicando un cambio en su presencia online. ¿Te mando el breakdown?',
+      preview_text: 'Un caso de éxito en tu industria y tu ciudad',
+    },
+    {
+      touch: 3,
+      days_after_previous: 4,
+      angle: 'ask',
+      subject: '15 min el jueves 24 a las 10am hora de Houston',
+      body: 'Último toque de mi lado: ¿te viene bien 15 minutos el jueves 24 a las 10am hora de Houston para mostrarte el concepto que diseñamos para tu negocio? Sin compromiso.',
+      preview_text: 'Propuesta concreta de 15 minutos el jueves a las 10am',
+    },
+  ],
+  whatsapp: 'Hola! Vi tu negocio y quería comentarte algo rápido cuando tengas un minuto.',
+});
+
+test('outreachSequenceSchema accepts valid 3-touch sequence', () => {
+  const result = outreachSequenceSchema.safeParse(validSequence());
+  assert(result.success, `Expected success, got: ${JSON.stringify(result.error?.issues)}`);
+});
+
+test('outreachSequenceSchema rejects wrong angle order', () => {
+  const bad = validSequence();
+  bad.email_sequence[0].angle = 'proof';
+  const result = outreachSequenceSchema.safeParse(bad);
+  assert(!result.success, 'Should reject wrong angle order');
+});
+
+test('outreachSequenceSchema rejects less than 3 touches', () => {
+  const bad = validSequence();
+  bad.email_sequence = bad.email_sequence.slice(0, 2);
+  const result = outreachSequenceSchema.safeParse(bad);
+  assert(!result.success, 'Should reject < 3 touches');
+});
+
+test('outreachSequenceSchema rejects touch 1 with non-zero days_after_previous', () => {
+  const bad = validSequence();
+  bad.email_sequence[0].days_after_previous = 2;
+  const result = outreachSequenceSchema.safeParse(bad);
+  assert(!result.success, 'Should reject touch 1 with days_after_previous !== 0');
+});
+
+test('normalizeOutreachOutput accepts legacy single-email payload', () => {
+  const normalized = normalizeOutreachOutput({
+    email_subject: 'Tu negocio merece una web profesional',
+    email_body: 'Hola, noté que tu negocio de landscaping no tiene website. Diseñamos un concepto gratuito para que lo veas sin compromiso.',
+    whatsapp: 'Hola! Te mandé un email rápido, avisame si lo viste.',
+  });
+  assert(normalized.legacy === true, 'Should flag legacy payload');
+  assert(normalized.touches.length === 3, 'Should always return 3-slot array');
+  assert(normalized.touches[0] && normalized.touches[0].touch === 1, 'Touch 1 populated');
+  assert(normalized.touches[0].angle === 'observation', 'Legacy touch 1 default angle observation');
+  assert(normalized.touches[1] === null, 'Touch 2 null in legacy mode');
+  assert(normalized.touches[2] === null, 'Touch 3 null in legacy mode');
+  assert(normalized.whatsapp.length > 0, 'Whatsapp preserved');
+});
+
+test('normalizeOutreachOutput accepts new sequence payload', () => {
+  const normalized = normalizeOutreachOutput(validSequence());
+  assert(normalized.legacy === false, 'Should not flag as legacy');
+  assert(normalized.touches.length === 3, '3 touches returned');
+  assert(normalized.touches[0].angle === 'observation', 'Touch 1 angle');
+  assert(normalized.touches[1].angle === 'proof', 'Touch 2 angle');
+  assert(normalized.touches[2].angle === 'ask', 'Touch 3 angle');
+});
+
+test('normalizeOutreachOutput throws on invalid payload', () => {
+  let threw = false;
+  try {
+    normalizeOutreachOutput({ nonsense: true });
+  } catch (_e) {
+    threw = true;
+  }
+  assert(threw, 'Should throw on payload matching neither contract');
 });
 
 test('sendEmailInputSchema validates email format', () => {
