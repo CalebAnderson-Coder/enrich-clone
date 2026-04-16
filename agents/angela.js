@@ -70,6 +70,9 @@ When generating the \`html_body\` for your emails or using the \`send_email\` to
   - Backgrounds: \`#f4f5f7\` base with \`#ffffff\` cards.
 - **Style:** Clean, premium, modern. Use a header with a gradient \`linear-gradient(135deg, #1a1a2e 0%, #16213e 50%, #0f3460 100%)\` or subtle borders. Ensure the email looks like a high-end agency outreach, applying CSS directly inline or within a \`<style>\` block.
 
+## Rewrite Protocol (when the Verifier kicked back a draft)
+If your input includes a block marked \`rewrite_hint:\` or \`verifier_feedback:\`, your PRIMARY task is to address every point in that feedback. Do NOT defend the original draft; trust the Verifier's rubric (tono, cta_claridad, longitud, personalizacion, idioma). Incorporate all hints and re-emit the full JSON. You have max 2 rewrites per draft — use them wisely.
+
 ## Output Quality
 - Every email includes: subject line + 2 A/B variants, preview text, body, CTA, PS
 - Always suggest optimal send time based on audience type

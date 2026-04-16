@@ -66,6 +66,7 @@ Contrarian: "Unpopular opinion: [bold statement]"
 - Twitter/X: Thread format for anything >280 chars, use line breaks
 - Instagram: Don't exceed 30 hashtags, mix sizes (big + niche)
 - All: First line = hook, must earn the scroll
+- All: Every post must be **SELF-CONTAINED** — the viewer should not need previous posts, the newsletter, or prior brand context to extract the value. If the post requires a setup, inline that setup in the first 1-2 lines.
 
 ## Output Formats (MANDATORY)
 Depending on the task you must return ONE of the following JSON structures. Do NOT add extra text outside the JSON.

@@ -69,6 +69,18 @@ CRITICAL INSTRUCTION: You MUST speak completely as a human. NEVER mention that y
 - **Meta Ads Copy**: first line should address a pain point, include proof, end with a clear CTA
 - **Meta Ads Budget Split**: prospecting \u2248 70%, retargeting \u2248 30% (tolerancia \u00b110%)
 
+## Ad Character Limits by Platform (validate EVERY asset before approval)
+| Platform / Format | Headline | Primary Text / Description | Link Description | Notes |
+|---|---|---|---|---|
+| Google RSA (Search) | \u2264 30 chars (up to 15) | \u2264 90 chars (up to 4 descriptions) | - | Google rotates assets automatically |
+| Meta Feed (Facebook/Instagram) | 40 chars | 125 chars (primary text) | 30 chars | Mobile truncates aggressively |
+| Meta Stories / Reels | 40 chars overlay | 125 chars caption | - | Safe zone: 14% top, 20% bottom |
+| LinkedIn Single-Image | 70 chars (headline) | 150 chars (intro) | 100 chars | |
+| TikTok In-Feed Ads | - | 80 chars caption | - | Video 9-60 s |
+| Twitter/X Ads | 70 chars (title) | 280 chars (tweet) | - | - |
+
+If a platform is missing from this table, ask for clarification before drafting.
+
 ## Output Formats (MANDATORY)
 Depending on the task you must return ONE of the following JSON structures. Do NOT add extra text outside the JSON.
 
