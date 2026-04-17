@@ -21,6 +21,7 @@ import { logger } from '../lib/logger.js';
 import { withRetry, withTimeout, CircuitBreaker } from '../lib/resilience.js';
 import { sanitizeForPrompt, sanitizeLeadData } from '../lib/sanitize.js';
 import { AgentRuntime } from '../lib/AgentRuntime.js';
+import { normalizeUSPhone } from '../tools/email.js';
 
 let passed = 0;
 let failed = 0;
@@ -543,6 +544,58 @@ test('safeParseLLMOutput handles garbage input gracefully', () => {
   const result = AgentRuntime.safeParseLLMOutput('This is not JSON at all', outreachDraftSchema);
   assert(!result.success, 'Should fail on non-JSON');
   assert(result.error, 'Should return error message');
+});
+
+// ─────────────────────────────────────────────────────────────
+console.log('\n══════════════════════════════════════════════');
+console.log('  PHASE 6: GHL Sync (Path A phone push)');
+console.log('══════════════════════════════════════════════\n');
+
+test('normalizeUSPhone adds +1 to 10-digit US numbers', () => {
+  assert(normalizeUSPhone('407-555-1212') === '+14075551212', `Got ${normalizeUSPhone('407-555-1212')}`);
+  assert(normalizeUSPhone('(305) 799-4444') === '+13057994444', `Got ${normalizeUSPhone('(305) 799-4444')}`);
+  assert(normalizeUSPhone('3055550100') === '+13055550100', `Got ${normalizeUSPhone('3055550100')}`);
+});
+
+test('normalizeUSPhone preserves +1 on already-prefixed numbers', () => {
+  assert(normalizeUSPhone('+1 321-555-0103') === '+13215550103', `Got ${normalizeUSPhone('+1 321-555-0103')}`);
+  assert(normalizeUSPhone('+13055550100') === '+13055550100', `Got ${normalizeUSPhone('+13055550100')}`);
+});
+
+test('normalizeUSPhone handles 11-digit numbers starting with 1', () => {
+  assert(normalizeUSPhone('13055550100') === '+13055550100', `Got ${normalizeUSPhone('13055550100')}`);
+});
+
+test('normalizeUSPhone returns empty on falsy/empty input', () => {
+  assert(normalizeUSPhone(null) === '', 'null should return empty');
+  assert(normalizeUSPhone(undefined) === '', 'undefined should return empty');
+  assert(normalizeUSPhone('') === '', 'empty string should return empty');
+  assert(normalizeUSPhone('abc') === '', `non-digits should return empty, got ${normalizeUSPhone('abc')}`);
+});
+
+await testAsync('pushDraftPhoneToGHL skips when credentials missing', async () => {
+  const mod = await import('../tools/email.js');
+  const prev = {
+    EMPIRIKA_GHL_KEY:         process.env.EMPIRIKA_GHL_KEY,
+    GHL_API_KEY:              process.env.GHL_API_KEY,
+    EMPIRIKA_GHL_LOCATION_ID: process.env.EMPIRIKA_GHL_LOCATION_ID,
+    GHL_LOCATION_ID:          process.env.GHL_LOCATION_ID,
+  };
+  for (const k of Object.keys(prev)) delete process.env[k];
+
+  try {
+    const result = await mod.pushDraftPhoneToGHL({
+      business_name: 'Test Co',
+      phone:         '305-555-0100',
+      industry:      'Remodeling',
+      metro_area:    'Miami, FL',
+    });
+    assert(result.error === 'missing_credentials', `Expected missing_credentials, got ${JSON.stringify(result)}`);
+  } finally {
+    for (const [k, v] of Object.entries(prev)) {
+      if (v !== undefined) process.env[k] = v;
+    }
+  }
 });
 
 // ─────────────────────────────────────────────────────────────

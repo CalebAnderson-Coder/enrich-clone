@@ -16,6 +16,7 @@ import { outreachDraftSchema, outreachSequenceSchema, normalizeOutreachOutput } 
 import { sanitizeLeadData } from './lib/sanitize.js';
 import { logger } from './lib/logger.js';
 import { withRetry } from './lib/resilience.js';
+import { pushDraftPhoneToGHL } from './tools/email.js';
 
 dotenv.config();
 
@@ -339,6 +340,22 @@ Reglas: subject 30-60 chars, preview_text 40-90 chars, body min 80 chars, todo e
         // Carry Angela's whatsapp copy (set earlier when magnet_type=website_screenshot)
         // If absent, the human team calls with their own script using magnetData context.
 
+        // ── Push to GHL pipeline (COLD LEADS / stage NUEVO) ─────
+        // Idempotent: skip if we already synced this lead to GHL before.
+        if (!magnetData.ghl_contact_id) {
+          const ghlResult = await pushDraftPhoneToGHL(lead, {
+            callScript: magnetData.call_script || null,
+            whatsapp:   magnetData.whatsapp_draft || null,
+          });
+          if (ghlResult.contactId) {
+            magnetData.ghl_contact_id     = ghlResult.contactId;
+            magnetData.ghl_opportunity_id = ghlResult.opportunityId || null;
+            magnetData.ghl_synced_at      = new Date().toISOString();
+          } else {
+            magnetData.ghl_sync_error = ghlResult.error || 'unknown';
+          }
+        }
+
         await supabase
           .from('campaign_enriched_data')
           .update({ outreach_status: 'DRAFT_PHONE', lead_magnets_data: magnetData })
@@ -348,7 +365,11 @@ Reglas: subject 30-60 chars, preview_text 40-90 chars, body min 80 chars, todo e
           .update({ outreach_status: 'DRAFT_PHONE' })
           .eq('id', lead.id);
 
-        logger.info('Phone/social draft saved — call-sheet ready', { business: lead.business_name, phone: lead.phone });
+        logger.info('Phone/social draft saved — call-sheet ready', {
+          business: lead.business_name,
+          phone:    lead.phone,
+          ghl_contact: magnetData.ghl_contact_id || null,
+        });
       }
       stats.rendered++;
 
