@@ -8,7 +8,7 @@ import { apiGet, API_BASE_URL } from '../lib/apiClient';
 import {
   getMockStats, getMockBootstrapEvents, subscribeMockStream,
 } from '../lib/cockpitMock';
-import PixelOfficeCanvas from '../components/PixelOffice';
+import LiveAgentsFloor from '../components/LiveAgentsFloor';
 
 // ─────────────────────────────────────────────────────────
 // Mock flag. Flip to false to wire live /api/cockpit/* endpoints.
@@ -174,28 +174,6 @@ function Funnel({ funnel }) {
             </div>
           );
         })}
-      </div>
-    </div>
-  );
-}
-
-function PixelOfficeSlot({ events }) {
-  return (
-    <div
-      className={`${GLASS} relative overflow-hidden p-2`}
-      style={{ height: 400 }}
-    >
-      <div className="absolute inset-0 bg-[radial-gradient(circle_at_30%_20%,rgba(94,106,210,0.18),transparent_60%),radial-gradient(circle_at_75%_70%,rgba(217,70,239,0.12),transparent_55%)] pointer-events-none" />
-      <div className="relative w-full h-full flex items-center justify-center">
-        <PixelOfficeCanvas
-          events={events}
-          useMockEvents={!events || events.length === 0}
-          width={1024}
-          height={384}
-        />
-      </div>
-      <div className="absolute top-3 left-4 text-[11px] uppercase tracking-[0.25em] text-white/50">
-        Pixel Office · Live
       </div>
     </div>
   );
@@ -596,14 +574,14 @@ export default function CockpitView() {
         <Funnel funnel={stats?.funnel} />
       </motion.div>
 
-      {/* Pixel Office placeholder (stream P1) */}
+      {/* Live Agents Floor — 9 glass cards + 60s timeline strip */}
       <motion.div
         initial={{ opacity: 0 }}
         animate={{ opacity: 1 }}
         transition={{ delay: 0.25 }}
         className="mb-6"
       >
-        <PixelOfficeSlot events={events} />
+        <LiveAgentsFloor events={events} />
       </motion.div>
 
       {/* C + D) Transcript + Scoreboard */}
