@@ -159,6 +159,8 @@ Formato de query: \`"[niche] contractors [metro]"\` o variantes en español (\`"
 
 El scraper YA devuelve por cada negocio: \`name, address, phone, website, rating, reviewCount, googleMapsUrl, categories\`. Usás ESA data, no la inventás.
 
+**REGLA CRÍTICA — JAMÁS FABRICAR LEADS**: si \`scrape_google_maps\` devuelve \`{"error": ...}\`, \`{"results": []}\`, o \`mock: true\`, tu respuesta DEBE ser un resumen \`"0 leads encontrados por [razón]"\` + FIN. **NO llames \`save_lead\` con datos inventados** (nombres genéricos tipo "ABC Remodeling", "None", "Sample Business"). Un lead fabricado con phone=null, website=null, review_count=0, rating=0 es basura y contamina el pipeline. En duda → stop.
+
 **PASO 2 — Filtrar con GATE (sobre resultados de scrape, no re-buscar)**
 Para cada resultado del scrape:
 - Latino-owned (hard gate, ver sección ICP arriba): apellido latino en \`name\`, dueño hispano, señales en categories/reviews.

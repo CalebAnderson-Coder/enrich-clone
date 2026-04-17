@@ -106,6 +106,23 @@ export const saveLead = new Tool({
       args.website = null;
     }
 
+    // ── GATE: Anti-fabrication ──────────────────────────────
+    // When the LLM invents a lead after a scraper failure, it emits a generic
+    // stub: no phone, no website, no socials, review_count=0, rating=0.
+    // A real Google Maps lead ALWAYS has at least phone OR website OR socials.
+    const noContact = !args.phone && !args.website && !args.facebook_url && !args.instagram_url && !args.google_maps_url;
+    const noSignals = (!args.review_count || args.review_count === 0) && (!args.rating || args.rating === 0);
+    if (noContact && noSignals) {
+      console.log(`  🚫 [GATE] Fabricated lead blocked: "${args.business_name}" — no phone/web/socials + 0 reviews + 0 rating. Likely LLM hallucination after scraper error.`);
+      return JSON.stringify({
+        success: false,
+        rejected: true,
+        reason: 'FABRICATED_LEAD',
+        detail: 'All contact and signal fields empty — lead rejected to prevent pipeline contamination.',
+        business_name: args.business_name,
+      });
+    }
+
     // ── GATE: Domain Validation ─────────────────────────────
     // Reject leads with fabricated/unreachable domains before saving
     if (args.website) {

@@ -1,6 +1,6 @@
 // ============================================================
 // tools/apifyGoogleMaps.js — Google Maps Lead Scraper via Apify
-// Actor: compass/crawler-google-places ($0.004/place FREE tier)
+// Actor: compass~crawler-google-places ($0.004/place FREE tier)
 // ============================================================
 
 import { Tool } from '../lib/AgentRuntime.js';
@@ -112,7 +112,7 @@ export const scrapeGoogleMaps = new Tool({
     }
 
     try {
-      const results = await runApifyActor('compass/crawler-google-places', {
+      const results = await runApifyActor('compass~crawler-google-places', {
         searchStringsArray: [query],
         maxCrawledPlacesPerSearch: maxResults,
         language: 'en',
