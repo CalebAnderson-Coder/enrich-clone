@@ -63,7 +63,7 @@ export default function CampaignView() {
         </div>
       </div>
 
-      <div className="pipeline-trigger" style={{ background: 'rgba(30,41,59,0.8)', padding: '20px', borderRadius: '12px', marginBottom: '24px', border: '1px solid rgba(148,163,184,0.1)' }}>
+      <div className="pipeline-trigger card-premium" style={{ padding: '20px', marginBottom: '24px' }}>
         <h3 style={{ marginBottom: '8px' }}>🚀 Lanzar Pipeline de Prospección Profunda (Macro-Flujo)</h3>
         <p style={{ color: '#94a3b8', fontSize: '0.9rem', marginBottom: '16px' }}>Busca en Maps -&gt; Califica -&gt; Enriquecimiento Web -&gt; Análisis Estratégico (Carlos) -&gt; Copy Redactado (Angela).</p>
         

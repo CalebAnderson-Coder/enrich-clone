@@ -49,9 +49,11 @@ export default function LoginView() {
   };
 
   return (
-    <main className="relative min-h-screen bg-surface-950 flex items-center justify-center p-6 overflow-hidden">
-      {/* Gradient mesh background */}
-      <div className="fixed inset-0 -z-10 pointer-events-none" aria-hidden="true">
+    <main className="app-mesh-bg relative min-h-screen flex items-center justify-center p-6 overflow-hidden">
+      {/* Animated accent blobs — sit above app-mesh-bg pseudo-elements,
+          below the card. Use absolute (not fixed -z-10) so they aren't
+          clipped by main's stacking context. */}
+      <div className="absolute inset-0 z-0 pointer-events-none overflow-hidden" aria-hidden="true">
         <motion.div
           className="absolute -top-40 -left-40 w-[600px] h-[600px] rounded-full bg-primary-500/25 blur-3xl"
           animate={shouldReduceMotion ? undefined : { x: [0, 40, -20, 0], y: [0, 30, -10, 0] }}
@@ -71,8 +73,8 @@ export default function LoginView() {
         <div className="absolute inset-0 bg-gradient-to-b from-transparent via-transparent to-surface-950/60" />
       </div>
 
-      <AnimatedCard className="w-full max-w-md relative">
-        <div className="bg-card/60 backdrop-blur-xl border border-border rounded-xl shadow-elevation-3 p-8">
+      <AnimatedCard className="w-full max-w-md relative z-10">
+        <div className="card-premium p-8">
           {/* Logo / wordmark */}
           <div className="flex flex-col items-center text-center mb-8">
             <div className="flex items-center gap-3 mb-4">

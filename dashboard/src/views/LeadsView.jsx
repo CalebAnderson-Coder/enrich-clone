@@ -11,6 +11,7 @@ import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog';
 import AnimatedCard from '@/components/shared/AnimatedCard';
 import StaggerChildren, { staggerItem } from '@/components/shared/StaggerChildren';
 import FadePresence, { fadeVariants } from '@/components/shared/FadePresence';
+import { snappy } from '@/components/shared/motion';
 import {
   CheckCircle,
   Inbox,
@@ -371,7 +372,7 @@ export default function LeadsView() {
           <p className="text-surface-400">Contactabilidad multicanal y pipeline de prospección</p>
         </div>
         <div className="bg-surface-800/60 border border-surface-700 px-4 py-2 rounded-full text-sm text-surface-400">
-          <strong className="text-surface-50">{leads.length}</strong> Leads totales
+          <strong className="text-surface-50 num-tabular">{leads.length}</strong> Leads totales
         </div>
       </div>
 
@@ -397,7 +398,7 @@ export default function LeadsView() {
             )}
           >
             {tab.label}
-            <span className="ml-2 opacity-70 text-xs font-medium">({tabCounts[tab.key]})</span>
+            <span className="ml-2 opacity-70 text-xs font-medium num-tabular">({tabCounts[tab.key]})</span>
           </motion.button>
         ))}
       </div>
@@ -428,7 +429,7 @@ export default function LeadsView() {
             >
               {meta?.icon ? <meta.icon className="h-3 w-3" aria-hidden="true" /> : null}
               {f.label}
-              <span className="opacity-70">({tierCounts[f.key]})</span>
+              <span className="opacity-70 num-tabular">({tierCounts[f.key]})</span>
             </motion.button>
           );
         })}
@@ -521,22 +522,28 @@ export default function LeadsView() {
             return (
               <motion.div key={lead.id} variants={staggerItem}>
                 <AnimatedCard className="h-full">
-                  <Card className="h-full p-6 bg-surface-900 border-surface-700 flex flex-col gap-4 shadow-elevation-2 hover:border-surface-600 hover:shadow-elevation-3 transition-colors">
+                  <Card className="card-premium border-0 h-full p-6 flex flex-col gap-4">
                     {/* Header */}
                     <div className="flex justify-between items-start gap-3">
                       <h3 className="text-xl font-bold text-surface-50 leading-tight flex-1" title={lead.business_name}>
                         {lead.business_name || 'Prospecto Sin Nombre'}
                       </h3>
-                      <Badge
-                        variant="outline"
-                        className={cn(
-                          'uppercase tracking-wider font-bold text-[10px] flex items-center gap-1 px-2 py-1',
-                          tierMeta.chipClass
-                        )}
+                      <motion.div
+                        initial={{ scale: 0.9, opacity: 0 }}
+                        animate={{ scale: 1, opacity: 1 }}
+                        transition={snappy}
                       >
-                        {tierMeta.icon ? <tierMeta.icon className="h-3 w-3" /> : null}
-                        {tierMeta.label}
-                      </Badge>
+                        <Badge
+                          variant="outline"
+                          className={cn(
+                            'uppercase tracking-wider font-bold text-[10px] flex items-center gap-1 px-2 py-1',
+                            tierMeta.chipClass
+                          )}
+                        >
+                          {tierMeta.icon ? <tierMeta.icon className="h-3 w-3" /> : null}
+                          {tierMeta.label}
+                        </Badge>
+                      </motion.div>
                     </div>
 
                     {/* Meta */}
@@ -549,8 +556,8 @@ export default function LeadsView() {
                       {lead.rating && (
                         <div className="flex items-center gap-2">
                           <Star className="h-4 w-4 text-amber-400 fill-amber-400" />
-                          <strong className="text-amber-400">{lead.rating}</strong>
-                          <span className="text-surface-500">({lead.reviews_count || 0} reseñas)</span>
+                          <strong className="text-amber-400 num-tabular">{lead.rating}</strong>
+                          <span className="text-surface-500 num-tabular">({lead.reviews_count || 0} reseñas)</span>
                         </div>
                       )}
 

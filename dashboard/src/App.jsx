@@ -650,7 +650,7 @@ function AppAuthed({ signOut }) {
 
   return (
     <TooltipProvider delayDuration={200}>
-      <div className="flex h-screen w-full bg-surface-950 overflow-hidden text-surface-50 font-sans">
+      <div className="app-mesh-bg flex h-screen w-full overflow-hidden text-surface-50 font-sans">
         <a
           href="#main-content"
           className="sr-only focus:not-sr-only focus:fixed focus:top-2 focus:left-2 focus:z-50 focus:px-3 focus:py-2 focus:rounded-md focus:bg-primary-500 focus:text-white focus:shadow-elevation-3"
@@ -658,8 +658,13 @@ function AppAuthed({ signOut }) {
           Saltar al contenido principal
         </a>
         {/* 1. LEFT SIDEBAR */}
-        <nav aria-label="Navegación principal" className="w-60 bg-surface-900 border-r border-border flex flex-col shrink-0 relative z-20">
-          <div className="h-14 flex items-center px-5 border-b border-border shrink-0">
+        <nav aria-label="Navegación principal" className="w-60 bg-surface-900/90 backdrop-blur-xl border-r border-border flex flex-col shrink-0 relative z-20 overflow-hidden">
+          {/* Ambient brand light blob behind sidebar header */}
+          <div
+            className="absolute -top-24 left-1/2 -translate-x-1/2 h-48 w-[500px] rounded-full bg-[#5E6AD2] opacity-20 blur-[120px] pointer-events-none z-0"
+            aria-hidden="true"
+          />
+          <div className="h-14 flex items-center px-5 border-b border-border shrink-0 relative z-10">
             <div className="w-6 h-6 rounded bg-primary-500 shadow-glow flex items-center justify-center mr-3">
               <span className="text-white font-bold text-xs select-none">
                 E
@@ -783,19 +788,19 @@ function AppAuthed({ signOut }) {
         </nav>
 
         {/* 2. MAIN CONTENT */}
-        <main id="main-content" className="flex-1 min-w-0 bg-surface-950 relative z-10 flex flex-col border-r border-border">
+        <main id="main-content" className="flex-1 min-w-0 bg-surface-950/70 backdrop-blur-xl relative z-10 flex flex-col border-r border-border">
           {renderMainContent()}
         </main>
 
         {/* 3. RIGHT SIDEBAR (Context & Tasks) */}
-        <aside aria-label="Contexto y supervisión" className="w-80 bg-surface-900 shrink-0 flex flex-col relative z-20">
+        <aside aria-label="Contexto y supervisión" className="w-80 bg-surface-900/90 backdrop-blur-xl shrink-0 flex flex-col relative z-20">
           <header className="h-14 flex items-center px-6 border-b border-border bg-surface-900/80 backdrop-blur-sm shrink-0">
             <h2 className="font-medium text-surface-300 text-sm tracking-wide">
               Contexto y Supervisión
             </h2>
             <Badge
               variant="outline"
-              className="ml-auto text-[10px] uppercase tracking-widest font-bold text-primary-400 bg-primary-500/10 border-primary-500/30"
+              className="ml-auto text-[10px] uppercase tracking-widest font-bold text-primary-400 bg-primary-500/10 border-primary-500/30 num-tabular"
             >
               {jobs.length} activos
             </Badge>
@@ -849,9 +854,9 @@ function AppAuthed({ signOut }) {
                             }}
                           >
                             <AnimatedCard delay={0}>
-                              <Card className="bg-surface-800/80 border-surface-700 p-4 shadow-elevation-1 hover:shadow-elevation-2 transition-shadow">
+                              <Card className="card-premium border-0 p-4">
                                 <div className="flex justify-between items-start mb-2 gap-2">
-                                  <span className="text-[10px] font-mono text-surface-500 truncate">
+                                  <span className="text-[10px] font-mono text-surface-500 truncate num-tabular">
                                     #{String(job.id).substring(0, 8)}
                                   </span>
                                   <JobStatusBadge status={job.status} />
