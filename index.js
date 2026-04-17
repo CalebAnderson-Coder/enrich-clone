@@ -22,6 +22,7 @@ import { verifier } from './agents/verifier.js';
 import { getPendingJobs, updateJobStatus, getActiveBrands, createJob, getJobById } from './lib/supabase.js';
 import { authMiddleware } from './lib/auth.js';
 import { getLeads, getLeadById, updateOutreachStatus, getLeadsStats, updateLeadOutreach } from './tools/database.js';
+import { supabase as supabaseClient } from './lib/supabase.js';
 import { fetchPage } from './tools/webResearch.js';
 import { processIdleMagnets } from './lead_magnet_worker.js';
 import { startTranscriptionWorker } from './workers/transcription_worker.js';
@@ -434,6 +435,298 @@ app.post('/api/approve-email', async (req, res) => {
   }
 });
 
+
+// ============================================================
+// CREATOR COCKPIT ENDPOINTS (agent_events-powered dashboard)
+// ============================================================
+
+const COCKPIT_WINDOWS = {
+  '1h':  "1 hour",
+  '24h': "24 hours",
+  '7d':  "7 days",
+};
+
+// Approximate cost per token for NVIDIA LLaMA 3.1 70B Instruct.
+const COST_PER_TOKEN_IN  = 0.0000005;
+const COST_PER_TOKEN_OUT = 0.0000015;
+
+function parseCockpitWindow(raw) {
+  const key = String(raw || '24h').toLowerCase();
+  return COCKPIT_WINDOWS[key] ? key : '24h';
+}
+
+function windowToSince(key) {
+  const ms = key === '1h' ? 60 * 60_000
+           : key === '7d' ? 7 * 24 * 60 * 60_000
+           : 24 * 60 * 60_000;
+  return new Date(Date.now() - ms).toISOString();
+}
+
+// ---- Cockpit Stats (aggregate snapshot) ----
+app.get('/api/cockpit/stats', async (req, res) => {
+  if (!supabaseClient) {
+    return res.status(503).json({ error: 'supabase client not configured' });
+  }
+  const windowKey = parseCockpitWindow(req.query.window);
+  const since     = windowToSince(windowKey);
+  const brandId   = req.user.brandId;
+
+  try {
+    // ── Leads (total + tier breakdown) ──────────────────────
+    const { data: leadsRows, error: leadsErr } = await supabaseClient
+      .from('leads')
+      .select('id, lead_tier, outreach_status, created_at')
+      .eq('brand_id', brandId)
+      .gte('created_at', since);
+    if (leadsErr) throw leadsErr;
+
+    const leadsSummary = { total: 0, hot: 0, warm: 0, cool: 0 };
+    for (const l of leadsRows || []) {
+      leadsSummary.total++;
+      const tier = String(l.lead_tier || '').toLowerCase();
+      if (tier === 'hot')       leadsSummary.hot++;
+      else if (tier === 'warm') leadsSummary.warm++;
+      else                      leadsSummary.cool++;
+    }
+
+    // ── Funnel ─────────────────────────────────────────────
+    // prospected = run_started events with agent='scout'
+    const { count: prospectedCount } = await supabaseClient
+      .from('agent_events')
+      .select('id', { count: 'exact', head: true })
+      .eq('brand_id', brandId)
+      .eq('agent', 'scout')
+      .eq('event_type', 'run_started')
+      .gte('created_at', since);
+
+    // enriched = campaign rows with mega_profile for this window
+    const { data: enrichedRows } = await supabaseClient
+      .from('campaign_enriched_data')
+      .select('id, outreach_status, mega_profile, verifier_report, created_at')
+      .eq('brand_id', brandId)
+      .gte('created_at', since);
+
+    const enrichedCount = (enrichedRows || []).filter(r => r.mega_profile != null).length;
+
+    const outreachCounts = { DRAFT: 0, DRAFT_PHONE: 0, SENT: 0 };
+    for (const l of leadsRows || []) {
+      const s = String(l.outreach_status || '').toUpperCase();
+      if (s === 'DRAFT' || s === 'DRAFT_PHONE') outreachCounts[s]++;
+      else if (s === 'SENT' || s === 'CONTACTED') outreachCounts.SENT++;
+    }
+
+    const funnel = {
+      prospected: prospectedCount || 0,
+      saved:      leadsSummary.total,
+      enriched:   enrichedCount,
+      drafted:    outreachCounts.DRAFT + outreachCounts.DRAFT_PHONE,
+      sent:       outreachCounts.SENT,
+      replied:    0, // placeholder until reply tracking lands
+    };
+
+    // ── Agents (aggregate from agent_events) ────────────────
+    const { data: agentEvs, error: aeErr } = await supabaseClient
+      .from('agent_events')
+      .select('agent, event_type, status, duration_ms, tokens_in, tokens_out, created_at')
+      .eq('brand_id', brandId)
+      .gte('created_at', since);
+    if (aeErr) throw aeErr;
+
+    const agentBuckets = new Map();
+    let totalTokensIn = 0, totalTokensOut = 0;
+    for (const ev of agentEvs || []) {
+      if (Number.isFinite(ev.tokens_in))  totalTokensIn  += ev.tokens_in;
+      if (Number.isFinite(ev.tokens_out)) totalTokensOut += ev.tokens_out;
+
+      const bucket = agentBuckets.get(ev.agent) || {
+        agent: ev.agent,
+        calls: 0,
+        ok_count: 0,
+        fail_count: 0,
+        duration_sum: 0,
+        duration_n: 0,
+        zod_errors: 0,
+        last_seen: null,
+      };
+
+      if (ev.event_type === 'tool_result') {
+        bucket.calls++;
+        if (ev.status === 'ok')   bucket.ok_count++;
+        if (ev.status === 'fail') bucket.fail_count++;
+        if (Number.isFinite(ev.duration_ms)) {
+          bucket.duration_sum += ev.duration_ms;
+          bucket.duration_n   += 1;
+        }
+      }
+      if (ev.event_type === 'zod_error') bucket.zod_errors++;
+
+      if (!bucket.last_seen || ev.created_at > bucket.last_seen) {
+        bucket.last_seen = ev.created_at;
+      }
+      agentBuckets.set(ev.agent, bucket);
+    }
+
+    const agents = Array.from(agentBuckets.values()).map(b => ({
+      agent: b.agent,
+      calls: b.calls,
+      success_rate: b.calls > 0 ? +(b.ok_count / b.calls).toFixed(4) : 0,
+      avg_duration_ms: b.duration_n > 0 ? Math.round(b.duration_sum / b.duration_n) : 0,
+      zod_errors: b.zod_errors,
+      last_seen: b.last_seen,
+    })).sort((a, b) => b.calls - a.calls);
+
+    // ── Verifier stats ──────────────────────────────────────
+    const verifierReports = [];
+    for (const r of enrichedRows || []) {
+      if (Array.isArray(r.verifier_report)) verifierReports.push(...r.verifier_report);
+      else if (r.verifier_report && typeof r.verifier_report === 'object') verifierReports.push(r.verifier_report);
+    }
+    const passCount  = verifierReports.filter(v => v && (v.verdict === 'pass' || v.verdict === 'PASS')).length;
+    const blockedLow = (enrichedRows || []).filter(r => String(r.outreach_status).toUpperCase() === 'BLOCKED_LOW_QUALITY').length;
+    const verifier = {
+      pass_rate: verifierReports.length > 0 ? +(passCount / verifierReports.length).toFixed(4) : 0,
+      blocked_low_quality: blockedLow,
+      total_evaluated: verifierReports.length,
+    };
+
+    // ── Cost estimate ───────────────────────────────────────
+    const estimatedUsd = +(totalTokensIn * COST_PER_TOKEN_IN + totalTokensOut * COST_PER_TOKEN_OUT).toFixed(4);
+    const cost = {
+      tokens_in: totalTokensIn,
+      tokens_out: totalTokensOut,
+      estimated_usd: estimatedUsd,
+    };
+
+    // ── Memory stats ────────────────────────────────────────
+    const since24h = new Date(Date.now() - 24 * 60 * 60_000).toISOString();
+    const { count: memTotal } = await supabaseClient
+      .from('agent_memory')
+      .select('id', { count: 'exact', head: true })
+      .eq('brand_id', brandId);
+
+    const { count: memLast24h } = await supabaseClient
+      .from('agent_memory')
+      .select('id', { count: 'exact', head: true })
+      .eq('brand_id', brandId)
+      .gte('updated_at', since24h);
+
+    // Recall hits: tool_call events where tool name mentions memory
+    const recallHits = (agentEvs || []).filter(
+      ev => ev.event_type === 'tool_call' && typeof ev.tool === 'string' && /memory|recall/i.test(ev.tool)
+    ).length;
+
+    const memory = {
+      total_rows: memTotal || 0,
+      last_24h_added: memLast24h || 0,
+      recall_hits: recallHits,
+    };
+
+    res.json({
+      window: windowKey,
+      brand_id: brandId,
+      leads: leadsSummary,
+      funnel,
+      agents,
+      verifier,
+      cost,
+      memory,
+    });
+  } catch (err) {
+    console.error('[Cockpit Stats] error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ---- Cockpit Events (recent event feed) ----
+app.get('/api/cockpit/events', async (req, res) => {
+  if (!supabaseClient) {
+    return res.status(503).json({ error: 'supabase client not configured' });
+  }
+  const brandId = req.user.brandId;
+  const sinceRaw = req.query.since;
+  const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 50, 1), 200);
+
+  try {
+    let q = supabaseClient
+      .from('agent_events')
+      .select('*')
+      .eq('brand_id', brandId)
+      .order('id', { ascending: false })
+      .limit(limit);
+
+    if (sinceRaw) {
+      const sinceIso = new Date(sinceRaw).toISOString();
+      q = q.gte('created_at', sinceIso);
+    }
+
+    const { data, error } = await q;
+    if (error) throw error;
+    res.json({ events: data || [] });
+  } catch (err) {
+    console.error('[Cockpit Events] error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ---- Cockpit SSE Stream (live tail) ----
+app.get('/api/cockpit/stream', async (req, res) => {
+  if (!supabaseClient) {
+    return res.status(503).json({ error: 'supabase client not configured' });
+  }
+  const brandId = req.user.brandId;
+
+  res.setHeader('Content-Type', 'text/event-stream');
+  res.setHeader('Cache-Control', 'no-cache, no-transform');
+  res.setHeader('Connection', 'keep-alive');
+  res.setHeader('X-Accel-Buffering', 'no');
+  res.flushHeaders?.();
+
+  // Seed lastSeenId with the current max so we only stream NEW rows.
+  let lastSeenId = 0;
+  try {
+    const { data: seed } = await supabaseClient
+      .from('agent_events')
+      .select('id')
+      .eq('brand_id', brandId)
+      .order('id', { ascending: false })
+      .limit(1);
+    if (seed && seed[0]) lastSeenId = seed[0].id;
+  } catch { /* ignore seed errors */ }
+
+  res.write(`event: ready\ndata: ${JSON.stringify({ brand_id: brandId, last_seen_id: lastSeenId })}\n\n`);
+
+  let closed = false;
+
+  const pollTimer = setInterval(async () => {
+    if (closed) return;
+    try {
+      const { data, error } = await supabaseClient
+        .from('agent_events')
+        .select('*')
+        .eq('brand_id', brandId)
+        .gt('id', lastSeenId)
+        .order('id', { ascending: true })
+        .limit(100);
+      if (error) return;
+      for (const row of data || []) {
+        lastSeenId = Math.max(lastSeenId, row.id);
+        res.write(`event: agent_event\ndata: ${JSON.stringify(row)}\n\n`);
+      }
+    } catch { /* transient errors — keep stream alive */ }
+  }, 2000);
+
+  const heartbeat = setInterval(() => {
+    if (closed) return;
+    res.write(`event: heartbeat\ndata: ${JSON.stringify({ t: Date.now() })}\n\n`);
+  }, 15_000);
+
+  req.on('close', () => {
+    closed = true;
+    clearInterval(pollTimer);
+    clearInterval(heartbeat);
+    try { res.end(); } catch {}
+  });
+});
 
 // ============================================================
 // LEAD PIPELINE ENDPOINTS
