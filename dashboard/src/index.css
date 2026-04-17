@@ -3,6 +3,29 @@
 @tailwind utilities;
 
 @layer base {
+  :root {
+    --background: 210 11% 4%;
+    --foreground: 210 11% 96%;
+    --card: 220 10% 9%;
+    --card-foreground: 210 11% 96%;
+    --popover: 220 10% 9%;
+    --popover-foreground: 210 11% 96%;
+    --primary: 232 58% 60%;
+    --primary-foreground: 210 11% 96%;
+    --secondary: 220 10% 15%;
+    --secondary-foreground: 210 11% 96%;
+    --muted: 220 10% 12%;
+    --muted-foreground: 217 10% 60%;
+    --accent: 220 10% 15%;
+    --accent-foreground: 210 11% 96%;
+    --destructive: 0 75% 55%;
+    --destructive-foreground: 210 11% 96%;
+    --border: 220 10% 17%;
+    --input: 220 10% 17%;
+    --ring: 232 58% 60%;
+    --radius: 0.5rem;
+  }
+
   body {
     @apply bg-surface-950 text-surface-50 font-sans antialiased;
     /* Custom linear-style ambient background gradient (optional but gives a good feel) */
