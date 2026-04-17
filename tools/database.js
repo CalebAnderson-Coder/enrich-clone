@@ -83,6 +83,16 @@ export const saveLead = new Tool({
     required: ['business_name', 'metro_area', 'qualification_score', 'lead_tier'],
   },
   fn: async (args, context = {}) => {
+    // ── Coerce LLM-emitted string "null"/"" to real null ─────
+    // NVIDIA Llama 3.1 sometimes emits {"website":"null"} as a string. That
+    // passes `if (args.website)` and poisons reachability + dedup.
+    for (const k of ['website', 'facebook_url', 'instagram_url', 'google_maps_url', 'phone', 'email']) {
+      if (typeof args[k] === 'string') {
+        const t = args[k].trim().toLowerCase();
+        if (t === '' || t === 'null' || t === 'none' || t === 'n/a') args[k] = null;
+      }
+    }
+
     // ── Reroute: Platform URLs don't belong in `website` ─────
     // Yelp/Facebook/Instagram/YellowPages/etc are NOT websites — move to
     // the right field and null `website` so GATE + dedup operate cleanly.
