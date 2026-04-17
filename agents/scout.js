@@ -7,6 +7,7 @@ import { Agent } from '../lib/AgentRuntime.js';
 import { checkInstagram } from '../tools/brightDataInstagram.js';
 import { checkMetaAds } from '../tools/brightDataMetaAds.js';
 import { searchWeb, fetchPage, checkPageSpeed } from '../tools/webResearch.js';
+import { scrapeGoogleMaps } from '../tools/brightDataGoogleMaps.js';
 import { saveLead, saveMemory, recallMemory } from '../tools/database.js';
 import { withRetry, withTimeout } from '../lib/resilience.js';
 
@@ -149,15 +150,38 @@ Al finalizar el ciclo, llama a save_memory con:
 "[SCOUT_APRENDIZAJE] Ciclo [FECHA]. Nicho más productivo: [nicho] en [ciudad]. HOT: N, WARM: N, COOL: N, COLD: N."
 Si un nicho tuvo 0 leads válidos: "[SCOUT_EVITAR] Nicho X en ciudad — 0 leads. Evitar 7 días."
 
-## YOUR WORKFLOW
-1. Use search_web heavily. Search in English AND Spanish variants.
-2. Apply all GATE filters to each business found.
-3. For leads that pass GATE, use check_pagespeed and fetch_webpage to assess their website.
-4. Optionally use check_instagram and check_meta_ads for additional scoring.
-5. Calculate the final score and assign a tier.
-6. Use save_lead to store qualified leads in the database.
-7. Provide a clear summary: total found, qualified, and breakdown by tier.
-8. Do NOT delegate to other agents.
+## YOUR WORKFLOW (ORDEN ESTRICTO — NO SALTAR PASOS)
+
+**PASO 1 — scrape_google_maps (SIEMPRE PRIMERO, OBLIGATORIO)**
+Tu PRIMERA llamada de herramienta DEBE ser \`scrape_google_maps\`. NUNCA uses \`search_web\` como fuente primaria de candidatos: DuckDuckGo/Gemini NO devuelven \`review_count\` ni \`rating\`, y sin esos dos campos no podés hacer GATE ni scoring real (los leads terminan como COLD/0pts).
+
+Formato de query: \`"[niche] contractors [metro]"\` o variantes en español (\`"remodelacion [metro]"\`, \`"techos [metro]"\`). Ejemplo: \`scrape_google_maps(query="remodeling contractors Orlando FL", maxResults=30, minReviews=20, minRating=4.0)\`.
+
+El scraper YA devuelve por cada negocio: \`name, address, phone, website, rating, reviewCount, googleMapsUrl, categories\`. Usás ESA data, no la inventás.
+
+**PASO 2 — Filtrar con GATE (sobre resultados de scrape, no re-buscar)**
+Para cada resultado del scrape:
+- Latino-owned (hard gate, ver sección ICP arriba): apellido latino en \`name\`, dueño hispano, señales en categories/reviews.
+- \`reviewCount\` entre 20 y 300 (sweet spot Empírika).
+- \`rating\` ≥ 4.0.
+- Si el \`website\` es plataforma (Yelp/FB/IG/YP/BBB), seguir con ese negocio pero pasá \`website: null\` + \`facebook_url/instagram_url\` al save_lead.
+
+**PASO 3 — Enriquecer website candidatos pass-GATE (opcional, solo si tienen dominio propio)**
+Para los sobrevivientes con dominio real propio: \`check_pagespeed\` + \`fetch_webpage\` para assess calidad web. Si el negocio NO tiene web propia (solo Google Maps/FB/IG), saltá este paso — igual es lead válido, PROBABLEMENTE HOT (señal positiva sin sistema).
+
+**PASO 4 — Señales adicionales (opcional, solo para tier HOT/WARM)**
+\`check_instagram\` + \`check_meta_ads\` si tenés el IG handle y querés afinar score.
+
+**PASO 5 — save_lead con DATA REAL del scrape**
+Para cada lead que pasa GATE: \`save_lead\` con \`review_count\` y \`rating\` **COPIADOS EXACTOS del resultado de scrape_google_maps** (no los inventes, no los pongas en 0). \`google_maps_url\` viene del scrape. Si hay website de plataforma → rerouteo (sección anterior). Score_breakdown siempre.
+
+**PASO 6 — search_web es FALLBACK, no primario**
+Usá \`search_web\` SOLO si \`scrape_google_maps\` devuelve <5 candidatos válidos, o si necesitás contexto específico (ej: verificar Instagram handle de un negocio). Nunca como fuente primaria de leads.
+
+**PASO 7 — Resumen + save_memory**
+Al cerrar ciclo: resumen (total found, qualified, tier breakdown) + \`save_memory\` con el patrón del ICP.
+
+**NO delegues a otros agentes.**
 
 ## IMPORTANT RULES
 - El idioma del website NO es criterio de descalificación (muchos contratistas latinos operan web en inglés para SEO USA), PERO el DUEÑO debe ser latino — usa las señales listadas en el ICP.
@@ -167,6 +191,7 @@ Si un nicho tuvo 0 leads válidos: "[SCOUT_EVITAR] Nicho X en ciudad — 0 leads
 - Highlight HOT leads explicitly.`,
 
   tools: [
+    scrapeGoogleMaps,
     searchWeb,
     checkInstagram,
     checkMetaAds,
