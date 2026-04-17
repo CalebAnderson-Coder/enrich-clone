@@ -3,7 +3,7 @@ import {
   MessageSquare, User, Megaphone, FileText,
   Search, PlusCircle, CheckCircle, XCircle, Loader2, Send, LogOut, Settings
 } from 'lucide-react';
-import { motion, AnimatePresence } from 'framer-motion';
+import { motion, AnimatePresence, MotionConfig } from 'framer-motion';
 
 // Import Views — active demo surface
 import LeadsView from './views/LeadsView';
@@ -66,7 +66,8 @@ function StatusDot({ state }) {
   if (state === 'thinking') {
     return (
       <motion.span
-        className="absolute -bottom-0.5 -right-0.5 w-2.5 h-2.5 rounded-full bg-semantic-warning border border-surface-900"
+        aria-hidden="true"
+        className="absolute -bottom-0.5 -right-0.5 w-2.5 h-2.5 rounded-full bg-semantic-warning border border-surface-900 motion-reduce:!animate-none"
         animate={{ scale: [1, 1.25, 1], opacity: [0.7, 1, 0.7] }}
         transition={{ duration: 1.2, repeat: Infinity, ease: 'easeInOut' }}
       />
@@ -74,11 +75,11 @@ function StatusDot({ state }) {
   }
   if (state === 'idle') {
     return (
-      <span className="absolute -bottom-0.5 -right-0.5 w-2.5 h-2.5 rounded-full bg-surface-600 border border-surface-900" />
+      <span aria-hidden="true" className="absolute -bottom-0.5 -right-0.5 w-2.5 h-2.5 rounded-full bg-surface-600 border border-surface-900" />
     );
   }
   return (
-    <span className="absolute -bottom-0.5 -right-0.5 w-2.5 h-2.5 rounded-full bg-semantic-success border border-surface-900" />
+    <span aria-hidden="true" className="absolute -bottom-0.5 -right-0.5 w-2.5 h-2.5 rounded-full bg-semantic-success border border-surface-900" />
   );
 }
 
@@ -216,6 +217,7 @@ function App() {
   const { session, loading: authLoading, signOut } = useAuth();
 
   return (
+    <MotionConfig reducedMotion="user">
     <FadePresence>
       {authLoading ? (
         <motion.div
@@ -263,6 +265,7 @@ function App() {
         </motion.div>
       )}
     </FadePresence>
+    </MotionConfig>
   );
 }
 
@@ -408,10 +411,12 @@ function AppAuthed({ signOut }) {
   // ----------------------------------------------------
 
   const NavItem = ({ icon: Icon, label, isActive, onClick, className = '' }) => (
-    <div
+    <button
+      type="button"
       onClick={onClick}
+      aria-current={isActive ? 'page' : undefined}
       className={cn(
-        'flex items-center gap-3 px-3 py-1.5 mx-2 rounded-md text-sm font-medium transition-all cursor-pointer select-none',
+        'w-[calc(100%-1rem)] flex items-center gap-3 px-3 py-1.5 mx-2 rounded-md text-sm font-medium transition-all cursor-pointer select-none text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-500',
         isActive
           ? 'bg-surface-800 shadow-soft text-surface-50 border border-surface-700'
           : 'text-surface-400 hover:bg-surface-800/50 hover:text-surface-100 border border-transparent',
@@ -421,11 +426,12 @@ function AppAuthed({ signOut }) {
       {Icon && (
         <Icon
           size={16}
+          aria-hidden="true"
           className={isActive ? 'text-surface-50' : 'text-surface-500'}
         />
       )}
       <span className="truncate">{label}</span>
-    </div>
+    </button>
   );
 
   const renderMainContent = () => {
@@ -447,9 +453,9 @@ function AppAuthed({ signOut }) {
         return (
           <div className="flex flex-col h-full relative">
             {/* Header — glass */}
-            <div className="h-14 border-b border-border flex items-center px-6 bg-surface-950/80 backdrop-blur-md z-10 shrink-0">
+            <header className="h-14 border-b border-border flex items-center px-6 bg-surface-950/80 backdrop-blur-md z-10 shrink-0">
               <h2 className="text-md font-semibold text-surface-50 flex items-center gap-2">
-                <span className="text-surface-500">#</span>
+                <span className="text-surface-500" aria-hidden="true">#</span>
                 {activeChannel}
               </h2>
               <span className="ml-4 text-xs font-medium text-surface-400 bg-surface-800 border border-surface-700 px-2 flex items-center py-0.5 rounded">
@@ -462,22 +468,30 @@ function AppAuthed({ signOut }) {
               <div className="ml-auto flex items-center gap-1">
                 <Tooltip>
                   <TooltipTrigger asChild>
-                    <button className="p-2 rounded-md text-surface-400 hover:text-surface-100 hover:bg-surface-800/60 transition-colors">
-                      <Search size={16} />
+                    <button
+                      type="button"
+                      aria-label="Buscar"
+                      className="p-2 rounded-md text-surface-400 hover:text-surface-100 hover:bg-surface-800/60 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-500"
+                    >
+                      <Search size={16} aria-hidden="true" />
                     </button>
                   </TooltipTrigger>
                   <TooltipContent side="bottom">Buscar</TooltipContent>
                 </Tooltip>
                 <Tooltip>
                   <TooltipTrigger asChild>
-                    <button className="p-2 rounded-md text-surface-400 hover:text-surface-100 hover:bg-surface-800/60 transition-colors">
-                      <Settings size={16} />
+                    <button
+                      type="button"
+                      aria-label="Ajustes"
+                      className="p-2 rounded-md text-surface-400 hover:text-surface-100 hover:bg-surface-800/60 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-500"
+                    >
+                      <Settings size={16} aria-hidden="true" />
                     </button>
                   </TooltipTrigger>
                   <TooltipContent side="bottom">Ajustes</TooltipContent>
                 </Tooltip>
               </div>
-            </div>
+            </header>
 
             {/* Timeline */}
             <div className="flex-1 overflow-y-auto w-full p-6 bg-surface-950">
@@ -595,8 +609,13 @@ function AppAuthed({ signOut }) {
               <form
                 onSubmit={handleSendMessage}
                 className="max-w-2xl mx-auto relative flex items-center"
+                aria-label={`Enviar mensaje a ${selectedAgent}`}
               >
+                <label htmlFor="chat-message-input" className="sr-only">
+                  Enviar mensaje a {selectedAgent}
+                </label>
                 <input
+                  id="chat-message-input"
                   type="text"
                   className="w-full bg-surface-900 text-surface-50 rounded-md pl-4 pr-12 py-3 text-sm font-medium border border-surface-700 focus:border-primary-500 focus:bg-surface-800 focus:shadow-glow transition-all outline-none"
                   placeholder={`Enviar mensaje a ${selectedAgent}...`}
@@ -608,9 +627,10 @@ function AppAuthed({ signOut }) {
                 <button
                   type="submit"
                   disabled={!inputText.trim() || isTyping}
-                  className="absolute right-2 p-1.5 bg-primary-500 hover:bg-primary-400 disabled:bg-surface-700 disabled:text-surface-500 disabled:cursor-not-allowed text-white rounded transition-colors shadow-soft"
+                  aria-label="Enviar mensaje"
+                  className="absolute right-2 p-1.5 bg-primary-500 hover:bg-primary-400 disabled:bg-surface-700 disabled:text-surface-500 disabled:cursor-not-allowed text-white rounded transition-colors shadow-soft focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-500 focus-visible:ring-offset-2 focus-visible:ring-offset-surface-950"
                 >
-                  <Send size={16} />
+                  <Send size={16} aria-hidden="true" />
                 </button>
               </form>
               <div className="max-w-2xl mx-auto mt-3 text-center">
@@ -627,8 +647,14 @@ function AppAuthed({ signOut }) {
   return (
     <TooltipProvider delayDuration={200}>
       <div className="flex h-screen w-full bg-surface-950 overflow-hidden text-surface-50 font-sans">
+        <a
+          href="#main-content"
+          className="sr-only focus:not-sr-only focus:fixed focus:top-2 focus:left-2 focus:z-50 focus:px-3 focus:py-2 focus:rounded-md focus:bg-primary-500 focus:text-white focus:shadow-elevation-3"
+        >
+          Saltar al contenido principal
+        </a>
         {/* 1. LEFT SIDEBAR */}
-        <div className="w-60 bg-surface-900 border-r border-border flex flex-col shrink-0 relative z-20">
+        <nav aria-label="Navegación principal" className="w-60 bg-surface-900 border-r border-border flex flex-col shrink-0 relative z-20">
           <div className="h-14 flex items-center px-5 border-b border-border shrink-0">
             <div className="w-6 h-6 rounded bg-primary-500 shadow-glow flex items-center justify-center mr-3">
               <span className="text-white font-bold text-xs select-none">
@@ -681,6 +707,7 @@ function AppAuthed({ signOut }) {
                 <span>Agentes</span>
                 <PlusCircle
                   size={14}
+                  aria-hidden="true"
                   className="text-surface-400 hover:text-primary-500 cursor-pointer"
                 />
               </h3>
@@ -693,16 +720,22 @@ function AppAuthed({ signOut }) {
                   const presence = presenceOf(a);
                   const isSelected =
                     currentView === 'chat' && selectedAgent === a.name;
+                  const presenceLabel =
+                    presence === 'thinking' ? 'pensando' :
+                    presence === 'idle' ? 'inactivo' : 'en línea';
                   return (
                     <Tooltip key={a.name}>
                       <TooltipTrigger asChild>
-                        <div
+                        <button
+                          type="button"
                           onClick={() => {
                             setCurrentView('chat');
                             setSelectedAgent(a.name);
                           }}
+                          aria-label={`Chatear con ${a.name}${a.role ? `, ${a.role}` : ''}, ${presenceLabel}`}
+                          aria-current={isSelected ? 'true' : undefined}
                           className={cn(
-                            'flex items-center gap-3 px-3 py-1.5 mx-2 rounded-md text-sm font-medium transition-all cursor-pointer select-none',
+                            'w-[calc(100%-1rem)] flex items-center gap-3 px-3 py-1.5 mx-2 rounded-md text-sm font-medium transition-all cursor-pointer select-none text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-500',
                             isSelected
                               ? 'bg-surface-800 text-surface-50 shadow-soft border border-surface-700'
                               : 'text-surface-400 hover:bg-surface-800/50 hover:text-surface-100 border border-transparent'
@@ -721,7 +754,7 @@ function AppAuthed({ signOut }) {
                               {a.name}
                             </span>
                           </div>
-                        </div>
+                        </button>
                       </TooltipTrigger>
                       <TooltipContent side="right">
                         {a.name}
@@ -743,16 +776,16 @@ function AppAuthed({ signOut }) {
               onClick={signOut}
             />
           </div>
-        </div>
+        </nav>
 
         {/* 2. MAIN CONTENT */}
-        <div className="flex-1 min-w-0 bg-surface-950 relative z-10 flex flex-col border-r border-border">
+        <main id="main-content" className="flex-1 min-w-0 bg-surface-950 relative z-10 flex flex-col border-r border-border">
           {renderMainContent()}
-        </div>
+        </main>
 
         {/* 3. RIGHT SIDEBAR (Context & Tasks) */}
-        <div className="w-80 bg-surface-900 shrink-0 flex flex-col relative z-20">
-          <div className="h-14 flex items-center px-6 border-b border-border bg-surface-900/80 backdrop-blur-sm shrink-0">
+        <aside aria-label="Contexto y supervisión" className="w-80 bg-surface-900 shrink-0 flex flex-col relative z-20">
+          <header className="h-14 flex items-center px-6 border-b border-border bg-surface-900/80 backdrop-blur-sm shrink-0">
             <h2 className="font-medium text-surface-300 text-sm tracking-wide">
               Contexto y Supervisión
             </h2>
@@ -762,7 +795,7 @@ function AppAuthed({ signOut }) {
             >
               {jobs.length} activos
             </Badge>
-          </div>
+          </header>
 
           <ScrollArea className="flex-1">
             <div className="p-5 pb-10 space-y-6">
@@ -867,14 +900,16 @@ function AppAuthed({ signOut }) {
                                       }}
                                       className="h-8 px-3 border-destructive/60 text-destructive hover:bg-destructive/10 hover:text-destructive"
                                       title="Rechazar"
+                                      aria-label="Rechazar tarea"
                                     >
                                       {isRejecting ? (
                                         <Loader2
                                           size={14}
                                           className="animate-spin"
+                                          aria-hidden="true"
                                         />
                                       ) : (
-                                        <XCircle size={14} />
+                                        <XCircle size={14} aria-hidden="true" />
                                       )}
                                     </Button>
                                   </div>
@@ -890,7 +925,7 @@ function AppAuthed({ signOut }) {
               </section>
             </div>
           </ScrollArea>
-        </div>
+        </aside>
       </div>
     </TooltipProvider>
   );

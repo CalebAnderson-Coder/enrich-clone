@@ -349,7 +349,7 @@ export default function LeadsView() {
 
   return (
     <div className="p-10 flex flex-col gap-6 animate-in fade-in duration-300">
-      <svg width="0" height="0" style={{ position: 'absolute' }}>
+      <svg width="0" height="0" style={{ position: 'absolute' }} aria-hidden="true">
         <defs>
           <linearGradient id="instaGradient" x1="0%" y1="100%" x2="100%" y2="0%">
             <stop offset="0%" stopColor="#f09433" />
@@ -384,10 +384,12 @@ export default function LeadsView() {
         ].map(tab => (
           <motion.button
             key={tab.key}
+            type="button"
             onClick={() => setActiveTab(tab.key)}
             whileTap={{ scale: 0.97 }}
+            aria-pressed={activeTab === tab.key}
             className={cn(
-              'flex-1 px-4 py-2.5 rounded-lg text-sm font-semibold transition-colors',
+              'flex-1 px-4 py-2.5 rounded-lg text-sm font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-500',
               activeTab === tab.key
                 ? 'bg-surface-800 text-surface-50 shadow-elevation-1'
                 : 'text-surface-400 hover:text-surface-100 hover:bg-surface-800/50'
@@ -411,16 +413,19 @@ export default function LeadsView() {
           return (
             <motion.button
               key={f.key}
+              type="button"
               onClick={() => setTierFilter(f.key)}
               whileTap={{ scale: 0.95 }}
+              aria-pressed={active}
+              aria-label={`Filtrar tier ${f.label}, ${tierCounts[f.key]} leads`}
               className={cn(
-                'inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold border transition-all',
+                'inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold border transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-500',
                 active
                   ? activeChipClass + ' ring-1 ring-white/10'
                   : 'bg-surface-900/60 text-surface-400 border-surface-700 hover:border-surface-600 hover:text-surface-200'
               )}
             >
-              {meta?.icon ? <meta.icon className="h-3 w-3" /> : null}
+              {meta?.icon ? <meta.icon className="h-3 w-3" aria-hidden="true" /> : null}
               {f.label}
               <span className="opacity-70">({tierCounts[f.key]})</span>
             </motion.button>
@@ -634,14 +639,15 @@ export default function LeadsView() {
                     {/* Lead magnet preview */}
                     {magnetImageUrl && (
                       <motion.button
+                        type="button"
                         onClick={() => { setLightboxUrl(magnetImageUrl); setLightboxLabel(magnetLabel); }}
                         whileHover={{ scale: 1.01 }}
                         whileTap={{ scale: 0.99 }}
-                        className="rounded-xl border border-semantic-success/30 bg-semantic-success/5 px-4 py-2.5 flex items-center justify-between text-xs text-semantic-success font-semibold hover:border-semantic-success/60 transition-colors"
-                        title="Click para ver imagen"
+                        aria-label={`Ver lead magnet ${magnetLabel} para ${lead.business_name}`}
+                        className="rounded-xl border border-semantic-success/30 bg-semantic-success/5 px-4 py-2.5 flex items-center justify-between text-xs text-semantic-success font-semibold hover:border-semantic-success/60 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-500"
                       >
                         <span className="flex items-center gap-2">
-                          <ImageIcon className="h-3.5 w-3.5" />
+                          <ImageIcon className="h-3.5 w-3.5" aria-hidden="true" />
                           LEAD MAGNET — {magnetLabel}
                         </span>
                         <span className="opacity-70 font-normal">Click para expandir</span>
@@ -671,22 +677,46 @@ export default function LeadsView() {
                       <h5 className="text-[10px] font-bold text-surface-500 uppercase tracking-widest mb-2">Canales de contacto</h5>
                       <div className="flex gap-2 flex-wrap">
                         {whatsappLink ? (
-                          <a href={whatsappLink} target="_blank" rel="noopener noreferrer" className="w-10 h-10 rounded-lg bg-surface-800 border border-surface-700 flex items-center justify-center text-surface-300 hover:bg-emerald-500/20 hover:text-emerald-400 hover:border-emerald-500/40 transition-colors" title={`WhatsApp: ${lead.phone}`}>
+                          <a
+                            href={whatsappLink}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="w-10 h-10 rounded-lg bg-surface-800 border border-surface-700 flex items-center justify-center text-surface-300 hover:bg-emerald-500/20 hover:text-emerald-400 hover:border-emerald-500/40 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-500"
+                            aria-label={`WhatsApp a ${lead.business_name}: ${lead.phone}`}
+                          >
                             <MessageCircle />
                           </a>
                         ) : (
-                          <div className="w-10 h-10 rounded-lg bg-surface-800/40 border border-surface-700 flex items-center justify-center text-surface-600 opacity-40" title="Sin teléfono">
+                          <div className="w-10 h-10 rounded-lg bg-surface-800/40 border border-surface-700 flex items-center justify-center text-surface-600 opacity-40" aria-hidden="true">
                             <MessageCircle />
                           </div>
                         )}
-                        <a href={facebookLink} target="_blank" rel="noopener noreferrer" className="w-10 h-10 rounded-lg bg-surface-800 border border-surface-700 flex items-center justify-center text-sky-400 hover:bg-sky-500/20 hover:border-sky-500/40 transition-colors" title={`Facebook: ${lead.business_name}`}>
+                        <a
+                          href={facebookLink}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="w-10 h-10 rounded-lg bg-surface-800 border border-surface-700 flex items-center justify-center text-sky-400 hover:bg-sky-500/20 hover:border-sky-500/40 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-500"
+                          aria-label={`Buscar ${lead.business_name} en Facebook`}
+                        >
                           <FacebookIcon />
                         </a>
-                        <a href={instagramLink} target="_blank" rel="noopener noreferrer" className="w-10 h-10 rounded-lg bg-surface-800 border border-surface-700 flex items-center justify-center text-surface-300 hover:bg-pink-500/20 hover:text-pink-400 hover:border-pink-500/40 transition-colors" title={`Instagram: ${lead.business_name}`}>
+                        <a
+                          href={instagramLink}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="w-10 h-10 rounded-lg bg-surface-800 border border-surface-700 flex items-center justify-center text-surface-300 hover:bg-pink-500/20 hover:text-pink-400 hover:border-pink-500/40 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-500"
+                          aria-label={`Buscar ${lead.business_name} en Instagram`}
+                        >
                           <InstaIcon />
                         </a>
-                        <a href={googleMapsLink} target="_blank" rel="noopener noreferrer" className="w-10 h-10 rounded-lg bg-primary-500 border border-primary-500 flex items-center justify-center text-white hover:bg-primary-600 transition-colors" title={`Google Maps: ${lead.business_name}`}>
-                          <MapPin className="h-4 w-4" />
+                        <a
+                          href={googleMapsLink}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="w-10 h-10 rounded-lg bg-primary-500 border border-primary-500 flex items-center justify-center text-white hover:bg-primary-600 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-500 focus-visible:ring-offset-2 focus-visible:ring-offset-surface-900"
+                          aria-label={`Ver ${lead.business_name} en Google Maps`}
+                        >
+                          <MapPin className="h-4 w-4" aria-hidden="true" />
                         </a>
                       </div>
                     </div>
@@ -722,7 +752,7 @@ export default function LeadsView() {
             {lightboxUrl && (
               <img
                 src={lightboxUrl}
-                alt="Lead magnet"
+                alt={`Preview del lead magnet — ${lightboxLabel}`}
                 className="max-w-[85vw] max-h-[75vh] rounded-2xl border border-semantic-success/30 shadow-elevation-3 object-contain bg-black"
               />
             )}
@@ -737,7 +767,7 @@ export default function LeadsView() {
 // ── Inline SVG helpers (kept out of render loop for clarity) ──
 function Sparkle() {
   return (
-    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-semantic-success">
+    <svg aria-hidden="true" focusable="false" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-semantic-success">
       <path d="M12 2l1.9 6.1L20 10l-6.1 1.9L12 18l-1.9-6.1L4 10l6.1-1.9z" />
     </svg>
   );
@@ -745,7 +775,7 @@ function Sparkle() {
 
 function MessageCircle() {
   return (
-    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <svg aria-hidden="true" focusable="false" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
       <path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"></path>
     </svg>
   );
@@ -753,7 +783,7 @@ function MessageCircle() {
 
 function FacebookIcon() {
   return (
-    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <svg aria-hidden="true" focusable="false" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
       <path d="M18 2h-3a5 5 0 0 0-5 5v3H7v4h3v8h4v-8h3l1-4h-4V7a1 1 0 0 1 1-1h3z" />
     </svg>
   );
@@ -761,7 +791,7 @@ function FacebookIcon() {
 
 function InstaIcon() {
   return (
-    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <svg aria-hidden="true" focusable="false" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
       <rect x="2" y="2" width="20" height="20" rx="5" ry="5" />
       <path d="M16 11.37A4 4 0 1 1 12.63 8 4 4 0 0 1 16 11.37z" />
       <line x1="17.5" y1="6.5" x2="17.51" y2="6.5" />

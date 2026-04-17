@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { motion } from 'framer-motion';
+import { motion, useReducedMotion } from 'framer-motion';
 import { Mail, ArrowRight, CheckCircle2, Loader2, AlertCircle } from 'lucide-react';
 import { supabaseAuth } from '../lib/supabaseAuthClient';
 import AnimatedCard from '../components/shared/AnimatedCard';
@@ -16,6 +16,7 @@ export default function LoginView() {
   const [status, setStatus] = useState('idle'); // idle | sending | sent | error
   const [errorMsg, setErrorMsg] = useState('');
   const [touched, setTouched] = useState(false);
+  const shouldReduceMotion = useReducedMotion();
 
   const emailInvalid = touched && email.length > 0 && !EMAIL_RX.test(email);
 
@@ -48,22 +49,22 @@ export default function LoginView() {
   };
 
   return (
-    <div className="relative min-h-screen bg-surface-950 flex items-center justify-center p-6 overflow-hidden">
+    <main className="relative min-h-screen bg-surface-950 flex items-center justify-center p-6 overflow-hidden">
       {/* Gradient mesh background */}
-      <div className="fixed inset-0 -z-10 pointer-events-none">
+      <div className="fixed inset-0 -z-10 pointer-events-none" aria-hidden="true">
         <motion.div
           className="absolute -top-40 -left-40 w-[600px] h-[600px] rounded-full bg-primary-500/25 blur-3xl"
-          animate={{ x: [0, 40, -20, 0], y: [0, 30, -10, 0] }}
+          animate={shouldReduceMotion ? undefined : { x: [0, 40, -20, 0], y: [0, 30, -10, 0] }}
           transition={{ duration: 14, repeat: Infinity, ease: 'easeInOut' }}
         />
         <motion.div
           className="absolute top-1/3 -right-32 w-[500px] h-[500px] rounded-full bg-primary-500/20 blur-3xl"
-          animate={{ x: [0, -30, 20, 0], y: [0, 40, -20, 0] }}
+          animate={shouldReduceMotion ? undefined : { x: [0, -30, 20, 0], y: [0, 40, -20, 0] }}
           transition={{ duration: 18, repeat: Infinity, ease: 'easeInOut' }}
         />
         <motion.div
           className="absolute -bottom-40 left-1/4 w-[550px] h-[550px] rounded-full bg-primary-500/15 blur-3xl"
-          animate={{ x: [0, 30, -15, 0], y: [0, -20, 15, 0] }}
+          animate={shouldReduceMotion ? undefined : { x: [0, 30, -15, 0], y: [0, -20, 15, 0] }}
           transition={{ duration: 16, repeat: Infinity, ease: 'easeInOut' }}
         />
         {/* subtle vignette */}
@@ -106,6 +107,8 @@ export default function LoginView() {
                 initial="initial"
                 animate="animate"
                 exit="exit"
+                role="status"
+                aria-live="polite"
                 className="flex flex-col items-center text-center py-4"
               >
                 <motion.div
@@ -113,6 +116,7 @@ export default function LoginView() {
                   animate={{ scale: [0, 1.15, 1], rotate: 0 }}
                   transition={{ duration: 0.55, times: [0, 0.7, 1], ease: 'easeOut' }}
                   className="mb-4"
+                  aria-hidden="true"
                 >
                   <CheckCircle2 className="w-16 h-16 text-semantic-success" strokeWidth={1.75} />
                 </motion.div>
@@ -163,6 +167,8 @@ export default function LoginView() {
                       placeholder="tu@empresa.com"
                       autoComplete="email"
                       autoFocus
+                      aria-invalid={emailInvalid || undefined}
+                      aria-describedby={emailInvalid ? 'email-error' : undefined}
                       className={cn(
                         'pl-9 bg-surface-950/60 text-surface-50 border-surface-700 focus-visible:ring-primary-500 placeholder:text-surface-500',
                         emailInvalid && 'border-destructive focus-visible:ring-destructive'
@@ -170,8 +176,8 @@ export default function LoginView() {
                     />
                   </div>
                   {emailInvalid && (
-                    <p className="text-xs text-destructive flex items-center gap-1">
-                      <AlertCircle className="w-3 h-3" />
+                    <p id="email-error" role="alert" className="text-xs text-destructive flex items-center gap-1">
+                      <AlertCircle className="w-3 h-3" aria-hidden="true" />
                       Email inválido
                     </p>
                   )}
@@ -184,13 +190,13 @@ export default function LoginView() {
                 >
                   {status === 'sending' ? (
                     <>
-                      <Loader2 className="animate-spin" />
+                      <Loader2 className="animate-spin" aria-hidden="true" />
                       Enviando…
                     </>
                   ) : (
                     <>
                       Enviar link mágico
-                      <ArrowRight />
+                      <ArrowRight aria-hidden="true" />
                     </>
                   )}
                 </Button>
@@ -200,9 +206,11 @@ export default function LoginView() {
                     variants={fadeVariants}
                     initial="initial"
                     animate="animate"
+                    role="alert"
+                    aria-live="assertive"
                     className="flex items-start gap-2 rounded-md border border-destructive/30 bg-destructive/10 p-3 text-xs text-destructive"
                   >
-                    <AlertCircle className="w-4 h-4 flex-shrink-0 mt-0.5" />
+                    <AlertCircle className="w-4 h-4 flex-shrink-0 mt-0.5" aria-hidden="true" />
                     <span>{errorMsg}</span>
                   </motion.div>
                 )}
@@ -219,6 +227,6 @@ export default function LoginView() {
           Si no tenés cuenta, pedísela a Brian.
         </p>
       </AnimatedCard>
-    </div>
+    </main>
   );
 }

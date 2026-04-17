@@ -158,7 +158,7 @@ export default function OutreachReviewModal({ lead, isOpen, onClose, onSave, onA
 
             <div className="rounded-lg border border-dashed border-primary-500/30 bg-primary-500/5 p-4 flex flex-col gap-2">
               <Label htmlFor="agent-notes" className="flex items-center gap-2 text-primary-500 text-xs font-semibold uppercase tracking-wider">
-                <Sparkles className="h-3.5 w-3.5" />
+                <Sparkles className="h-3.5 w-3.5" aria-hidden="true" />
                 Feedback para Angela (AI)
               </Label>
               <textarea
@@ -189,12 +189,12 @@ export default function OutreachReviewModal({ lead, isOpen, onClose, onSave, onA
             >
               {isRegenerating ? (
                 <>
-                  <Loader2 className="h-4 w-4 animate-spin" />
+                  <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
                   Angela escribiendo...
                 </>
               ) : (
                 <>
-                  <Sparkles className="h-4 w-4" />
+                  <Sparkles className="h-4 w-4" aria-hidden="true" />
                   Volver a Generar
                 </>
               )}
@@ -204,7 +204,7 @@ export default function OutreachReviewModal({ lead, isOpen, onClose, onSave, onA
               onClick={handleReject}
               className="text-semantic-danger hover:text-semantic-danger hover:bg-semantic-danger/10"
             >
-              <XCircle className="h-4 w-4" />
+              <XCircle className="h-4 w-4" aria-hidden="true" />
               Rechazar Lead
             </Button>
           </div>
@@ -216,7 +216,7 @@ export default function OutreachReviewModal({ lead, isOpen, onClose, onSave, onA
               Guardar Borrador
             </Button>
             <Button onClick={handleApprove} className="bg-primary-500 hover:bg-primary-600 text-white shadow-glow">
-              <Send className="h-4 w-4" />
+              <Send className="h-4 w-4" aria-hidden="true" />
               Aprobar y Enviar
             </Button>
           </div>
