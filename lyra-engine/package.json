@@ -1,0 +1,12 @@
+{
+  "name": "lyra-engine",
+  "version": "1.0.0",
+  "description": "Lyra — Autonomous B2B Content Engine for LinkedIn",
+  "main": "index.js",
+  "type": "module",
+  "scripts": {
+    "start": "node index.js",
+    "test": "node index.js --dry-run"
+  },
+  "dependencies": {}
+}
