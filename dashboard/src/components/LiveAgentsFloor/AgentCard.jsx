@@ -50,7 +50,7 @@ function hint(meta) {
   return '';
 }
 
-export default function AgentCard({ agentId, events }) {
+export default function AgentCard({ agentId, events, onClick }) {
   const { display, role, accent, Icon } = getAgentMeta(agentId);
   const nowMs = Date.now();
   const status = useMemo(() => deriveStatus(events, nowMs), [events, nowMs]);
@@ -84,7 +84,12 @@ export default function AgentCard({ agentId, events }) {
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: 0.4 }}
       whileHover={{ y: -2 }}
-      className="relative rounded-xl bg-white/5 border border-white/10 backdrop-blur-xl overflow-hidden"
+      whileTap={{ scale: 0.985 }}
+      onClick={onClick}
+      role="button"
+      tabIndex={0}
+      onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onClick?.(); } }}
+      className="relative rounded-xl bg-white/5 border border-white/10 backdrop-blur-xl overflow-hidden cursor-pointer hover:bg-white/[0.07] transition-colors focus:outline-none focus:ring-1 focus:ring-white/30"
       style={{ minHeight: 116 }}
     >
       <motion.div

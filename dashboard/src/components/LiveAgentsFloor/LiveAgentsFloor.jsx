@@ -2,6 +2,7 @@ import React, { useMemo, useState, useEffect } from 'react';
 import { motion } from 'framer-motion';
 import AgentCard from './AgentCard';
 import TimelineStrip from './TimelineStrip';
+import AgentDetailModal from './AgentDetailModal';
 import { AGENT_ORDER } from './agentMeta';
 
 const GLASS = 'bg-white/5 backdrop-blur-xl border border-white/10 rounded-2xl';
@@ -13,6 +14,8 @@ export default function LiveAgentsFloor({ events }) {
     const id = setInterval(() => setTick((x) => x + 1), 5000);
     return () => clearInterval(id);
   }, []);
+
+  const [selectedAgent, setSelectedAgent] = useState(null);
 
   const eventsByAgent = useMemo(() => {
     const map = {};
@@ -56,11 +59,22 @@ export default function LiveAgentsFloor({ events }) {
         className="relative grid grid-cols-3 gap-3 mb-3"
       >
         {AGENT_ORDER.map((id) => (
-          <AgentCard key={id} agentId={id} events={eventsByAgent[id]} />
+          <AgentCard
+            key={id}
+            agentId={id}
+            events={eventsByAgent[id]}
+            onClick={() => setSelectedAgent(id)}
+          />
         ))}
       </motion.div>
 
       <TimelineStrip events={events} />
+
+      <AgentDetailModal
+        agentId={selectedAgent}
+        events={selectedAgent ? eventsByAgent[selectedAgent] : []}
+        onClose={() => setSelectedAgent(null)}
+      />
     </div>
   );
 }
