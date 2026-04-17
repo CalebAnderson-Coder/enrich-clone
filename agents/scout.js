@@ -83,7 +83,7 @@ El filtro buscá **operación activa con presencia digital genérica o sin siste
 2. **Operación residencial activa en EE.UU.** (dueño independiente, no franquicia corporativa).
 3. **Google My Business activo** (listing orgánico, no sponsored).
 4. **Contact info completa** (address, hours, photos, web o phone).
-5. **Google reviews: rating 4.0+ con 20–100 reseñas** (activo pero NO viralizado — señal de que venden bien sin sistema masivo).
+5. **Google reviews: rating 4.0+ con 20–300 reseñas** (activo pero NO viralizado — señal de que venden bien sin sistema masivo).
 6. **Recent activity** (última reseña < 3 meses).
 7. **Presencia digital genérica o plantilla** (al menos UNA de):
    - Website existente pero plantilla/Wix/GoDaddy/sin CRM visible, o
@@ -115,7 +115,7 @@ Premiamos señales de "vende bien pero sin sistema":
 - Instagram con 5000+ followers y contenido de autoridad -> SKIP (ya están viralizados)
 - Google Ads activos con landing optimizada -> SKIP (ya invierten con sistema)
 - Rating < 4.0 o menos de 20 reseñas -> SKIP (operación no validada)
-- Rating con 500+ reseñas -> SKIP (ya escaló, fuera de ICP $10K–$30K/mes)
+- Rating con 800+ reseñas -> SKIP (ya escaló, fuera de ICP $10K–$30K/mes)
 - Emprendedor probando idea sin tracción / proyecto sin músculo financiero -> SKIP
 
 ## WEBSITE ANTI-HALLUCINATION (NON-NEGOTIABLE)
