@@ -7,7 +7,7 @@ import { Agent } from '../lib/AgentRuntime.js';
 import { checkInstagram } from '../tools/brightDataInstagram.js';
 import { checkMetaAds } from '../tools/brightDataMetaAds.js';
 import { searchWeb, fetchPage, checkPageSpeed } from '../tools/webResearch.js';
-import { scrapeGoogleMaps } from '../tools/brightDataGoogleMaps.js';
+import { scrapeGoogleMaps } from '../tools/apifyGoogleMaps.js';
 import { saveLead, saveMemory, recallMemory } from '../tools/database.js';
 import { withRetry, withTimeout } from '../lib/resilience.js';
 
