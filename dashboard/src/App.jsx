@@ -209,6 +209,34 @@ function JobStatusBadge({ status }) {
   );
 }
 
+// Navigation item — sidebar button. Hoisted to module scope so it's stable
+// across re-renders of AppAuthed (prevents remount of descendant state).
+function NavItem({ icon: Icon, label, isActive, onClick, className = '' }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      aria-current={isActive ? 'page' : undefined}
+      className={cn(
+        'w-[calc(100%-1rem)] flex items-center gap-3 px-3 py-1.5 mx-2 rounded-md text-sm font-medium transition-all cursor-pointer select-none text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-500',
+        isActive
+          ? 'bg-surface-800 shadow-soft text-surface-50 border border-surface-700'
+          : 'text-surface-400 hover:bg-surface-800/50 hover:text-surface-100 border border-transparent',
+        className
+      )}
+    >
+      {Icon && (
+        <Icon
+          size={16}
+          aria-hidden="true"
+          className={isActive ? 'text-surface-50' : 'text-surface-500'}
+        />
+      )}
+      <span className="truncate">{label}</span>
+    </button>
+  );
+}
+
 // ---------------------------------------------------------------------------
 // Root
 // ---------------------------------------------------------------------------
@@ -409,30 +437,6 @@ function AppAuthed({ signOut }) {
   // ----------------------------------------------------
   // Render Helpers
   // ----------------------------------------------------
-
-  const NavItem = ({ icon: Icon, label, isActive, onClick, className = '' }) => (
-    <button
-      type="button"
-      onClick={onClick}
-      aria-current={isActive ? 'page' : undefined}
-      className={cn(
-        'w-[calc(100%-1rem)] flex items-center gap-3 px-3 py-1.5 mx-2 rounded-md text-sm font-medium transition-all cursor-pointer select-none text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-500',
-        isActive
-          ? 'bg-surface-800 shadow-soft text-surface-50 border border-surface-700'
-          : 'text-surface-400 hover:bg-surface-800/50 hover:text-surface-100 border border-transparent',
-        className
-      )}
-    >
-      {Icon && (
-        <Icon
-          size={16}
-          aria-hidden="true"
-          className={isActive ? 'text-surface-50' : 'text-surface-500'}
-        />
-      )}
-      <span className="truncate">{label}</span>
-    </button>
-  );
 
   const renderMainContent = () => {
     switch (currentView) {
