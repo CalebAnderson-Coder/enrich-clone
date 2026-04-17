@@ -167,6 +167,16 @@ Además escribí un mensaje de WhatsApp corto, conversacional, impactante.
 
 Sé asertivo, profesional, muy humano. Usá "tú" (informal pero respetuoso). TODO en ESPAÑOL — cero inglés.
 
+Además, escribí un CALL SCRIPT SPIN para que un humano de Empírika llame por teléfono al dueño. SPIN = Situation → Problem → Implication → Need-payoff, adaptado a un contratista latino de ${safeLead.industry || 'servicios'} en ${safeLead.metro_area || 'USA'}. Incluí:
+- opening: primera línea al atender (nombre de Ángela + motivo en 1 frase).
+- situation: 1 pregunta que descubra contexto operativo (ej: cuántos trabajos cierran al mes, cómo les llegan clientes hoy).
+- problem: 1 pregunta que saque a la luz el dolor actual (ej: qué le gustaría cambiar del flujo de leads).
+- implication: 1 pregunta que cuantifique el costo del dolor (ej: cuánto le cuesta al mes perder esos leads o no tener sistema).
+- need_payoff: 1 pregunta que haga al dueño expresar el valor de resolverlo (ej: qué pasaría si duplicara las citas agendadas).
+- objection_handlers: 2-3 objeciones frecuentes con su respuesta corta (ej: "no tengo tiempo", "ya trabajo con alguien", "ya probé agencias").
+- next_step: CTA específico — agendar una reunión de 15 min esta semana con fecha/hora sugerida.
+- language: "es"
+
 Devolvé SOLO un objeto JSON con esta forma exacta (validado con Zod, orden estricto):
 {
   "email_sequence": [
@@ -174,9 +184,22 @@ Devolvé SOLO un objeto JSON con esta forma exacta (validado con Zod, orden estr
     { "touch": 2, "days_after_previous": 3, "angle": "proof",       "subject": "...", "body": "...", "preview_text": "..." },
     { "touch": 3, "days_after_previous": 4, "angle": "ask",         "subject": "...", "body": "...", "preview_text": "..." }
   ],
-  "whatsapp": "[Mensaje corto de WhatsApp en español]"
+  "whatsapp": "[Mensaje corto de WhatsApp en español]",
+  "call_script": {
+    "opening": "...",
+    "situation": "...",
+    "problem": "...",
+    "implication": "...",
+    "need_payoff": "...",
+    "objection_handlers": [
+      { "objection": "...", "response": "..." },
+      { "objection": "...", "response": "..." }
+    ],
+    "next_step": "...",
+    "language": "es"
+  }
 }
-Reglas: subject 30-60 chars, preview_text 40-90 chars, body min 80 chars, todo en español.`;
+Reglas: subject 30-60 chars, preview_text 40-90 chars, body min 80 chars, todo en español. En el call_script cada campo SPIN entre 30 y 400 chars, objection_handlers con 2-3 items.`;
           logger.info('Asking Angela for multi-channel 3-touch sequence', { business: lead.business_name });
           const aiResult = await runtime.run('Angela', prompt, { maxIterations: 3 });
 
@@ -188,7 +211,7 @@ Reglas: subject 30-60 chars, preview_text 40-90 chars, body min 80 chars, todo e
           }
 
           if (parseResult.success) {
-            // Normalize both shapes to a unified {touches[], whatsapp, legacy}
+            // Normalize both shapes to a unified {touches[], whatsapp, call_script, legacy}
             const normalized = normalizeOutreachOutput(parseResult.data);
             const touch1 = normalized.touches[0];
             const touch2 = normalized.touches[1]; // may be null when legacy
@@ -196,6 +219,12 @@ Reglas: subject 30-60 chars, preview_text 40-90 chars, body min 80 chars, todo e
 
             if (normalized.legacy) {
               logger.warn('Angela returned legacy single-email format — touches 2/3 will be empty', { business: lead.business_name });
+            }
+
+            // Persist SPIN call script (if present) regardless of email/phone path.
+            // Drives the call-sheet in the dashboard so the human rep doesn't improvise.
+            if (normalized.call_script) {
+              magnetData.call_script = normalized.call_script;
             }
 
             // ── Verifier Gate — only for email drafts ──

@@ -14,6 +14,7 @@ import {
   sendEmailInputSchema,
   outreachDraftSchema,
   outreachSequenceSchema,
+  callScriptSchema,
   normalizeOutreachOutput,
 } from '../lib/schemas.js';
 import { logger } from '../lib/logger.js';
@@ -196,6 +197,75 @@ test('normalizeOutreachOutput throws on invalid payload', () => {
     threw = true;
   }
   assert(threw, 'Should throw on payload matching neither contract');
+});
+
+// ── SPIN call_script schema tests ──────────────────────────────
+
+const validCallScript = () => ({
+  opening: 'Hola, soy Ángela de Empírika, consultora de crecimiento digital. Te llamo porque vi tu perfil de Google Maps.',
+  situation: '¿Cuántos trabajos de remodelación estás cerrando al mes ahora mismo, y cómo te están llegando hoy esos clientes?',
+  problem: '¿Qué parte de ese flujo de clientes te gustaría cambiar si pudieras hacerlo mañana mismo sin fricción?',
+  implication: 'Si seguís dependiendo solo del boca a boca, ¿cuántos leads calificados estimás que se te escapan cada mes por no tener un sistema?',
+  need_payoff: 'Si duplicaras las citas agendadas por semana con un sistema predecible, ¿qué cambiaría en tu operación este trimestre?',
+  objection_handlers: [
+    { objection: 'no tengo tiempo ahora', response: 'Entiendo perfectamente. Son 15 minutos. Te muestro un caso real y vos decidís si querés explorarlo, sin compromiso.' },
+    { objection: 'ya trabajo con alguien', response: 'Genial, ¿qué resultados concretos te está dando hoy? Muchos clientes vienen con agencia y duplicamos el volumen sin reemplazarla.' },
+  ],
+  next_step: 'Agendamos 15 minutos el jueves a las 10am hora de Orlando para que veas el concepto que ya tenemos armado para tu negocio.',
+  language: 'es',
+});
+
+test('callScriptSchema accepts valid SPIN payload', () => {
+  const result = callScriptSchema.safeParse(validCallScript());
+  assert(result.success, `Expected success, got: ${JSON.stringify(result.error?.issues)}`);
+});
+
+test('callScriptSchema rejects fewer than 2 objection_handlers', () => {
+  const bad = validCallScript();
+  bad.objection_handlers = [bad.objection_handlers[0]];
+  const result = callScriptSchema.safeParse(bad);
+  assert(!result.success, 'Should reject single objection handler');
+});
+
+test('callScriptSchema rejects too-short situation question', () => {
+  const bad = validCallScript();
+  bad.situation = 'short';
+  const result = callScriptSchema.safeParse(bad);
+  assert(!result.success, 'Should reject situation under 30 chars');
+});
+
+test('outreachSequenceSchema accepts sequence with call_script', () => {
+  const payload = { ...validSequence(), call_script: validCallScript() };
+  const result = outreachSequenceSchema.safeParse(payload);
+  assert(result.success, `Expected success, got: ${JSON.stringify(result.error?.issues)}`);
+});
+
+test('outreachSequenceSchema accepts sequence without call_script (backward compat)', () => {
+  const result = outreachSequenceSchema.safeParse(validSequence());
+  assert(result.success, 'Sequence without call_script must still be valid');
+  assert(result.data.call_script === undefined, 'call_script is optional');
+});
+
+test('normalizeOutreachOutput propagates call_script from new payload', () => {
+  const payload = { ...validSequence(), call_script: validCallScript() };
+  const normalized = normalizeOutreachOutput(payload);
+  assert(normalized.call_script !== null, 'call_script should be populated');
+  assert(normalized.call_script.language === 'es', 'language defaulted to es');
+  assert(Array.isArray(normalized.call_script.objection_handlers), 'objection_handlers array present');
+});
+
+test('normalizeOutreachOutput returns call_script null for legacy payload', () => {
+  const normalized = normalizeOutreachOutput({
+    email_subject: 'Tu negocio merece una web profesional',
+    email_body: 'Hola, noté que tu negocio de landscaping no tiene website. Diseñamos un concepto gratuito sin compromiso.',
+    whatsapp: 'Hola! Te mandé un email rápido, avisame si lo viste.',
+  });
+  assert(normalized.call_script === null, 'Legacy payload must yield call_script null');
+});
+
+test('normalizeOutreachOutput returns call_script null when new payload omits it', () => {
+  const normalized = normalizeOutreachOutput(validSequence());
+  assert(normalized.call_script === null, 'Sequence without call_script should yield null');
 });
 
 test('sendEmailInputSchema validates email format', () => {
