@@ -34,6 +34,18 @@ function buildTransporter() {
 
 const _transporter = buildTransporter();
 
+// ── Phone normalization — GHL requires +1 prefix on US numbers ─
+// Exported for use by the dispatcher phone path + backfill script.
+export function normalizeUSPhone(raw) {
+  if (!raw) return '';
+  const digits = String(raw).replace(/\D/g, '');
+  if (digits.length === 0) return '';
+  if (digits.length === 11 && digits.startsWith('1')) return '+' + digits;
+  if (digits.length === 10) return '+1' + digits;
+  if (String(raw).startsWith('+1')) return '+1' + digits.replace(/^1/, '');
+  return '+1' + digits;
+}
+
 // ── GoHighLevel Sync ──────────────────────────────────────────
 export async function syncToGHL(email, prospectData) {
   const ghlKey = process.env.EMPIRIKA_GHL_KEY || process.env.GHL_API_KEY;
@@ -42,7 +54,7 @@ export async function syncToGHL(email, prospectData) {
 
   // Formatting name and getting info from DB
   const companyName = prospectData.business_name || prospectData.nombre || 'Lead';
-  const phone = prospectData.phone || prospectData.telefono || '';
+  const phone = normalizeUSPhone(prospectData.phone || prospectData.telefono || '');
   
   // Payload strictly aligned with the old Empirika n8n configuration
   const payload = {
@@ -102,6 +114,149 @@ export async function syncToGHL(email, prospectData) {
   } catch (err) {
     logger.error('GHL sync failed', { email, error: err.message });
     return false;
+  }
+}
+
+// ── GHL Pipeline Push for DRAFT_PHONE (Path A) ────────────────
+// Creates Contact + Opportunity in COLD LEADS | GOOGLE MY BUSINESS pipeline
+// so the human rep sees each DRAFT_PHONE lead in GHL with the SPIN call
+// script visible before picking up the phone. Returns { contactId, opportunityId }
+// or { error } — never throws, callers can fire-and-forget.
+export async function pushDraftPhoneToGHL(prospect, { callScript = null, whatsapp = null } = {}) {
+  const ghlKey     = process.env.EMPIRIKA_GHL_KEY || process.env.GHL_API_KEY;
+  const locationId = process.env.EMPIRIKA_GHL_LOCATION_ID || process.env.GHL_LOCATION_ID;
+  const pipelineId = process.env.GHL_PIPELINE_COLD_LEADS_ID || 'PbSBohJh1m1L08INwMzv';
+  const stageId    = process.env.GHL_STAGE_NUEVO_ID || '8e718ffe-25b0-40d6-9d43-86bd0a96c5d1';
+
+  if (!ghlKey || !locationId) {
+    logger.warn('GHL phone-push: credentials missing — skipping', { business: prospect?.business_name });
+    return { error: 'missing_credentials' };
+  }
+
+  const phone       = normalizeUSPhone(prospect?.phone);
+  const companyName = prospect?.business_name || 'Lead';
+  const industry    = (prospect?.industry || '').toLowerCase().replace(/\s+/g, '-') || 'unknown';
+  const tags        = ['lead-automatizado', 'google-maps', 'empirika-engine', 'path-a-phone', industry].filter(Boolean);
+
+  // Notes: human-readable SPIN concat so the rep sees context even without custom-field support.
+  let notes = `[Path A — Phone outreach]\nNegocio: ${companyName}\nIndustria: ${prospect?.industry || 'N/A'}\nMetro: ${prospect?.metro_area || 'N/A'}`;
+  if (callScript) {
+    notes += `\n\n── SPIN Call Script ──`;
+    if (callScript.opening)       notes += `\nOpening: ${callScript.opening}`;
+    if (callScript.situation)     notes += `\nSituation: ${callScript.situation}`;
+    if (callScript.problem)       notes += `\nProblem: ${callScript.problem}`;
+    if (callScript.implication)   notes += `\nImplication: ${callScript.implication}`;
+    if (callScript.need_payoff)   notes += `\nNeed-payoff: ${callScript.need_payoff}`;
+    if (callScript.next_step)     notes += `\nNext step: ${callScript.next_step}`;
+    if (Array.isArray(callScript.objection_handlers)) {
+      notes += `\n\nObjection handlers:`;
+      for (const oh of callScript.objection_handlers) {
+        if (oh?.objection && oh?.response) notes += `\n- "${oh.objection}" → ${oh.response}`;
+      }
+    }
+  }
+  if (whatsapp) notes += `\n\n── WhatsApp draft ──\n${whatsapp}`;
+
+  const customFields = [
+    { key: 'score',          field_value: prospect?.qualification_score ?? '' },
+    { key: 'categoria',      field_value: prospect?.industry || '' },
+    { key: 'google_rating',  field_value: prospect?.rating || prospect?.google_rating || '' },
+    { key: 'total_reviews',  field_value: prospect?.review_count || prospect?.total_reviews || 0 },
+    { key: 'outreach_path',  field_value: 'phone' },
+  ];
+  if (callScript) {
+    customFields.push({ key: 'call_script_spin', field_value: JSON.stringify(callScript) });
+  }
+
+  const contactPayload = {
+    firstName:   companyName,
+    phone:       phone || undefined,
+    locationId,
+    tags,
+    source:      'Empirika Engine - Agentic IA (Phone Path)',
+    website:     prospect?.website || '',
+    address1:    prospect?.address1 || prospect?.direccion || '',
+    city:        prospect?.metro_area || '',
+    companyName,
+    customFields,
+  };
+  if (prospect?.email_address) contactPayload.email = prospect.email_address;
+
+  try {
+    // 1. Create/upsert contact
+    const contactRes = await withRetry(
+      () => fetch('https://services.leadconnectorhq.com/contacts/', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${ghlKey}`,
+          'Version': '2021-07-28',
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(contactPayload),
+      }),
+      { maxRetries: 2, baseDelayMs: 1000, label: 'GHL-contact' }
+    );
+    const contactBody = await contactRes.json().catch(() => ({}));
+    if (!contactRes.ok) {
+      logger.error('GHL contact create failed', { business: companyName, status: contactRes.status, body: contactBody });
+      return { error: `contact_${contactRes.status}`, detail: contactBody };
+    }
+    const contactId = contactBody?.contact?.id || contactBody?.id;
+    if (!contactId) {
+      logger.error('GHL contact: no id returned', { business: companyName, body: contactBody });
+      return { error: 'no_contact_id' };
+    }
+    logger.info('GHL contact created', { business: companyName, contactId });
+
+    // 2. Attach note with SPIN script
+    try {
+      await fetch(`https://services.leadconnectorhq.com/contacts/${contactId}/notes`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${ghlKey}`,
+          'Version': '2021-07-28',
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ body: notes, userId: null }),
+      });
+    } catch (noteErr) {
+      logger.warn('GHL note attach failed (non-blocking)', { contactId, error: noteErr.message });
+    }
+
+    // 3. Create opportunity in COLD LEADS pipeline stage NUEVO
+    const oppPayload = {
+      pipelineId,
+      pipelineStageId: stageId,
+      locationId,
+      contactId,
+      name:   `${companyName} — ${prospect?.industry || 'Lead'} (${prospect?.metro_area || 'US'})`,
+      status: 'open',
+      source: 'Empirika Engine — Phone Path',
+    };
+    const oppRes = await withRetry(
+      () => fetch('https://services.leadconnectorhq.com/opportunities/', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${ghlKey}`,
+          'Version': '2021-07-28',
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(oppPayload),
+      }),
+      { maxRetries: 2, baseDelayMs: 1000, label: 'GHL-opportunity' }
+    );
+    const oppBody = await oppRes.json().catch(() => ({}));
+    if (!oppRes.ok) {
+      logger.error('GHL opportunity failed', { business: companyName, contactId, status: oppRes.status, body: oppBody });
+      return { contactId, error: `opportunity_${oppRes.status}`, detail: oppBody };
+    }
+    const opportunityId = oppBody?.opportunity?.id || oppBody?.id || null;
+    logger.info('GHL opportunity created', { business: companyName, contactId, opportunityId });
+
+    return { contactId, opportunityId };
+  } catch (err) {
+    logger.error('GHL phone-push unexpected error', { business: companyName, error: err.message });
+    return { error: 'exception', detail: err.message };
   }
 }
 

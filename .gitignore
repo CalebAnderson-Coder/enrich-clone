@@ -54,3 +54,5 @@ test_output.txt
 scraped_*.txt
 scraped_*.html
 scraped_*.md
+# Local dev scripts (service_role usage, never commit)
+_mint_magic.mjs
