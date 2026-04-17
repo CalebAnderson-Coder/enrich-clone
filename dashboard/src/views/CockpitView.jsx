@@ -5,6 +5,7 @@ import {
   Radio, AlertTriangle, CheckCircle2, CircleDot,
 } from 'lucide-react';
 import { apiGet, API_BASE_URL } from '../lib/apiClient';
+import { supabaseAuth } from '../lib/supabaseAuthClient';
 import {
   getMockStats, getMockBootstrapEvents, subscribeMockStream,
 } from '../lib/cockpitMock';
@@ -12,8 +13,9 @@ import PixelOfficeCanvas from '../components/PixelOffice';
 
 // ─────────────────────────────────────────────────────────
 // Mock flag. Flip to false to wire live /api/cockpit/* endpoints.
-// This is the ONLY line to change once backend stream is ready.
-const USE_MOCK = true;
+// Native EventSource can't carry a Bearer header, so the live path
+// below uses fetch + ReadableStream SSE parsing to stay authed.
+const USE_MOCK = false;
 // ─────────────────────────────────────────────────────────
 
 const STATS_POLL_MS = 5000;
@@ -470,31 +472,54 @@ export default function CockpitView() {
       connectStream();
     }
 
-    function connectStream() {
+    async function connectStream() {
       if (!alive) return;
+      const controller = new AbortController();
+      eventSource = { close: () => controller.abort() };
       try {
-        eventSource = new EventSource(`${API_BASE_URL}/cockpit/stream`);
-        eventSource.onopen = () => {
-          backoffMs = 1000;
-          setConnected(true);
-        };
-        eventSource.onmessage = (msg) => {
-          try {
-            const ev = JSON.parse(msg.data);
-            prependEvent(ev);
-          } catch (err) {
-            console.error('[cockpit] bad event payload', err);
+        const { data } = await supabaseAuth.auth.getSession();
+        const token = data?.session?.access_token
+          || import.meta.env.VITE_API_SECRET_KEY
+          || '';
+        const res = await fetch(`${API_BASE_URL}/cockpit/stream`, {
+          headers: token ? { Authorization: `Bearer ${token}` } : {},
+          signal: controller.signal,
+        });
+        if (!res.ok || !res.body) throw new Error(`SSE HTTP ${res.status}`);
+
+        backoffMs = 1000;
+        if (alive) setConnected(true);
+
+        const reader = res.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = '';
+
+        while (alive) {
+          const { value, done } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+          const frames = buffer.split('\n\n');
+          buffer = frames.pop() ?? '';
+          for (const frame of frames) {
+            const dataLine = frame.split('\n').find(l => l.startsWith('data:'));
+            if (!dataLine) continue;
+            try {
+              const ev = JSON.parse(dataLine.slice(5).trim());
+              prependEvent(ev);
+            } catch (err) {
+              console.error('[cockpit] bad event payload', err);
+            }
           }
-        };
-        eventSource.onerror = () => {
-          setConnected(false);
-          eventSource?.close();
-          if (!alive) return;
-          reconnectTimer = setTimeout(connectStream, backoffMs);
-          backoffMs = Math.min(backoffMs * 2, 30000);
-        };
+        }
       } catch (err) {
-        console.error('[cockpit] stream init error:', err);
+        if (err?.name !== 'AbortError') {
+          console.error('[cockpit] stream error:', err);
+        }
+      } finally {
+        if (!alive) return;
+        setConnected(false);
+        reconnectTimer = setTimeout(connectStream, backoffMs);
+        backoffMs = Math.min(backoffMs * 2, 30000);
       }
     }
 
@@ -517,7 +542,7 @@ export default function CockpitView() {
   }, [stats]);
 
   return (
-    <div className="min-h-full w-full p-6 lg:p-8 bg-gradient-to-br from-surface-950 via-[#0b0b1a] to-surface-950 text-white">
+    <div className="min-h-full w-full p-6 lg:p-8 text-white">
       {/* Header */}
       <motion.div
         initial={{ opacity: 0, y: -8 }}

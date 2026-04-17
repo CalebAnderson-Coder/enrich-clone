@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import {
-  MessageSquare, User, Megaphone, FileText,
+  MessageSquare, User, Megaphone, FileText, BarChart3,
   Search, PlusCircle, CheckCircle, XCircle, Loader2, Send, LogOut, Settings
 } from 'lucide-react';
 import { motion, AnimatePresence, MotionConfig } from 'framer-motion';
@@ -8,6 +8,7 @@ import { motion, AnimatePresence, MotionConfig } from 'framer-motion';
 // Import Views — active demo surface
 import LeadsView from './views/LeadsView';
 import CampaignView from './views/CampaignView';
+import CockpitView from './views/CockpitView';
 import LoginView from './views/LoginView';
 
 // --- Views parked for post-demo (keep files, hide from sidebar) ---
@@ -452,6 +453,12 @@ function AppAuthed({ signOut }) {
             <CampaignView />
           </div>
         );
+      case 'cockpit':
+        return (
+          <div className="flex-1 overflow-y-auto h-full">
+            <CockpitView />
+          </div>
+        );
       case 'chat':
       default:
         return (
@@ -706,6 +713,15 @@ function AppAuthed({ signOut }) {
                 onClick={() => {
                   setCurrentView('campaign');
                   setActiveChannel('campañas');
+                }}
+              />
+              <NavItem
+                icon={BarChart3}
+                label="Cockpit"
+                isActive={currentView === 'cockpit'}
+                onClick={() => {
+                  setCurrentView('cockpit');
+                  setActiveChannel('cockpit');
                 }}
               />
             </div>
