@@ -1,7 +1,52 @@
 import React, { useState, useEffect } from 'react';
-import './LeadsView.css';
+import { motion } from 'framer-motion';
+import { toast } from 'sonner';
 import OutreachReviewModal from '../components/OutreachReviewModal';
 import { apiGet, apiPost } from '../lib/apiClient';
+import { Card, CardContent } from '@/components/ui/card';
+import { Badge } from '@/components/ui/badge';
+import { Skeleton } from '@/components/ui/skeleton';
+import { Button } from '@/components/ui/button';
+import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog';
+import AnimatedCard from '@/components/shared/AnimatedCard';
+import StaggerChildren, { staggerItem } from '@/components/shared/StaggerChildren';
+import FadePresence, { fadeVariants } from '@/components/shared/FadePresence';
+import {
+  CheckCircle,
+  Inbox,
+  Star,
+  Phone,
+  Globe,
+  Flame,
+  Mail,
+  Image as ImageIcon,
+  Pencil,
+  MapPin,
+  ExternalLink,
+  Zap,
+} from 'lucide-react';
+import { cn } from '@/lib/utils';
+
+// Status metadata — unified badge variants + labels
+const STATUS_META = {
+  pendiente:  { label: 'Borrador listo',  badgeClass: 'bg-semantic-warning/15 text-semantic-warning border-semantic-warning/40' },
+  procesando: { label: 'Procesando',      badgeClass: 'bg-surface-700/60 text-surface-300 border-surface-600' },
+  enviado:    { label: 'Enviado',         badgeClass: 'bg-semantic-success/15 text-semantic-success border-semantic-success/40' },
+  rechazado:  { label: 'Rechazado',       badgeClass: 'bg-semantic-danger/15 text-semantic-danger border-semantic-danger/40' },
+};
+
+const TIER_META = {
+  hot:  { label: 'HOT',  chipClass: 'bg-semantic-danger/20 text-semantic-danger border-semantic-danger/40', icon: Flame },
+  warm: { label: 'WARM', chipClass: 'bg-semantic-warning/20 text-semantic-warning border-semantic-warning/40', icon: Zap },
+  cold: { label: 'FRÍO', chipClass: 'bg-semantic-info/20 text-semantic-info border-semantic-info/40', icon: null },
+};
+
+const FILTERS = [
+  { key: 'all',  label: 'Todos' },
+  { key: 'hot',  label: 'HOT' },
+  { key: 'warm', label: 'WARM' },
+  { key: 'cold', label: 'FRÍO' },
+];
 
 export default function LeadsView() {
   const [leads, setLeads] = useState([]);
@@ -9,15 +54,9 @@ export default function LeadsView() {
   const [selectedLead, setSelectedLead] = useState(null);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [activeTab, setActiveTab] = useState('pendientes');
+  const [tierFilter, setTierFilter] = useState('all');
   const [lightboxUrl, setLightboxUrl] = useState(null);
   const [lightboxLabel, setLightboxLabel] = useState('');
-
-  // Close lightbox on ESC
-  useEffect(() => {
-    const handleKey = (e) => { if (e.key === 'Escape') setLightboxUrl(null); };
-    window.addEventListener('keydown', handleKey);
-    return () => window.removeEventListener('keydown', handleKey);
-  }, []);
 
   useEffect(() => {
     fetchLeads();
@@ -28,9 +67,7 @@ export default function LeadsView() {
   // Strip markdown fences and extract clean readable text from AI-generated fields
   const cleanText = (raw) => {
     if (!raw || typeof raw !== 'string') return raw;
-    // Remove markdown code fences like ```json ... ``` or ``` ... ```
     let cleaned = raw.replace(/```json\s*/gi, '').replace(/```\s*/g, '').trim();
-    // If the remaining text looks like a JSON object, try to extract meaningful string
     if (cleaned.startsWith('{')) {
       try {
         const parsed = JSON.parse(cleaned);
@@ -42,9 +79,6 @@ export default function LeadsView() {
     return cleaned;
   };
 
-  // Determine lead status from campaign data + email draft availability
-  // "pendiente" = ONLY when there is a valid English draft ready for client approval
-  // "procesando" = agents still working (no draft yet)
   const getLeadStatus = (campaignData, emailDraft) => {
     if (campaignData?.outreach_status === 'REJECTED') return 'rechazado';
     if (campaignData?.outreach_status === 'APPROVED' || campaignData?.outreach_status === 'SENT' || campaignData?.email_sent_at) return 'enviado';
@@ -70,21 +104,15 @@ export default function LeadsView() {
         const campArray = lead.campaign_enriched_data || [];
         const camp = campArray[0] || null;
         const mega = lead.mega_profile || {};
-
-        // Normalize outreach copy: check magnetData JSONB first (where dispatcher writes),
-        // then fall back to outreach_copy column and mega_profile
         const magnetData = camp?.lead_magnets_data || {};
         let emailDraft = null;
 
-        // Priority 1: Dispatcher writes email_draft_subject + email_draft_html into lead_magnets_data JSONB
-        // Also check legacy keys: angela_email_subject / angela_email_body (older dispatcher format)
         const draftSubject = magnetData.email_draft_subject || magnetData.angela_email_subject;
         const draftHtml = magnetData.email_draft_html || magnetData.angela_email_body;
         if (draftSubject && draftHtml) {
           emailDraft = `Subject: ${draftSubject}\n\n${draftHtml}`;
         }
 
-        // Priority 2: Raw outreach_copy column (legacy path)
         if (!emailDraft && camp?.outreach_copy) {
           emailDraft = camp.outreach_copy;
           if (emailDraft.trim().startsWith('{')) {
@@ -98,7 +126,6 @@ export default function LeadsView() {
           }
         }
 
-        // Priority 3: mega_profile.outreach (legacy path)
         if (!emailDraft && mega?.outreach?.subject) {
           emailDraft = `Subject: ${mega.outreach.subject}\n\n${mega.outreach.body || ''}`;
         }
@@ -122,7 +149,6 @@ export default function LeadsView() {
           facebook_url: lead.facebook_url || null,
           instagram_url: lead.instagram_url || null,
           linkedin_url: lead.linkedin_url || null,
-          // Campaign join fields
           campaign_enriched_data: campArray,
           outreach_status: lead.outreach_status || camp?.outreach_status || null,
           email_draft: emailDraft,
@@ -138,31 +164,38 @@ export default function LeadsView() {
     }
   };
 
-  // Filter leads by active tab
-  const filteredLeads = leads.filter(lead => {
-    if (activeTab === 'pendientes') return lead._status === 'pendiente';
-    if (activeTab === 'enviados') return lead._status === 'enviado';
-    if (activeTab === 'rechazados') return lead._status === 'rechazado';
-    return true; // 'todos'
-  });
-
-  const tabCounts = {
-    pendientes: leads.filter(l => l._status === 'pendiente').length,
-    enviados: leads.filter(l => l._status === 'enviado').length,
-    rechazados: leads.filter(l => l._status === 'rechazado').length,
-    todos: leads.length,
-  };
-
-  const getTierClass = (score) => {
+  const getTier = (score) => {
     if (score >= 80) return 'hot';
     if (score >= 50) return 'warm';
     return 'cold';
   };
 
-  const getTierLabel = (score) => {
-    if (score >= 80) return 'PROSPECTO HOT';
-    if (score >= 50) return 'PROSPECTO WARM';
-    return 'PROSPECTO FRÍO';
+  // Counts per tier (across ALL leads, irrespective of status tab)
+  const tierCounts = {
+    all:  leads.length,
+    hot:  leads.filter(l => getTier(l.qualification_score || 0) === 'hot').length,
+    warm: leads.filter(l => getTier(l.qualification_score || 0) === 'warm').length,
+    cold: leads.filter(l => getTier(l.qualification_score || 0) === 'cold').length,
+  };
+
+  // Status tab filter, then tier filter
+  const filteredLeads = leads
+    .filter(lead => {
+      if (activeTab === 'pendientes') return lead._status === 'pendiente';
+      if (activeTab === 'enviados')   return lead._status === 'enviado';
+      if (activeTab === 'rechazados') return lead._status === 'rechazado';
+      return true;
+    })
+    .filter(lead => {
+      if (tierFilter === 'all') return true;
+      return getTier(lead.qualification_score || 0) === tierFilter;
+    });
+
+  const tabCounts = {
+    pendientes: leads.filter(l => l._status === 'pendiente').length,
+    enviados:   leads.filter(l => l._status === 'enviado').length,
+    rechazados: leads.filter(l => l._status === 'rechazado').length,
+    todos: leads.length,
   };
 
   const handleOpenReview = (lead) => {
@@ -171,12 +204,15 @@ export default function LeadsView() {
   };
 
   const handleRegenerate = async (leadId, agentNotes) => {
+    const t = toast.loading('Angela regenerando outreach…');
     try {
       const response = await apiPost(`/leads/${leadId}/regenerate-outreach`, { notes: agentNotes });
       const data = await response.json();
+      toast.success('Outreach regenerado', { id: t, description: 'Revisá el nuevo borrador.' });
       return data;
     } catch (err) {
       console.error('Error regenerating:', err);
+      toast.error('Error regenerando', { id: t, description: err?.message || 'Reintentá en un momento.' });
       return null;
     }
   };
@@ -188,12 +224,12 @@ export default function LeadsView() {
         status: 'DRAFT'
       });
       if (!response.ok) throw new Error(`Save draft failed: ${response.status}`);
-
       setIsModalOpen(false);
+      toast.success('Borrador guardado', { description: 'Podés volver a editarlo cuando quieras.' });
       fetchLeads();
     } catch (err) {
       console.error('Error saving:', err);
-      alert('Error al guardar el borrador');
+      toast.error('Error al guardar el borrador', { description: err?.message || '' });
     }
   };
 
@@ -203,14 +239,13 @@ export default function LeadsView() {
         outreach: outreachData,
         status: 'APPROVED'
       });
-
       if (!response.ok) throw new Error('Failed to approve');
-
       setIsModalOpen(false);
+      toast.success('Draft aprobado', { description: 'El outreach se enviará en la próxima cola.' });
       fetchLeads();
     } catch (err) {
       console.error('Error approving:', err);
-      alert('Error al aprobar y enviar');
+      toast.error('Error al aprobar y enviar', { description: err?.message || '' });
     }
   };
 
@@ -221,19 +256,99 @@ export default function LeadsView() {
         status: 'REJECTED',
         notes: agentNotes || ''
       });
-
       if (!response.ok) throw new Error('Failed to reject');
-
       setIsModalOpen(false);
+      toast.success('Lead rechazado', { description: 'Lo removimos del pipeline activo.' });
       fetchLeads();
     } catch (err) {
       console.error('Error rejecting:', err);
-      alert('Error al rechazar lead');
+      toast.error('Error al rechazar lead', { description: err?.message || '' });
     }
   };
 
+  // ── Render helpers ───────────────────────────────────────────────
+  const renderSkeletonGrid = () => (
+    <div className="grid grid-cols-[repeat(auto-fill,minmax(400px,1fr))] gap-6 mt-4">
+      {[0, 1, 2, 3, 4, 5].map(i => (
+        <Card key={i} className="p-6 bg-surface-900 border-surface-700 flex flex-col gap-4 min-h-[500px]">
+          <div className="flex justify-between items-start gap-3">
+            <Skeleton className="h-6 w-2/3" />
+            <Skeleton className="h-5 w-20 rounded-full" />
+          </div>
+          <div className="flex flex-col gap-2">
+            <Skeleton className="h-4 w-3/4" />
+            <Skeleton className="h-4 w-1/2" />
+            <Skeleton className="h-4 w-3/5" />
+          </div>
+          <Skeleton className="h-2 w-full" />
+          <div className="rounded-lg border border-surface-700 p-4 flex flex-col gap-3">
+            <Skeleton className="h-4 w-1/3" />
+            <Skeleton className="h-3 w-full" />
+            <Skeleton className="h-3 w-5/6" />
+            <Skeleton className="h-3 w-4/5" />
+          </div>
+          <div className="flex gap-2 mt-auto">
+            <Skeleton className="h-10 w-10 rounded-lg" />
+            <Skeleton className="h-10 w-10 rounded-lg" />
+            <Skeleton className="h-10 w-10 rounded-lg" />
+            <Skeleton className="h-10 w-10 rounded-lg" />
+          </div>
+        </Card>
+      ))}
+    </div>
+  );
+
+  const renderEmptyState = () => {
+    const isAllApproved = activeTab === 'pendientes' && leads.length > 0;
+    const Icon = isAllApproved ? CheckCircle : Inbox;
+    const hotCount = tierCounts.hot;
+    const copy = isAllApproved
+      ? {
+          title: '¡Todo aprobado!',
+          body: hotCount > 0
+            ? `${hotCount} leads HOT esperando tu approve → mirá la pestaña "Enviados" para ver el histórico.`
+            : 'Todos los leads han sido procesados. Revisá la pestaña "Enviados" para ver el histórico.',
+          cta: null,
+        }
+      : tierFilter !== 'all'
+        ? {
+            title: `No hay leads ${TIER_META[tierFilter].label}`,
+            body: 'Probá limpiar el filtro o cambiar de pestaña.',
+            cta: { label: 'Mostrar todos los tiers', action: () => setTierFilter('all') },
+          }
+        : {
+            title: 'No hay leads en esta categoría',
+            body: 'Los agentes están buscando activamente nuevos prospectos en segundo plano.',
+            cta: null,
+          };
+
+    return (
+      <FadePresence>
+        <motion.div
+          key={`empty-${activeTab}-${tierFilter}`}
+          variants={fadeVariants}
+          initial="initial"
+          animate="animate"
+          exit="exit"
+          className="flex flex-col items-center justify-center text-center py-20 px-6 rounded-2xl border border-dashed border-surface-700 bg-surface-900/40 mt-4"
+        >
+          <div className="w-20 h-20 rounded-full bg-primary-500/10 border border-primary-500/30 flex items-center justify-center mb-5">
+            <Icon className="w-10 h-10 text-primary-500" />
+          </div>
+          <h3 className="text-2xl font-semibold text-surface-50 mb-2">{copy.title}</h3>
+          <p className="text-surface-400 max-w-md mb-6">{copy.body}</p>
+          {copy.cta && (
+            <Button onClick={copy.cta.action} className="bg-primary-500 hover:bg-primary-600 text-white">
+              {copy.cta.label}
+            </Button>
+          )}
+        </motion.div>
+      </FadePresence>
+    );
+  };
+
   return (
-    <div className="leads-view-container">
+    <div className="p-10 flex flex-col gap-6 animate-in fade-in duration-300">
       <svg width="0" height="0" style={{ position: 'absolute' }}>
         <defs>
           <linearGradient id="instaGradient" x1="0%" y1="100%" x2="100%" y2="0%">
@@ -246,71 +361,91 @@ export default function LeadsView() {
         </defs>
       </svg>
 
-      <div className="leads-header">
+      {/* Header */}
+      <div className="flex justify-between items-end flex-wrap gap-4">
         <div>
-          <h2>Leads Precualificados</h2>
-          <p>Contactabilidad multicanal y pipeline de prospección</p>
+          <h2 className="text-3xl font-bold tracking-tight bg-gradient-to-r from-white to-surface-400 bg-clip-text text-transparent mb-1">
+            Leads Precualificados
+          </h2>
+          <p className="text-surface-400">Contactabilidad multicanal y pipeline de prospección</p>
         </div>
-        <div style={{ background: 'rgba(255,255,255,0.05)', padding: '8px 16px', borderRadius: '20px', fontSize: '0.9rem', color: 'var(--text-secondary)' }}>
-          <strong style={{ color: '#fff' }}>{leads.length}</strong> Leads Totales
+        <div className="bg-surface-800/60 border border-surface-700 px-4 py-2 rounded-full text-sm text-surface-400">
+          <strong className="text-surface-50">{leads.length}</strong> Leads totales
         </div>
       </div>
 
-      {/* Filter Tabs */}
-      <div className="leads-tabs" style={{ display: 'flex', gap: '4px', marginBottom: '20px', background: 'rgba(255,255,255,0.03)', borderRadius: '12px', padding: '4px', border: '1px solid rgba(255,255,255,0.06)' }}>
+      {/* Status tabs */}
+      <div className="flex gap-1 bg-surface-900/50 border border-surface-700 rounded-xl p-1">
         {[
-          { key: 'pendientes', label: 'Pendientes', icon: '📋', color: '#eab308' },
-          { key: 'enviados', label: 'Enviados', icon: '✅', color: '#10b981' },
-          { key: 'rechazados', label: 'Rechazados', icon: '✗', color: '#ef4444' },
-          { key: 'todos', label: 'Todos', icon: '📊', color: '#8b5cf6' },
+          { key: 'pendientes', label: 'Pendientes' },
+          { key: 'enviados',   label: 'Enviados' },
+          { key: 'rechazados', label: 'Rechazados' },
+          { key: 'todos',      label: 'Todos' },
         ].map(tab => (
-          <button 
+          <motion.button
             key={tab.key}
-            className={`tab-btn ${activeTab === tab.key ? 'active' : ''}`}
             onClick={() => setActiveTab(tab.key)}
-            style={{
-              flex: 1,
-              padding: '10px 16px',
-              border: 'none',
-              borderRadius: '10px',
-              cursor: 'pointer',
-              fontSize: '0.85rem',
-              fontWeight: 600,
-              transition: 'all 0.2s ease',
-              background: activeTab === tab.key ? 'rgba(255,255,255,0.08)' : 'transparent',
-              color: activeTab === tab.key ? tab.color : 'var(--text-secondary)',
-              boxShadow: activeTab === tab.key ? '0 2px 8px rgba(0,0,0,0.2)' : 'none',
-            }}
+            whileTap={{ scale: 0.97 }}
+            className={cn(
+              'flex-1 px-4 py-2.5 rounded-lg text-sm font-semibold transition-colors',
+              activeTab === tab.key
+                ? 'bg-surface-800 text-surface-50 shadow-elevation-1'
+                : 'text-surface-400 hover:text-surface-100 hover:bg-surface-800/50'
+            )}
           >
-            {tab.icon} {tab.label} <span style={{ opacity: 0.7, marginLeft: '4px', fontSize: '0.8rem' }}>({tabCounts[tab.key]})</span>
-          </button>
+            {tab.label}
+            <span className="ml-2 opacity-70 text-xs font-medium">({tabCounts[tab.key]})</span>
+          </motion.button>
         ))}
       </div>
 
+      {/* Tier filter chips */}
+      <div className="flex items-center gap-2 flex-wrap">
+        <span className="text-xs font-semibold uppercase tracking-wider text-surface-500 mr-1">Filtrar por tier:</span>
+        {FILTERS.map(f => {
+          const active = tierFilter === f.key;
+          const meta = TIER_META[f.key] || null;
+          const activeChipClass = meta
+            ? meta.chipClass
+            : 'bg-surface-700 text-surface-50 border-surface-600';
+          return (
+            <motion.button
+              key={f.key}
+              onClick={() => setTierFilter(f.key)}
+              whileTap={{ scale: 0.95 }}
+              className={cn(
+                'inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold border transition-all',
+                active
+                  ? activeChipClass + ' ring-1 ring-white/10'
+                  : 'bg-surface-900/60 text-surface-400 border-surface-700 hover:border-surface-600 hover:text-surface-200'
+              )}
+            >
+              {meta?.icon ? <meta.icon className="h-3 w-3" /> : null}
+              {f.label}
+              <span className="opacity-70">({tierCounts[f.key]})</span>
+            </motion.button>
+          );
+        })}
+      </div>
+
+      {/* Content */}
       {loading ? (
-        <div className="leads-grid">
-          {[1, 2, 3].map(i => <div key={i} className="skeleton-card" />)}
-        </div>
+        renderSkeletonGrid()
       ) : filteredLeads.length === 0 ? (
-        <div className="empty-leads-container">
-          <svg width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path><circle cx="9" cy="7" r="4"></circle><path d="M23 21v-2a4 4 0 0 0-3-3.87"></path><path d="M16 3.13a4 4 0 0 1 0 7.75"></path></svg>
-          <h3>{activeTab === 'pendientes' ? '¡Todo aprobado!' : 'No hay leads en esta categoría'}</h3>
-          <p>{activeTab === 'pendientes' 
-            ? 'Todos los leads han sido procesados. Revisa la pestaña "Enviados" para ver el historial.' 
-            : 'Los agentes están buscando activamente posibles prospectos en segundo plano.'}</p>
-        </div>
+        renderEmptyState()
       ) : (
-        <div className="leads-grid">
+        <StaggerChildren
+          staggerDelay={0.04}
+          className="grid grid-cols-[repeat(auto-fill,minmax(400px,1fr))] gap-6 mt-2"
+        >
           {filteredLeads.map(lead => {
             const score = lead.qualification_score || 0;
-            const tierClass = getTierClass(score);
-            
+            const tier = getTier(score);
+            const tierMeta = TIER_META[tier];
+
             const whatsappLink = lead.phone ? `https://wa.me/${lead.phone.replace(/[^0-9]/g, '')}` : null;
-            const phoneLink = lead.phone ? `tel:${lead.phone.replace(/[^0-9+]/g, '')}` : null;
-            const smsLink = lead.phone ? `sms:${lead.phone.replace(/[^0-9+]/g, '')}` : null;
             const websiteUrl = lead.website && !lead.website.startsWith('http') ? `https://${lead.website}` : lead.website;
 
-            // Build social links: use DB values if present, otherwise construct smart search links
             const mapsQuery = encodeURIComponent(`${lead.business_name} ${lead.city || lead.metro_area || ''}`);
             const googleMapsLink = lead.google_maps_url
               || `https://www.google.com/maps/search/?api=1&query=${mapsQuery}`;
@@ -323,47 +458,38 @@ export default function LeadsView() {
             if (!instagramLink && lead.website && lead.website.includes('instagram.com/')) {
               instagramLink = lead.website;
             }
-            // Fallback: Instagram search by business name
             if (!instagramLink) {
               const igQuery = encodeURIComponent((lead.business_name || '').replace(/\s+/g, ''));
               instagramLink = `https://www.instagram.com/${igQuery}`;
             }
 
-            const linkedinLink = lead.linkedin_url || null;
-
             const campaignData = lead.campaign_enriched_data && lead.campaign_enriched_data[0] ? lead.campaign_enriched_data[0] : null;
             const rawMega = lead.mega_profile || {};
-            
+
             const fbAdsUrl = rawMega?.meta_ads?.adLibraryUrl || `https://www.facebook.com/ads/library/?active_status=all&ad_type=all&country=US&q=${encodeURIComponent(lead.business_name)}&search_type=keyword_unordered`;
-            let hasAdsIndicator = "Desconocido";
+            let hasAdsIndicator = 'Desconocido';
             if (lead.score_breakdown && typeof lead.score_breakdown === 'object') {
               const str = JSON.stringify(lead.score_breakdown).toLowerCase();
-              if (str.includes('no meta ads') || str.includes('not in meta ad')) hasAdsIndicator = "No";
-              else if (str.includes('has active meta ads') || str.includes('active ads')) hasAdsIndicator = "Sí";
+              if (str.includes('no meta ads') || str.includes('not in meta ad')) hasAdsIndicator = 'No';
+              else if (str.includes('has active meta ads') || str.includes('active ads')) hasAdsIndicator = 'Sí';
             }
-            if (rawMega?.meta_ads && rawMega.meta_ads.hasActiveAds === false) hasAdsIndicator = "No";
-            if (rawMega?.meta_ads && rawMega.meta_ads.hasActiveAds === true) hasAdsIndicator = "Sí";
-            
+            if (rawMega?.meta_ads && rawMega.meta_ads.hasActiveAds === false) hasAdsIndicator = 'No';
+            if (rawMega?.meta_ads && rawMega.meta_ads.hasActiveAds === true) hasAdsIndicator = 'Sí';
+
             const resumen = cleanText(campaignData?.radiography_technical || rawMega.situational_summary) || `Evaluando el potencial digital de ${lead.business_name}...`;
             const puntosDolor = cleanText(campaignData?.attack_angle || rawMega.pain_points) || `Identificando ineficiencias en el embudo actual de ${lead.business_name}...`;
-            
-            // Strategy for card display: strategic recommendation (NOT the email draft, NOT the attack_angle which is shown above)
+
             let rawEstrategia = rawMega.strategic_recommendation || '';
-            
-            // Check if the outreach email draft is ready (use pre-normalized field from fetchLeads)
             const outreachCopy = lead.email_draft || campaignData?.outreach_copy || '';
-            const hasEmailDraft = outreachCopy.length > 50 
+            const hasEmailDraft = outreachCopy.length > 50
               && !outreachCopy.toLowerCase().includes('max iterations')
               && !outreachCopy.toLowerCase().includes('agent encountered');
-            
-            const estrategia = rawEstrategia 
+
+            const estrategia = rawEstrategia
               || (hasEmailDraft ? 'Propuesta lista para revisión ↓' : `Angela está diseñando la propuesta personalizada para este prospecto.`);
 
-            // Lead magnet image (if assigned by lead_magnet_worker)
             const magnetData = campaignData?.lead_magnets_data || {};
-            const magnetImagePath = magnetData.image_path; // e.g. "assets/landing_niches/7. Paisajismo/img.png"
-            // In production VITE_API_URL is "" so serverRoot is "" → relative URL like /assets/...
-            // In dev VITE_API_URL is undefined so we fall back to localhost:4000
+            const magnetImagePath = magnetData.image_path;
             const rawApiUrl = import.meta.env.VITE_API_URL !== undefined
               ? import.meta.env.VITE_API_URL
               : (import.meta.env.PROD ? '' : 'http://localhost:4000/api');
@@ -374,174 +500,206 @@ export default function LeadsView() {
             const magnetImageUrl = encodedPath ? `${serverRoot}/${encodedPath}` : null;
             const magnetLabel = magnetData.niche_folder || 'Preview';
 
+            // Status badge — prefer explicit outreach_status, fall back to _status
+            const badgeStatus = (
+              lead.outreach_status === 'APPROVED' || lead.outreach_status === 'SENT'
+                ? 'enviado'
+                : lead.outreach_status === 'REJECTED'
+                  ? 'rechazado'
+                  : lead.outreach_status === 'DRAFT'
+                    ? 'pendiente'
+                    : lead._status
+            );
+            const statusMeta = STATUS_META[badgeStatus] || STATUS_META.procesando;
+
             return (
-              <div key={lead.id} className="lead-card">
-                <div className="lead-card-header">
-                  <h3 className="lead-name" title={lead.business_name}>{lead.business_name || 'Prospecto Sin Nombre'}</h3>
-                  <div className={`badge ${tierClass}`}>
-                    {getTierLabel(score)}
-                  </div>
-                </div>
-                
-                <div className="lead-meta">
-                  <div className="meta-row subdued">
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"></path><polyline points="3.27 6.96 12 12.01 20.73 6.96"></polyline><line x1="12" y1="22.08" x2="12" y2="12"></line></svg>
-                    <span>{lead.industry || 'Servicios'} • {lead.metro_area || 'Desconocido'}</span>
-                  </div>
-                  
-                  {lead.rating && (
-                    <div className="meta-row highlight">
-                      <svg className="gold-icon" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"></polygon></svg>
-                      <strong className="gold-text">{lead.rating}</strong>
-                      <span className="gray-text">({lead.reviews_count || lead.review_count || 0} reseñas)</span>
+              <motion.div key={lead.id} variants={staggerItem}>
+                <AnimatedCard className="h-full">
+                  <Card className="h-full p-6 bg-surface-900 border-surface-700 flex flex-col gap-4 shadow-elevation-2 hover:border-surface-600 hover:shadow-elevation-3 transition-colors">
+                    {/* Header */}
+                    <div className="flex justify-between items-start gap-3">
+                      <h3 className="text-xl font-bold text-surface-50 leading-tight flex-1" title={lead.business_name}>
+                        {lead.business_name || 'Prospecto Sin Nombre'}
+                      </h3>
+                      <Badge
+                        variant="outline"
+                        className={cn(
+                          'uppercase tracking-wider font-bold text-[10px] flex items-center gap-1 px-2 py-1',
+                          tierMeta.chipClass
+                        )}
+                      >
+                        {tierMeta.icon ? <tierMeta.icon className="h-3 w-3" /> : null}
+                        {tierMeta.label}
+                      </Badge>
                     </div>
-                  )}
-                  
-                  {lead.phone && (
-                    <div className="meta-row phone">
-                      <svg className="pink-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z"></path></svg>
-                      <span className="white-text">{lead.phone}</span>
-                    </div>
-                  )}
 
-                  {(websiteUrl) && (
-                    <div className="meta-row web">
-                      <svg className="blue-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"></circle><line x1="2" y1="12" x2="22" y2="12"></line><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"></path></svg>
-                      <a href={websiteUrl} target="_blank" rel="noopener noreferrer">{websiteUrl}</a>
-                    </div>
-                  )}
-
-                  <div className="meta-row ads" style={{ marginTop: '4px' }}>
-                    <svg className="gray-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M11 5L6 9H2v6h4l5 4V5z"></path><path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07"></path></svg>
-                    <span>Anuncios Meta: <strong style={{ color: hasAdsIndicator === 'No' ? '#4ade80' : hasAdsIndicator === 'Sí' ? '#ef4444' : '#9ca3af' }}>{hasAdsIndicator}</strong></span>
-                    <a href={fbAdsUrl} target="_blank" rel="noopener noreferrer" style={{ marginLeft: '8px', fontSize: '0.8rem', color: '#60a5fa', textDecoration: 'underline' }}>Ver Ad Library</a>
-                  </div>
-                </div>
-
-                <div className="lead-progress">
-                  <div className="progress-bar-bg">
-                    <div className="progress-bar-fill" style={{ width: `${score}%` }}></div>
-                  </div>
-                  <span className="progress-text">{score}/100</span>
-                </div>
-
-                <div className="analysis-box">
-                  <div className="analysis-header">
-                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21.21 15.89A10 10 0 1 1 8 2.83"></path><path d="M22 12A10 10 0 0 0 12 2v10z"></path></svg>
-                    <h4>Análisis del Prospecto</h4>
-                  </div>
-                  <div className="analysis-content">
-                    <h5 className="red">Resumen Situacional:</h5>
-                    <p className="italic">{resumen}</p>
-
-                    <h5 className="red">Puntos de Dolor & Análisis:</h5>
-                    <p>{puntosDolor}</p>
-
-                    <h5 className="green">Estrategia de Venta:</h5>
-                    <p>{estrategia}</p>
-                    
-                    {hasEmailDraft && (
-                      <p style={{ color: '#10b981', fontSize: '0.8rem', marginTop: '8px', display: 'flex', alignItems: 'center', gap: '6px' }}>
-                        ✉️ Email draft listo — haz click en "Revisar Outreach" para ver y editar
-                      </p>
-                    )}
-                  </div>
-                </div>
-
-                {magnetImageUrl && (
-                  <div
-                    className="magnet-preview"
-                    onClick={() => { setLightboxUrl(magnetImageUrl); setLightboxLabel(magnetLabel); }}
-                    style={{
-                      margin: '12px 0',
-                      borderRadius: '12px',
-                      overflow: 'hidden',
-                      border: '1px solid rgba(16, 185, 129, 0.3)',
-                      background: 'rgba(16, 185, 129, 0.05)',
-                      cursor: 'pointer',
-                      transition: 'border-color 0.2s',
-                    }}
-                    onMouseEnter={e => e.currentTarget.style.borderColor = 'rgba(16,185,129,0.7)'}
-                    onMouseLeave={e => e.currentTarget.style.borderColor = 'rgba(16,185,129,0.3)'}
-                    title="Click to view full image"
-                  >
-                    <div style={{
-                      padding: '10px 14px',
-                      background: 'rgba(16, 185, 129, 0.1)',
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'space-between',
-                      gap: '6px',
-                      fontSize: '0.75rem',
-                      color: '#10b981',
-                      fontWeight: 600,
-                    }}>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>
-                        LEAD MAGNET — {magnetLabel}
+                    {/* Meta */}
+                    <div className="flex flex-col gap-2 text-sm">
+                      <div className="flex items-center gap-2 text-surface-400">
+                        <MapPin className="h-4 w-4 text-surface-500" />
+                        <span>{lead.industry || 'Servicios'} • {lead.metro_area || 'Desconocido'}</span>
                       </div>
-                      <span style={{ fontSize: '0.7rem', opacity: 0.7 }}>🔍 Click to expand</span>
-                    </div>
-                  </div>
-                )}
 
-                <div className="lead-contact-channels">
-                  <div className="outreach-action-row">
-                    <button className="review-outreach-btn" onClick={() => handleOpenReview(lead)}>
-                      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path></svg>
-                      Revisar Outreach
-                    </button>
-                    {lead.outreach_status === 'APPROVED' && (
-                      <span className="status-label approved">✓ Aprobado</span>
-                    )}
-                    {lead.outreach_status === 'SENT' && (
-                      <span className="status-label approved" style={{ color: '#10b981', background: 'rgba(16, 185, 129, 0.1)', padding: '4px 8px', borderRadius: '4px', fontSize: '0.8rem', display: 'flex', alignItems: 'center', gap: '4px' }}>✉️ Enviado</span>
-                    )}
-                    {lead.outreach_status === 'REJECTED' && (
-                      <span className="status-label rejected" style={{ color: '#ef4444', background: 'rgba(239, 68, 68, 0.1)', padding: '4px 8px', borderRadius: '4px', fontSize: '0.8rem', display: 'flex', alignItems: 'center' }}>✗ Rechazado</span>
-                    )}
-                    {lead.outreach_status === 'DRAFT' && (
-                      <span className="status-label draft" style={{ color: '#eab308', background: 'rgba(234, 179, 8, 0.1)', padding: '4px 8px', borderRadius: '4px', fontSize: '0.8rem', display: 'flex', alignItems: 'center' }}>✏️ Borrador</span>
-                    )}
-                  </div>
+                      {lead.rating && (
+                        <div className="flex items-center gap-2">
+                          <Star className="h-4 w-4 text-amber-400 fill-amber-400" />
+                          <strong className="text-amber-400">{lead.rating}</strong>
+                          <span className="text-surface-500">({lead.reviews_count || 0} reseñas)</span>
+                        </div>
+                      )}
 
-                  <h5 className="channels-title small">CANALES DE CONTACTO DIRECTO</h5>
-                  <div className="channels-row">
-                    {/* WhatsApp — only active if phone exists */}
-                    {whatsappLink ? (
-                      <a href={whatsappLink} target="_blank" rel="noopener noreferrer" className="channel-btn" title={`WhatsApp: ${lead.phone}`}>
-                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"></path></svg>
-                      </a>
-                    ) : (
-                      <div className="channel-btn" style={{ opacity: 0.25 }} title="No phone available">
-                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"></path></svg>
+                      {lead.phone && (
+                        <div className="flex items-center gap-2">
+                          <Phone className="h-4 w-4 text-rose-400" />
+                          <span className="text-surface-50 font-medium">{lead.phone}</span>
+                        </div>
+                      )}
+
+                      {websiteUrl && (
+                        <div className="flex items-center gap-2">
+                          <Globe className="h-4 w-4 text-sky-400" />
+                          <a
+                            href={websiteUrl}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="text-sky-400 underline font-medium truncate"
+                          >
+                            {websiteUrl}
+                          </a>
+                        </div>
+                      )}
+
+                      <div className="flex items-center gap-2 text-surface-400">
+                        <Zap className="h-4 w-4 text-surface-500" />
+                        <span>
+                          Anuncios Meta:{' '}
+                          <strong className={cn(
+                            hasAdsIndicator === 'No' && 'text-semantic-success',
+                            hasAdsIndicator === 'Sí' && 'text-semantic-danger',
+                            hasAdsIndicator === 'Desconocido' && 'text-surface-400'
+                          )}>
+                            {hasAdsIndicator}
+                          </strong>
+                        </span>
+                        <a
+                          href={fbAdsUrl}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="ml-1 text-xs text-sky-400 underline inline-flex items-center gap-0.5"
+                        >
+                          Ver Ad Library <ExternalLink className="h-3 w-3" />
+                        </a>
                       </div>
+                    </div>
+
+                    {/* Score bar */}
+                    <div className="flex items-center gap-3">
+                      <div className="flex-1 h-2 rounded-full bg-surface-800 overflow-hidden">
+                        <motion.div
+                          initial={{ width: 0 }}
+                          animate={{ width: `${score}%` }}
+                          transition={{ duration: 0.9, ease: 'easeOut' }}
+                          className="h-full rounded-full bg-gradient-to-r from-semantic-success to-emerald-400"
+                        />
+                      </div>
+                      <span className="text-sm font-bold text-surface-50 min-w-[48px] text-right">{score}/100</span>
+                    </div>
+
+                    {/* Analysis */}
+                    <div className="rounded-xl border border-emerald-900/50 bg-emerald-950/20 p-4 flex flex-col gap-2">
+                      <div className="flex items-center gap-2 mb-1">
+                        <Sparkle />
+                        <h4 className="text-sm font-bold text-semantic-success">Análisis del Prospecto</h4>
+                      </div>
+                      <div>
+                        <h5 className="text-xs font-bold text-semantic-danger mb-1">Resumen Situacional:</h5>
+                        <p className="text-xs text-surface-200 italic leading-relaxed">{resumen}</p>
+                      </div>
+                      <div>
+                        <h5 className="text-xs font-bold text-semantic-danger mb-1">Puntos de Dolor:</h5>
+                        <p className="text-xs text-surface-200 leading-relaxed">{puntosDolor}</p>
+                      </div>
+                      <div>
+                        <h5 className="text-xs font-bold text-semantic-success mb-1">Estrategia de Venta:</h5>
+                        <p className="text-xs text-surface-200 leading-relaxed">{estrategia}</p>
+                      </div>
+                      {hasEmailDraft && (
+                        <p className="text-[11px] text-semantic-success flex items-center gap-1.5 mt-1">
+                          <Mail className="h-3 w-3" />
+                          Email draft listo — click "Revisar Outreach"
+                        </p>
+                      )}
+                    </div>
+
+                    {/* Lead magnet preview */}
+                    {magnetImageUrl && (
+                      <motion.button
+                        onClick={() => { setLightboxUrl(magnetImageUrl); setLightboxLabel(magnetLabel); }}
+                        whileHover={{ scale: 1.01 }}
+                        whileTap={{ scale: 0.99 }}
+                        className="rounded-xl border border-semantic-success/30 bg-semantic-success/5 px-4 py-2.5 flex items-center justify-between text-xs text-semantic-success font-semibold hover:border-semantic-success/60 transition-colors"
+                        title="Click para ver imagen"
+                      >
+                        <span className="flex items-center gap-2">
+                          <ImageIcon className="h-3.5 w-3.5" />
+                          LEAD MAGNET — {magnetLabel}
+                        </span>
+                        <span className="opacity-70 font-normal">Click para expandir</span>
+                      </motion.button>
                     )}
 
-                    {/* Facebook — always active (search fallback) */}
-                    <a href={facebookLink} target="_blank" rel="noopener noreferrer" className="channel-btn" title={`Search on Facebook: ${lead.business_name}`}>
-                      <svg className="channel-icon-blue" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M18 2h-3a5 5 0 0 0-5 5v3H7v4h3v8h4v-8h3l1-4h-4V7a1 1 0 0 1 1-1h3z"></path></svg>
-                    </a>
+                    {/* Action row */}
+                    <div className="flex items-center justify-between mt-auto">
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => handleOpenReview(lead)}
+                        className="border-primary-500/40 bg-primary-500/10 text-primary-500 hover:bg-primary-500/20 hover:text-primary-500"
+                      >
+                        <Pencil className="h-3.5 w-3.5" />
+                        Revisar Outreach
+                      </Button>
+                      {lead.outreach_status && (
+                        <Badge variant="outline" className={cn('text-[10px] uppercase tracking-wider', statusMeta.badgeClass)}>
+                          {statusMeta.label}
+                        </Badge>
+                      )}
+                    </div>
 
-                    {/* Instagram — always active (profile search fallback) */}
-                    <a href={instagramLink} target="_blank" rel="noopener noreferrer" className="channel-btn" title={`Search on Instagram: ${lead.business_name}`}>
-                      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="2" y="2" width="20" height="20" rx="5" ry="5"/><path d="M16 11.37A4 4 0 1 1 12.63 8 4 4 0 0 1 16 11.37z"/><line x1="17.5" y1="6.5" x2="17.51" y2="6.5"/></svg>
-                    </a>
-
-                    {/* Google Maps — always active (search fallback) */}
-                    <a href={googleMapsLink} target="_blank" rel="noopener noreferrer" className="channel-btn primary" title={`Find on Google Maps: ${lead.business_name}`}>
-                      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"></path><circle cx="12" cy="10" r="3"></circle></svg>
-                    </a>
-                  </div>
-                </div>
-              </div>
+                    {/* Channels */}
+                    <div>
+                      <h5 className="text-[10px] font-bold text-surface-500 uppercase tracking-widest mb-2">Canales de contacto</h5>
+                      <div className="flex gap-2 flex-wrap">
+                        {whatsappLink ? (
+                          <a href={whatsappLink} target="_blank" rel="noopener noreferrer" className="w-10 h-10 rounded-lg bg-surface-800 border border-surface-700 flex items-center justify-center text-surface-300 hover:bg-emerald-500/20 hover:text-emerald-400 hover:border-emerald-500/40 transition-colors" title={`WhatsApp: ${lead.phone}`}>
+                            <MessageCircle />
+                          </a>
+                        ) : (
+                          <div className="w-10 h-10 rounded-lg bg-surface-800/40 border border-surface-700 flex items-center justify-center text-surface-600 opacity-40" title="Sin teléfono">
+                            <MessageCircle />
+                          </div>
+                        )}
+                        <a href={facebookLink} target="_blank" rel="noopener noreferrer" className="w-10 h-10 rounded-lg bg-surface-800 border border-surface-700 flex items-center justify-center text-sky-400 hover:bg-sky-500/20 hover:border-sky-500/40 transition-colors" title={`Facebook: ${lead.business_name}`}>
+                          <FacebookIcon />
+                        </a>
+                        <a href={instagramLink} target="_blank" rel="noopener noreferrer" className="w-10 h-10 rounded-lg bg-surface-800 border border-surface-700 flex items-center justify-center text-surface-300 hover:bg-pink-500/20 hover:text-pink-400 hover:border-pink-500/40 transition-colors" title={`Instagram: ${lead.business_name}`}>
+                          <InstaIcon />
+                        </a>
+                        <a href={googleMapsLink} target="_blank" rel="noopener noreferrer" className="w-10 h-10 rounded-lg bg-primary-500 border border-primary-500 flex items-center justify-center text-white hover:bg-primary-600 transition-colors" title={`Google Maps: ${lead.business_name}`}>
+                          <MapPin className="h-4 w-4" />
+                        </a>
+                      </div>
+                    </div>
+                  </Card>
+                </AnimatedCard>
+              </motion.div>
             );
           })}
-        </div>
+        </StaggerChildren>
       )}
 
       {selectedLead && (
-        <OutreachReviewModal 
+        <OutreachReviewModal
           lead={selectedLead}
           isOpen={isModalOpen}
           onClose={() => setIsModalOpen(false)}
@@ -552,68 +710,61 @@ export default function LeadsView() {
         />
       )}
 
-      {/* Lightbox for lead magnet images */}
-      {lightboxUrl && (
-        <div
-          onClick={() => setLightboxUrl(null)}
-          style={{
-            position: 'fixed',
-            inset: 0,
-            zIndex: 9999,
-            background: 'rgba(0,0,0,0.92)',
-            display: 'flex',
-            flexDirection: 'column',
-            alignItems: 'center',
-            justifyContent: 'center',
-            cursor: 'zoom-out',
-            backdropFilter: 'blur(8px)',
-            animation: 'fadeIn 0.15s ease',
-          }}
-        >
-          <div style={{
-            position: 'absolute',
-            top: 20,
-            right: 24,
-            color: '#fff',
-            fontSize: '1.5rem',
-            cursor: 'pointer',
-            opacity: 0.7,
-            fontWeight: 300,
-            lineHeight: 1,
-          }}>✕</div>
-          <div style={{
-            marginBottom: '16px',
-            color: '#10b981',
-            fontWeight: 700,
-            fontSize: '0.85rem',
-            letterSpacing: '0.1em',
-            textTransform: 'uppercase',
-          }}>📸 LEAD MAGNET — {lightboxLabel}</div>
-          <img
-            src={lightboxUrl}
-            alt="Lead magnet"
-            onClick={(e) => e.stopPropagation()}
-            style={{
-              maxWidth: '90vw',
-              maxHeight: '80vh',
-              borderRadius: '16px',
-              boxShadow: '0 25px 80px rgba(0,0,0,0.8)',
-              objectFit: 'contain',
-              border: '1px solid rgba(16,185,129,0.3)',
-            }}
-            onError={(e) => {
-              e.target.style.display = 'none';
-              e.target.nextSibling.style.display = 'block';
-            }}
-          />
-          <div style={{ display:'none', color:'#ef4444', marginTop:16, fontSize:'0.9rem' }}>
-            ⚠️ Image not found at: {lightboxUrl}
+      {/* Lead magnet lightbox — Dialog shadcn */}
+      <Dialog open={!!lightboxUrl} onOpenChange={(open) => { if (!open) setLightboxUrl(null); }}>
+        <DialogContent className="max-w-5xl p-0 bg-transparent border-0 shadow-none">
+          <DialogTitle className="sr-only">Lead magnet — {lightboxLabel}</DialogTitle>
+          <div className="flex flex-col items-center gap-3">
+            <div className="text-semantic-success font-bold text-xs uppercase tracking-widest flex items-center gap-2">
+              <ImageIcon className="h-3.5 w-3.5" />
+              LEAD MAGNET — {lightboxLabel}
+            </div>
+            {lightboxUrl && (
+              <img
+                src={lightboxUrl}
+                alt="Lead magnet"
+                className="max-w-[85vw] max-h-[75vh] rounded-2xl border border-semantic-success/30 shadow-elevation-3 object-contain bg-black"
+              />
+            )}
+            <div className="text-xs text-surface-500 mt-1">Click en la X o apretá ESC para cerrar</div>
           </div>
-          <div style={{ marginTop: 16, color: 'rgba(255,255,255,0.4)', fontSize: '0.75rem' }}>
-            Click anywhere or press ESC to close
-          </div>
-        </div>
-      )}
+        </DialogContent>
+      </Dialog>
     </div>
+  );
+}
+
+// ── Inline SVG helpers (kept out of render loop for clarity) ──
+function Sparkle() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-semantic-success">
+      <path d="M12 2l1.9 6.1L20 10l-6.1 1.9L12 18l-1.9-6.1L4 10l6.1-1.9z" />
+    </svg>
+  );
+}
+
+function MessageCircle() {
+  return (
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"></path>
+    </svg>
+  );
+}
+
+function FacebookIcon() {
+  return (
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M18 2h-3a5 5 0 0 0-5 5v3H7v4h3v8h4v-8h3l1-4h-4V7a1 1 0 0 1 1-1h3z" />
+    </svg>
+  );
+}
+
+function InstaIcon() {
+  return (
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <rect x="2" y="2" width="20" height="20" rx="5" ry="5" />
+      <path d="M16 11.37A4 4 0 1 1 12.63 8 4 4 0 0 1 16 11.37z" />
+      <line x1="17.5" y1="6.5" x2="17.51" y2="6.5" />
+    </svg>
   );
 }

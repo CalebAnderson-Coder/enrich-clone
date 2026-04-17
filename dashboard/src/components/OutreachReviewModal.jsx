@@ -1,5 +1,19 @@
 import React, { useState, useEffect } from 'react';
-import './OutreachReviewModal.css';
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription,
+  DialogFooter,
+} from '@/components/ui/dialog';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
+import { ScrollArea } from '@/components/ui/scroll-area';
+import { Badge } from '@/components/ui/badge';
+import { Loader2, Sparkles, Send, XCircle } from 'lucide-react';
+import { cn } from '@/lib/utils';
 
 export default function OutreachReviewModal({ lead, isOpen, onClose, onSave, onApprove, onRegenerate, onReject }) {
   const [subject, setSubject] = useState('');
@@ -10,41 +24,34 @@ export default function OutreachReviewModal({ lead, isOpen, onClose, onSave, onA
 
   useEffect(() => {
     if (lead) {
-      // ── Read from ALL data sources where Angela/DaVinci write ──
       const campaign = lead.campaign_enriched_data?.[0] || {};
       const magnetData = campaign.lead_magnets_data || {};
       const outreach = lead.mega_profile?.outreach || {};
 
-      // SUBJECT priority: new keys → legacy keys → mega_profile → parse from outreach_copy
       let resolvedSubject = magnetData.email_draft_subject
-        || magnetData.angela_email_subject  // legacy key from older dispatcher runs
+        || magnetData.angela_email_subject
         || outreach.subject
         || outreach.asunto
         || '';
 
-      // BODY priority: new keys → legacy keys → mega_profile → outreach_copy text
       let resolvedBody = magnetData.email_draft_html
-        || magnetData.angela_email_body  // legacy key from older dispatcher runs
+        || magnetData.angela_email_body
         || outreach.body
         || outreach.cuerpo
         || '';
 
-      // If still empty, try to parse subject/body from outreach_copy (plain text format)
       if (!resolvedSubject && !resolvedBody && campaign.outreach_copy) {
         const copyText = campaign.outreach_copy;
-        // Try parsing "Subject: ..." or "Asunto: ..." from the copy
         const subjectMatch = copyText.match(/(?:Subject|Asunto):\s*(.+?)(?:\n|$)/i);
         if (subjectMatch) {
           resolvedSubject = subjectMatch[1].trim();
           resolvedBody = copyText.replace(subjectMatch[0], '').trim();
         } else {
-          // Use entire outreach_copy as body, generate a default subject
           resolvedBody = copyText;
           resolvedSubject = `Proposal for ${lead.business_name}`;
         }
       }
 
-      // WhatsApp: magnetData → mega_profile → empty
       const resolvedWhatsapp = magnetData.whatsapp_draft
         || outreach.whatsapp
         || '';
@@ -56,7 +63,7 @@ export default function OutreachReviewModal({ lead, isOpen, onClose, onSave, onA
     }
   }, [lead]);
 
-  if (!isOpen || !lead) return null;
+  if (!lead) return null;
 
   const handleRegenerate = async () => {
     setIsRegenerating(true);
@@ -66,7 +73,7 @@ export default function OutreachReviewModal({ lead, isOpen, onClose, onSave, onA
         setSubject(result.outreach.subject || '');
         setBody(result.outreach.body || '');
         setWhatsapp(result.outreach.whatsapp || '');
-        setAgentNotes(''); // clear notes after regen
+        setAgentNotes('');
       }
     } finally {
       setIsRegenerating(false);
@@ -88,90 +95,133 @@ export default function OutreachReviewModal({ lead, isOpen, onClose, onSave, onA
   };
 
   return (
-    <div className="modal-overlay" onClick={onClose}>
-      <div className="modal-content" onClick={e => e.stopPropagation()}>
-        <div className="modal-header">
-          <div className="lead-info">
-            <h2>Revisar Outreach — {lead.business_name}</h2>
-            <p>{lead.owner_name || 'Dueño/Mánager'} • {lead.industry}</p>
-          </div>
-          <button className="close-btn" onClick={onClose}>&times;</button>
-        </div>
+    <Dialog open={isOpen} onOpenChange={(open) => { if (!open) onClose(); }}>
+      <DialogContent className="max-w-3xl p-0 gap-0 bg-surface-900 border-surface-700 text-surface-50 shadow-elevation-3">
+        <DialogHeader className="px-6 py-5 border-b border-surface-700 text-left">
+          <DialogTitle className="text-xl font-semibold tracking-tight bg-gradient-to-r from-white to-surface-400 bg-clip-text text-transparent">
+            Revisar outreach — {lead.business_name}
+          </DialogTitle>
+          <DialogDescription className="text-surface-400 mt-1">
+            {lead.owner_name || 'Dueño/Mánager'} • {lead.industry}
+            {lead.qualification_score ? (
+              <Badge variant="outline" className="ml-2 border-primary-500/40 text-primary-500">
+                Score {lead.qualification_score}/100
+              </Badge>
+            ) : null}
+          </DialogDescription>
+        </DialogHeader>
 
-        <div className="modal-body">
-          <div className="field-group">
-            <label>Email Subject <span style={{color:'#6b7280',fontWeight:400,fontSize:'0.75rem'}}>(must be in English)</span></label>
-            <input 
-              type="text" 
-              value={subject} 
-              onChange={e => setSubject(e.target.value)}
-              placeholder="e.g. Quick Win for Your Business in Orlando"
-            />
-          </div>
+        <ScrollArea className="max-h-[65vh]">
+          <div className="px-6 py-5 flex flex-col gap-5">
+            <div className="flex flex-col gap-2">
+              <Label htmlFor="email-subject" className="text-xs font-semibold uppercase tracking-wider text-surface-400">
+                Email Subject
+                <span className="ml-2 text-[10px] font-normal text-surface-500 normal-case tracking-normal">(must be in English)</span>
+              </Label>
+              <Input
+                id="email-subject"
+                value={subject}
+                onChange={(e) => setSubject(e.target.value)}
+                placeholder="e.g. Quick Win for Your Business in Orlando"
+                className="bg-surface-950/60 border-surface-700 text-surface-50 placeholder:text-surface-500 h-11"
+              />
+            </div>
 
-          <div className="field-group">
-            <label>Email Body <span style={{color:'#6b7280',fontWeight:400,fontSize:'0.75rem'}}>(English only — this goes directly to the lead)</span></label>
-            <textarea 
-              value={body} 
-              onChange={e => setBody(e.target.value)}
-              rows={8}
-              placeholder="Write the email body in English..."
-            />
-          </div>
+            <div className="flex flex-col gap-2">
+              <Label htmlFor="email-body" className="text-xs font-semibold uppercase tracking-wider text-surface-400">
+                Email Body
+                <span className="ml-2 text-[10px] font-normal text-surface-500 normal-case tracking-normal">(English only — goes directly to the lead)</span>
+              </Label>
+              <textarea
+                id="email-body"
+                value={body}
+                onChange={(e) => setBody(e.target.value)}
+                rows={8}
+                placeholder="Write the email body in English..."
+                className="rounded-md bg-surface-950/60 border border-surface-700 text-surface-50 placeholder:text-surface-500 p-3 text-sm font-sans resize-y focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary-500"
+              />
+            </div>
 
-          <div className="field-group">
-            <label>Mensaje de WhatsApp</label>
-            <textarea 
-              value={whatsapp} 
-              onChange={e => setWhatsapp(e.target.value)}
-              rows={4}
-              placeholder="Escribe el mensaje de WhatsApp..."
-            />
-          </div>
-          
-          <div className="field-group" style={{ marginTop: '16px', background: 'rgba(255,0,102,0.05)', padding: '12px', borderRadius: '8px', border: '1px dashed rgba(255,0,102,0.3)' }}>
-            <label style={{ color: '#ff0066', display: 'flex', alignItems: 'center', gap: '8px' }}>
-              <div className="angela-avatar" style={{width: 24, height: 24}}>
-                <img src="https://ui-avatars.com/api/?name=Angela&background=ff0066&color=fff" alt="Angela" />
-              </div>
-              Feedback para Angela (AI)
-            </label>
-            <textarea 
-              value={agentNotes} 
-              onChange={e => setAgentNotes(e.target.value)}
-              rows={3}
-              placeholder="Ej: 'Usa un tono más agresivo', 'Hazlo más corto', o 'El link correcto es x...'"
-              style={{ background: 'transparent' }}
-            />
-            <small style={{ color: 'var(--text-secondary)', display: 'block', marginTop: '8px' }}>
-              Si algo no te gusta, escríbelo aquí y pídele a Angela que lo vuelva a generar.
-            </small>
-          </div>
-        </div>
+            <div className="flex flex-col gap-2">
+              <Label htmlFor="whatsapp-msg" className="text-xs font-semibold uppercase tracking-wider text-surface-400">
+                Mensaje de WhatsApp
+              </Label>
+              <textarea
+                id="whatsapp-msg"
+                value={whatsapp}
+                onChange={(e) => setWhatsapp(e.target.value)}
+                rows={4}
+                placeholder="Escribe el mensaje de WhatsApp..."
+                className="rounded-md bg-surface-950/60 border border-surface-700 text-surface-50 placeholder:text-surface-500 p-3 text-sm font-sans resize-y focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary-500"
+              />
+            </div>
 
-        <div className="modal-footer">
-          <div className="left-actions">
-            <button 
-              className={`action-btn secondary regenerate-btn ${isRegenerating ? 'loading' : ''}`}
+            <div className="rounded-lg border border-dashed border-primary-500/30 bg-primary-500/5 p-4 flex flex-col gap-2">
+              <Label htmlFor="agent-notes" className="flex items-center gap-2 text-primary-500 text-xs font-semibold uppercase tracking-wider">
+                <Sparkles className="h-3.5 w-3.5" />
+                Feedback para Angela (AI)
+              </Label>
+              <textarea
+                id="agent-notes"
+                value={agentNotes}
+                onChange={(e) => setAgentNotes(e.target.value)}
+                rows={3}
+                placeholder="Ej: 'Usa un tono más agresivo', 'Hazlo más corto', o 'El link correcto es x...'"
+                className="rounded-md bg-transparent border border-surface-700 text-surface-50 placeholder:text-surface-500 p-3 text-sm font-sans resize-y focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary-500"
+              />
+              <p className="text-xs text-surface-400">
+                Si algo no te gusta, escribelo aqui y pidele a Angela que lo vuelva a generar.
+              </p>
+            </div>
+          </div>
+        </ScrollArea>
+
+        <DialogFooter className="px-6 py-4 border-t border-surface-700 bg-surface-950/40 flex-row sm:justify-between gap-2">
+          <div className="flex gap-2 items-center">
+            <Button
+              variant="outline"
               onClick={handleRegenerate}
               disabled={isRegenerating}
+              className={cn(
+                'border-primary-500/40 text-primary-500 hover:bg-primary-500/10 hover:text-primary-500',
+                isRegenerating && 'opacity-70'
+              )}
             >
-              <div className="angela-avatar">
-                <img src="https://ui-avatars.com/api/?name=Angela&background=ff0066&color=fff" alt="Angela" />
-              </div>
-              {isRegenerating ? 'Angela escribiendo...' : 'Volver a Generar'}
-            </button>
-            <button className="action-btn link" onClick={handleReject} style={{ color: '#ef4444' }}>
+              {isRegenerating ? (
+                <>
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                  Angela escribiendo...
+                </>
+              ) : (
+                <>
+                  <Sparkles className="h-4 w-4" />
+                  Volver a Generar
+                </>
+              )}
+            </Button>
+            <Button
+              variant="ghost"
+              onClick={handleReject}
+              className="text-semantic-danger hover:text-semantic-danger hover:bg-semantic-danger/10"
+            >
+              <XCircle className="h-4 w-4" />
               Rechazar Lead
-            </button>
+            </Button>
           </div>
-          <div className="right-actions">
-            <button className="action-btn link" onClick={onClose}>Cancelar</button>
-            <button className="action-btn secondary" onClick={handleSave}>Guardar Borrador</button>
-            <button className="action-btn primary" onClick={handleApprove}>Aprobar y Enviar</button>
+          <div className="flex gap-2 items-center">
+            <Button variant="ghost" onClick={onClose} className="text-surface-400 hover:text-surface-50">
+              Cancelar
+            </Button>
+            <Button variant="outline" onClick={handleSave} className="border-surface-700 text-surface-50 hover:bg-surface-800">
+              Guardar Borrador
+            </Button>
+            <Button onClick={handleApprove} className="bg-primary-500 hover:bg-primary-600 text-white shadow-glow">
+              <Send className="h-4 w-4" />
+              Aprobar y Enviar
+            </Button>
           </div>
-        </div>
-      </div>
-    </div>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }
