@@ -658,7 +658,7 @@ function AppAuthed({ signOut }) {
           Saltar al contenido principal
         </a>
         {/* 1. LEFT SIDEBAR */}
-        <nav aria-label="Navegación principal" className="w-60 bg-surface-900/90 backdrop-blur-xl border-r border-border flex flex-col shrink-0 relative z-20 overflow-hidden">
+        <nav aria-label="Navegación principal" className="w-60 bg-surface-900/40 backdrop-blur-xl border-r border-border flex flex-col shrink-0 relative z-20 overflow-hidden">
           {/* Ambient brand light blob behind sidebar header */}
           <div
             className="absolute -top-24 left-1/2 -translate-x-1/2 h-48 w-[500px] rounded-full bg-[#5E6AD2] opacity-20 blur-[120px] pointer-events-none z-0"
@@ -788,12 +788,12 @@ function AppAuthed({ signOut }) {
         </nav>
 
         {/* 2. MAIN CONTENT */}
-        <main id="main-content" className="flex-1 min-w-0 bg-surface-950/70 backdrop-blur-xl relative z-10 flex flex-col border-r border-border">
+        <main id="main-content" className="flex-1 min-w-0 bg-surface-950/20 backdrop-blur-xl relative z-10 flex flex-col border-r border-border">
           {renderMainContent()}
         </main>
 
         {/* 3. RIGHT SIDEBAR (Context & Tasks) */}
-        <aside aria-label="Contexto y supervisión" className="w-80 bg-surface-900/90 backdrop-blur-xl shrink-0 flex flex-col relative z-20">
+        <aside aria-label="Contexto y supervisión" className="w-80 bg-surface-900/40 backdrop-blur-xl shrink-0 flex flex-col relative z-20">
           <header className="h-14 flex items-center px-6 border-b border-border bg-surface-900/80 backdrop-blur-sm shrink-0">
             <h2 className="font-medium text-surface-300 text-sm tracking-wide">
               Contexto y Supervisión
