@@ -114,14 +114,14 @@ export const scrapeGoogleMaps = new Tool({
     try {
       const results = await runApifyActor('compass~crawler-google-places', {
         searchStringsArray: [query],
-        maxCrawledPlacesPerSearch: maxResults,
+        maxCrawledPlacesPerSearch: Math.max(1, Math.floor(Number(maxResults) || 20)),
         language: 'en',
         reviewsSort: 'newest',
         maxReviews: 5, // Just enough to check recency
         skipClosedPlaces: true,
         scrapeReviewerName: false,
         // Filters
-        minScore: minRating,
+        minScore: Number(minRating) || 4.0,
       }, token);
 
       // Normalize and filter results
