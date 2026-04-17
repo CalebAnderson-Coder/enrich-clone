@@ -39,7 +39,7 @@ while ($true) {
             } else {
                 Log-Message "🧠 TAREA PESADA: Enrutando al Arquitecto Claude 3.5 Sonnet (vía OpenRouter)..."
                 $env:OPENAI_BASE_URL="https://openrouter.ai/api/v1"
-                $env:OPENAI_API_KEY="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"
+                $env:OPENAI_API_KEY=$env:OPENROUTER_API_KEY
                 $env:MODEL="anthropic/claude-3.5-sonnet"
             }
 

@@ -7,6 +7,7 @@ import express from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
 import cron from 'node-cron';
+import { z } from 'zod';
 
 import { AgentRuntime } from './lib/AgentRuntime.js';
 import { angela } from './agents/angela.js';
@@ -255,11 +256,19 @@ app.post('/api/leads/:id/analyze', async (req, res) => {
 });
 
 // ---- Prospecting System ----
+const prospectInputSchema = z.object({
+  metro: z.string().min(2).max(60).regex(/^[\p{L}\p{N}\s,.\-]+$/u, 'metro contains invalid characters'),
+  niche: z.string().min(2).max(60).regex(/^[\p{L}\p{N}\s,.\-]+$/u, 'niche contains invalid characters'),
+  limit: z.number().int().min(1).max(50).optional(),
+  autoEnrich: z.boolean().optional(),
+});
+
 app.post('/api/prospect', async (req, res) => {
-  const { metro, niche, limit, autoEnrich } = req.body;
-  if (!metro || !niche) {
-    return res.status(400).json({ error: 'metro and niche are required' });
+  const parsed = prospectInputSchema.safeParse(req.body);
+  if (!parsed.success) {
+    return res.status(400).json({ error: 'invalid input', details: parsed.error.flatten() });
   }
+  const { metro, niche, limit, autoEnrich } = parsed.data;
 
   try {
     const brandId = req.user.brandId;
@@ -464,44 +473,6 @@ Recuerda: Este flujo es puro volumen y prospección. Solo interactúa con 'scout
       console.error('Pipeline error:', err);
     }
   })();
-});
-
-// ---- Launch Prospection ----
-app.post('/api/prospect', async (req, res) => {
-  const { metro, niche, limit = 20 } = req.body;
-
-  if (!metro || !niche) {
-    return res.status(400).json({ error: 'metro and niche are required (e.g. metro="Miami FL", niche="landscaping")' });
-  }
-
-  console.log(`\n🎯 [Prospect] Launching: ${niche} in ${metro} (limit: ${limit})`);
-
-  try {
-    const brandId = req.user.brandId;
-    const result = await runtime.run('scout',
-      `Prospect for ${niche} businesses in ${metro}. Find up to ${limit} leads. Search both English and Spanish terms. Apply all GATE filters and scoring. Save qualified leads to the database. Provide a summary in Spanish.`,
-      { currentAgent: 'scout', brandId }
-    );
-
-    const { autoEnrich } = req.body;
-
-    res.json({
-      success: true,
-      metro,
-      niche,
-      autoEnrich: !!autoEnrich,
-      agent: result.agent,
-      response: result.response,
-      iterations: result.iterations,
-    });
-
-    if (autoEnrich) {
-      autoEnrichBackgroundLoop(metro, niche, brandId);
-    }
-  } catch (err) {
-    console.error('Prospect error:', err);
-    res.status(500).json({ error: err.message });
-  }
 });
 
 // ---- Get Leads Stats ----
