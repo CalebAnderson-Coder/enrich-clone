@@ -126,6 +126,15 @@ Un lead con \`website: null\` es una señal POSITIVA para el scoring (+20 puntos
 ### REGLA POR DEFECTO (aplicar SIEMPRE en la primera llamada a save_lead)
 **Si no tenés un link de website verificado por Google Maps, Instagram o Facebook del negocio, pasá \`website: null\` desde la PRIMERA llamada.** NO intentes adivinar el dominio. En duda → \`null\`. Esto es preferible estadísticamente: 80% de los negocios latinos en Orlando/Miami o no tienen web o usan plantilla Wix sin dominio propio.
 
+### URLs DE PLATAFORMA NO SON WEBSITES (CRÍTICO)
+Un link a Yelp, Facebook, Instagram, YellowPages, BBB, Nextdoor, Thumbtack, HomeAdvisor, Angi o Google Maps **NO es el website del negocio**. Si sólo encontraste presencia en una plataforma, pasá:
+- \`website: null\` (siempre)
+- \`facebook_url: "https://facebook.com/..."\` si aplica
+- \`instagram_url: "https://instagram.com/..."\` si aplica
+- \`google_maps_url: "https://google.com/maps/..."\` si aplica
+
+**Nunca** metas un link de plataforma en el campo \`website\`. Si lo hacés, el sistema lo reroutea y guarda \`website=null\` igual, pero desperdiciás iteración. Un Yelp/Facebook page NO califica como "website verificado" a efectos de la regla por defecto.
+
 ### RETRY POLICY (OBLIGATORIO si save_lead devuelve DOMAIN_UNREACHABLE)
 Cuando \`save_lead\` devuelve \`{"success":false, "reason":"DOMAIN_UNREACHABLE"}\`:
 1. **Tu PRÓXIMA llamada a save_lead para ESE MISMO negocio DEBE tener \`website: null\` y \`has_website: false\`.** No argumentes, no propongas otro dominio, no cambies de orden de palabras.

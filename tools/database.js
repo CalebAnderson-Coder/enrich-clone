@@ -83,6 +83,19 @@ export const saveLead = new Tool({
     required: ['business_name', 'metro_area', 'qualification_score', 'lead_tier'],
   },
   fn: async (args, context = {}) => {
+    // ── Reroute: Platform URLs don't belong in `website` ─────
+    // Yelp/Facebook/Instagram/YellowPages/etc are NOT websites — move to
+    // the right field and null `website` so GATE + dedup operate cleanly.
+    const PLATFORM_RX = /(yelp|facebook|fb\.com|instagram|yellowpages|bbb|nextdoor|thumbtack|homeadvisor|angi|angieslist|google\.com\/maps)/i;
+    if (args.website && PLATFORM_RX.test(args.website)) {
+      const url = args.website;
+      if (/facebook|fb\.com/i.test(url) && !args.facebook_url) args.facebook_url = url;
+      else if (/instagram/i.test(url) && !args.instagram_url) args.instagram_url = url;
+      else if (/google\.com\/maps/i.test(url) && !args.google_maps_url) args.google_maps_url = url;
+      console.log(`  ↪️  [REROUTE] "${args.business_name}" website='${url}' is a platform URL — moved to correct field, website=null.`);
+      args.website = null;
+    }
+
     // ── GATE: Domain Validation ─────────────────────────────
     // Reject leads with fabricated/unreachable domains before saving
     if (args.website) {
@@ -134,6 +147,8 @@ export const saveLead = new Tool({
       phone: args.phone || null,
       email: args.email || null,
       website: args.website || null,
+      facebook_url: args.facebook_url || null,
+      instagram_url: args.instagram_url || null,
       google_maps_url: args.google_maps_url || null,
       gmb_active: true, // Passed GATE
       review_count: args.review_count || 0,
