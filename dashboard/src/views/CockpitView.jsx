@@ -13,7 +13,7 @@ import PixelOfficeCanvas from '../components/PixelOffice';
 // ─────────────────────────────────────────────────────────
 // Mock flag. Flip to false to wire live /api/cockpit/* endpoints.
 // This is the ONLY line to change once backend stream is ready.
-const USE_MOCK = true;
+const USE_MOCK = false;
 // ─────────────────────────────────────────────────────────
 
 const STATS_POLL_MS = 5000;
