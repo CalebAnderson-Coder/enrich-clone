@@ -22,6 +22,11 @@ import { apiGet, apiPost } from './lib/apiClient';
 
 function App() {
   const { session, loading: authLoading, signOut } = useAuth();
+  const authDisabled = import.meta.env.VITE_DISABLE_AUTH === 'true';
+
+  if (authDisabled) {
+    return <AppAuthed signOut={() => {}} />;
+  }
 
   if (authLoading) {
     return (
