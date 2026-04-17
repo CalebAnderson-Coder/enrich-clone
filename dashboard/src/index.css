@@ -4,25 +4,28 @@
 
 @layer base {
   :root {
-    --background: 210 11% 4%;
-    --foreground: 210 11% 96%;
-    --card: 220 10% 9%;
-    --card-foreground: 210 11% 96%;
-    --popover: 220 10% 9%;
-    --popover-foreground: 210 11% 96%;
-    --primary: 232 58% 60%;
-    --primary-foreground: 210 11% 96%;
-    --secondary: 220 10% 15%;
-    --secondary-foreground: 210 11% 96%;
-    --muted: 220 10% 12%;
-    --muted-foreground: 217 10% 60%;
-    --accent: 220 10% 15%;
-    --accent-foreground: 210 11% 96%;
-    --destructive: 0 75% 55%;
-    --destructive-foreground: 210 11% 96%;
-    --border: 220 10% 17%;
-    --input: 220 10% 17%;
-    --ring: 232 58% 60%;
+    /* Empírika palette mapped to shadcn tokens (HSL).
+       Anchors: surface-950 #08090A, surface-900 #0F1115, surface-800 #16181D,
+       surface-700 #262931, surface-50 #F7F8F8, primary-500 #5E6AD2 */
+    --background: 220 20% 3%;        /* ≈ surface.950 */
+    --foreground: 210 11% 97%;       /* ≈ surface.50 */
+    --card: 222 14% 10%;             /* ≈ surface.800 */
+    --card-foreground: 210 11% 97%;
+    --popover: 222 14% 10%;          /* ≈ surface.800 */
+    --popover-foreground: 210 11% 97%;
+    --primary: 232 58% 60%;          /* #5E6AD2 — Linear Purple */
+    --primary-foreground: 210 11% 97%;
+    --secondary: 222 12% 15%;        /* between 700/800 */
+    --secondary-foreground: 210 11% 97%;
+    --muted: 222 13% 12%;            /* slightly below card */
+    --muted-foreground: 217 9% 63%;  /* ≈ surface.400 #8A8F98 */
+    --accent: 222 12% 15%;
+    --accent-foreground: 210 11% 97%;
+    --destructive: 0 84% 60%;        /* ≈ semantic.danger #ef4444 */
+    --destructive-foreground: 210 11% 97%;
+    --border: 222 11% 17%;           /* ≈ surface.700 #262931 */
+    --input: 222 11% 17%;
+    --ring: 232 58% 60%;             /* primary-500 focus ring */
     --radius: 0.5rem;
   }
 
