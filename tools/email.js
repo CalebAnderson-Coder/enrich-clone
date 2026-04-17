@@ -197,16 +197,34 @@ export async function pushDraftPhoneToGHL(prospect, { callScript = null, whatsap
       { maxRetries: 2, baseDelayMs: 1000, label: 'GHL-contact' }
     );
     const contactBody = await contactRes.json().catch(() => ({}));
+    let contactId = contactBody?.contact?.id || contactBody?.id;
+    let isDuplicate = false;
+
     if (!contactRes.ok) {
-      logger.error('GHL contact create failed', { business: companyName, status: contactRes.status, body: contactBody });
-      return { error: `contact_${contactRes.status}`, detail: contactBody };
+      // GHL returns 400 with meta.contactId when the phone (or email) already
+      // exists under another contact. Treat this as "link to existing" rather
+      // than a hard failure — still attach note + create opportunity so the
+      // rep sees the lead in GHL.
+      const dupContactId = contactBody?.meta?.contactId;
+      if (contactRes.status === 400 && dupContactId) {
+        contactId = dupContactId;
+        isDuplicate = true;
+        logger.info('GHL contact dup — linking to existing', {
+          business: companyName,
+          existingContactId: dupContactId,
+          matchingField: contactBody?.meta?.matchingField || 'unknown',
+        });
+      } else {
+        logger.error('GHL contact create failed', { business: companyName, status: contactRes.status, body: contactBody });
+        return { error: `contact_${contactRes.status}`, detail: contactBody };
+      }
     }
-    const contactId = contactBody?.contact?.id || contactBody?.id;
+
     if (!contactId) {
       logger.error('GHL contact: no id returned', { business: companyName, body: contactBody });
       return { error: 'no_contact_id' };
     }
-    logger.info('GHL contact created', { business: companyName, contactId });
+    if (!isDuplicate) logger.info('GHL contact created', { business: companyName, contactId });
 
     // 2. Attach note with SPIN script
     try {
@@ -251,9 +269,9 @@ export async function pushDraftPhoneToGHL(prospect, { callScript = null, whatsap
       return { contactId, error: `opportunity_${oppRes.status}`, detail: oppBody };
     }
     const opportunityId = oppBody?.opportunity?.id || oppBody?.id || null;
-    logger.info('GHL opportunity created', { business: companyName, contactId, opportunityId });
+    logger.info('GHL opportunity created', { business: companyName, contactId, opportunityId, linkedToExisting: isDuplicate });
 
-    return { contactId, opportunityId };
+    return { contactId, opportunityId, duplicate: isDuplicate };
   } catch (err) {
     logger.error('GHL phone-push unexpected error', { business: companyName, error: err.message });
     return { error: 'exception', detail: err.message };

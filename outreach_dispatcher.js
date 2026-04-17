@@ -351,6 +351,7 @@ Reglas: subject 30-60 chars, preview_text 40-90 chars, body min 80 chars, todo e
             magnetData.ghl_contact_id     = ghlResult.contactId;
             magnetData.ghl_opportunity_id = ghlResult.opportunityId || null;
             magnetData.ghl_synced_at      = new Date().toISOString();
+            if (ghlResult.duplicate) magnetData.ghl_linked_to_existing = true;
           } else {
             magnetData.ghl_sync_error = ghlResult.error || 'unknown';
           }
