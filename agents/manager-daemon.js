@@ -163,17 +163,24 @@ function inHourWindow(cycle, now = new Date()) {
   return Math.abs(now.getTime() - target.getTime()) <= WINDOW_MS;
 }
 
-async function tick({ brandsProvider = getActiveBrands } = {}) {
+async function tick({ brandsProvider } = {}) {
   if (process.env.AUTONOMY_ENABLED !== 'true') return;
+
+  // Default provider: only brands with a brand_quota row (burn protection).
+  // A custom provider (tests) can inject any list it wants.
+  const provider = brandsProvider || (() => getActiveBrands({ onlyAutonomous: true }));
 
   let brands;
   try {
-    brands = await brandsProvider();
+    brands = await provider();
   } catch (err) {
     console.warn('[Daemon] getActiveBrands failed:', err.message);
     return;
   }
-  if (!Array.isArray(brands) || brands.length === 0) return;
+  if (!Array.isArray(brands) || brands.length === 0) {
+    console.warn('[Daemon] AUTONOMY_ENABLED=true but no brand with brand_quota configured — tick no-op');
+    return;
+  }
 
   const now = new Date();
   for (const cycle of CYCLES) {

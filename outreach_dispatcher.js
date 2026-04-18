@@ -87,16 +87,98 @@ export function shouldAutoApprove(row, { now = Date.now(), autonomyEnabled } = {
 }
 
 /**
+ * Try to claim the per-brand autonomy lock. Returns true when the
+ * caller now holds the lock, false when another worker is already
+ * running a batch. held_until auto-expires after 5 minutes so a
+ * crashed owner cannot deadlock the brand.
+ *
+ * Uses upsert with a conflict-update that only fires when the
+ * existing row has expired — equivalent to
+ *   INSERT ... ON CONFLICT (brand_id) DO UPDATE SET held_until=$2
+ *   WHERE autonomy_locks.held_until < NOW() RETURNING brand_id
+ * In PostgREST we approximate this by (1) upserting with
+ * ignoreDuplicates on first claim and (2) falling back to an update
+ * gated by held_until < NOW() when a stale row exists.
+ */
+export async function claimAutonomyLock(brandId, { ttlMs = 5 * 60 * 1000, client } = {}) {
+  const db = client || supabase;
+  if (!db || !brandId) return false;
+  const heldUntil = new Date(Date.now() + ttlMs).toISOString();
+  const nowIso    = new Date().toISOString();
+
+  try {
+    // Step 1 — fresh insert wins when no row exists yet.
+    const ins = await db
+      .from('autonomy_locks')
+      .insert({ brand_id: brandId, held_until: heldUntil })
+      .select('brand_id');
+    if (!ins.error && ins.data && ins.data.length > 0) return true;
+
+    // Step 2 — row exists; steal only if expired.
+    const upd = await db
+      .from('autonomy_locks')
+      .update({ held_until: heldUntil, claimed_at: nowIso })
+      .eq('brand_id', brandId)
+      .lt('held_until', nowIso)
+      .select('brand_id');
+    if (!upd.error && upd.data && upd.data.length > 0) return true;
+
+    return false;
+  } catch (err) {
+    logger.warn('claimAutonomyLock failed', { brandId, error: err?.message });
+    return false;
+  }
+}
+
+export async function releaseAutonomyLock(brandId, { client } = {}) {
+  const db = client || supabase;
+  if (!db || !brandId) return;
+  try {
+    await db.from('autonomy_locks').delete().eq('brand_id', brandId);
+  } catch (err) {
+    logger.warn('releaseAutonomyLock failed', { brandId, error: err?.message });
+  }
+}
+
+/**
  * Scan for DRAFT rows whose auto_approve_at has passed and promote
  * them to APPROVED. Fires an AUTO_APPROVED event per row and
  * respects send guardrails (stops on breach).
+ *
+ * Serialized per brand via `autonomy_locks` (see migrations/013).
+ * When another worker already holds the lock we skip the batch so
+ * two concurrent schedulers cannot double-approve the same drafts.
  */
-async function autoApprovePastDueDrafts({ brandId, now = new Date() } = {}) {
-  if (!supabase) return 0;
+export async function autoApprovePastDueDrafts({ brandId, now = new Date(), client } = {}) {
+  const db = client || supabase;
+  if (!db) return 0;
 
+  // Concurrency guard — only brand-scoped batches can be locked.
+  // If no brandId is provided (legacy single-tenant path) we fall
+  // through to the unlocked flow; that path is intentionally never
+  // triggered from the autonomy cron, only from admin scripts.
+  const lockKey = brandId || null;
+  if (lockKey) {
+    const claimed = await claimAutonomyLock(lockKey, { client: db });
+    if (!claimed) {
+      logger.info('auto-approve skip: another batch in flight', { brandId: lockKey });
+      return 0;
+    }
+  }
+
+  try {
+    return await _autoApproveBody({ brandId, now, db });
+  } finally {
+    if (lockKey) {
+      await releaseAutonomyLock(lockKey, { client: db });
+    }
+  }
+}
+
+async function _autoApproveBody({ brandId, now, db }) {
   const nowIso = now.toISOString();
 
-  let query = supabase
+  let query = db
     .from('campaign_enriched_data')
     .select('id, brand_id, prospect_id, auto_approve_at, lead_magnets_data, outreach_status')
     .in('outreach_status', ['DRAFT', 'DRAFT_PHONE'])
@@ -131,7 +213,7 @@ async function autoApprovePastDueDrafts({ brandId, now = new Date() } = {}) {
       throw err;
     }
 
-    const { error: upErr } = await supabase
+    const { error: upErr } = await db
       .from('campaign_enriched_data')
       .update({ outreach_status: 'APPROVED' })
       .eq('id', row.id);

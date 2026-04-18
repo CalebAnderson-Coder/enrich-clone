@@ -19,8 +19,9 @@
 // ============================================================
 
 import { pickNext, runRadarCycle, EMPIRIKA_NICHES, LATINO_METROS } from '../workers/autonomy_orchestrator.js';
-import { shouldAutoApprove } from '../outreach_dispatcher.js';
-import { GuardrailBlocked, getEnvCaps } from '../lib/guardrails.js';
+import { shouldAutoApprove, autoApprovePastDueDrafts } from '../outreach_dispatcher.js';
+import { GuardrailBlocked, getEnvCaps, getBounceRateLast24h } from '../lib/guardrails.js';
+import { getActiveBrands } from '../lib/supabase.js';
 import * as dispatcher from '../outreach_dispatcher.js';
 import * as daemon from '../agents/manager-daemon.js';
 
@@ -136,6 +137,104 @@ await test('AUTONOMY_ENABLED=false → daemon.start() no-op + auto-approve refus
   // restore
   process.env.AUTONOMY_ENABLED = prior;
   daemon.stop();
+});
+
+// ── Test 6 — getActiveBrands({onlyAutonomous:true}) respects brand_quota ──
+await test('getActiveBrands({onlyAutonomous:true}) filters brands to those with brand_quota', async () => {
+  // 2 brands exist; only brand-a has a brand_quota row.
+  const fakeClient = {
+    from(table) {
+      if (table === 'brand_quota') {
+        return {
+          select() { return this; },
+          gte: async () => ({ data: [{ brand_id: 'brand-a', warmup_stage: 1 }], error: null }),
+        };
+      }
+      if (table === 'brands') {
+        return {
+          select() { return this; },
+          in: async (_col, ids) => ({
+            data: [{ id: 'brand-a', name: 'A' }, { id: 'brand-b', name: 'B' }]
+              .filter(b => ids.includes(b.id)),
+            error: null,
+          }),
+        };
+      }
+      throw new Error(`unexpected table: ${table}`);
+    },
+  };
+
+  const active = await getActiveBrands({ onlyAutonomous: true, client: fakeClient });
+  assert(Array.isArray(active),        'must return an array');
+  assert(active.length === 1,          `expected 1 brand, got ${active.length}`);
+  assert(active[0].id === 'brand-a',   'expected brand-a to survive the filter');
+});
+
+// ── Test 7 — autoApprove honors advisory lock (no UPDATE if claim fails) ──
+await test('autoApprovePastDueDrafts returns 0 and issues no UPDATE when lock is held', async () => {
+  const updates = [];
+  const fakeClient = {
+    from(table) {
+      if (table === 'autonomy_locks') {
+        return {
+          // Step 1: insert returns 0 rows (unique conflict surrogate).
+          insert()  { return this; },
+          // Step 2: update gated by held_until<NOW returns 0 rows.
+          update()  { return this; },
+          eq()      { return this; },
+          lt()      { return this; },
+          delete()  { return this; },
+          select: async () => ({ data: [], error: null }),
+        };
+      }
+      if (table === 'campaign_enriched_data') {
+        return {
+          update(payload) { updates.push(payload); return this; },
+          eq() { return this; },
+        };
+      }
+      throw new Error(`unexpected table: ${table}`);
+    },
+  };
+
+  const n = await autoApprovePastDueDrafts({ brandId: 'brand-x', client: fakeClient });
+  assert(n === 0, `expected 0 approvals, got ${n}`);
+  assert(updates.length === 0, `expected zero UPDATEs, got ${updates.length}`);
+});
+
+// ── Test 8 — getBounceRateLast24h computes rate from outreach_status ──
+await test('getBounceRateLast24h: 3 BOUNCED + 7 SENT ⇒ 0.3; empty ⇒ 0', async () => {
+  function makeClient({ bounced, total }) {
+    return {
+      from() {
+        const statuses = [];
+        const chain = {
+          select() { return chain; },
+          eq() { return chain; },
+          in(_col, vals) { chain._statuses = vals; return chain; },
+          gte: async () => {
+            // BOUNCED bucket has 4 statuses, combined bucket has 6.
+            const isBouncedBucket = chain._statuses && chain._statuses.length === 4;
+            return {
+              count: isBouncedBucket ? bounced : total,
+              error: null,
+            };
+          },
+        };
+        return chain;
+      },
+    };
+  }
+
+  const rate = await getBounceRateLast24h('brand-x', {
+    client: makeClient({ bounced: 3, total: 10 }),
+  });
+  assert(Math.abs(rate - 0.3) < 1e-9, `expected 0.3, got ${rate}`);
+
+  const zero = await getBounceRateLast24h('brand-x', {
+    client: makeClient({ bounced: 0, total: 0 }),
+  });
+  assert(zero === 0, `expected 0 for empty data, got ${zero}`);
 });
 
 // ─────────────────────────────────────────────────────────────
