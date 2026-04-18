@@ -127,6 +127,22 @@ services:
       - key: VITE_DASHBOARD_V2_ENABLED
         value: "false"
 
+  # ── Domain validator: nightly ghost-URL purge ────────────────
+  # Runs daily at 03:00 UTC. Nulls out leads.website for domains that
+  # fail 4xx/5xx/DNS/timeout. Prevents fantasmas (see project_gmaps_audit.md).
+  - type: cron
+    name: validate-lead-domains-nightly
+    env: node
+    region: ohio
+    schedule: "0 3 * * *"
+    buildCommand: npm install --include=dev
+    startCommand: node scripts/validate_lead_domains.js --apply
+    envVars:
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        sync: false
+
   # ── Lyra: Autonomous B2B Content Engine ──────────────────────
   # Runs Mon-Fri at 12:00 UTC (8:00 AM ET)
   # Pipeline: BrightData Research → Gemini Draft → Buffer → LinkedIn

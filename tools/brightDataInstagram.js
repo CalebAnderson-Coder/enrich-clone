@@ -22,7 +22,7 @@ async function scrapeInstagramProfile(username, token) {
     body: JSON.stringify({
       url,
       format: 'raw',
-      zone: 'web_unlocker1',
+      zone: process.env.BRIGHTDATA_UNLOCKER_ZONE || 'mcp_unlocker',
     }),
   });
 
@@ -41,7 +41,7 @@ async function scrapeInstagramProfile(username, token) {
 /**
  * Extract profile metrics from Instagram page HTML
  */
-function extractProfileFromHTML(html, username) {
+export function extractProfileFromHTML(html, username) {
   // Instagram embeds profile data in multiple locations
   // Try JSON-LD first
   const jsonLdMatch = html.match(/<script type="application\/ld\+json"[^>]*>([\s\S]*?)<\/script>/);
@@ -65,11 +65,21 @@ function extractProfileFromHTML(html, username) {
   // Try meta tags
   const descMatch = html.match(/<meta\s+(?:name|property)="(?:og:description|description)"\s+content="([^"]+)"/i);
   if (descMatch) {
-    const desc = descMatch[1];
+    // IG now HTML-encodes the @ as &#064; — decode before matching.
+    const desc = descMatch[1].replace(/&#0*64;/g, '@');
     // "123 Followers, 45 Following, 67 Posts - See Instagram photos and videos from Name (@user)"
     const followersMatch = desc.match(/([\d,.]+[KkMm]?)\s*Followers/i);
     const postsMatch = desc.match(/([\d,.]+)\s*Posts/i);
-    const nameMatch = desc.match(/from\s+(.+?)\s*\(@/);
+    let nameMatch = desc.match(/from\s+(.+?)\s*\(@/);
+    // Fallback: og:title = "Full Name (@user) • Instagram photos and videos"
+    if (!nameMatch) {
+      const titleMatch = html.match(/<meta\s+property="og:title"\s+content="([^"]+)"/i);
+      if (titleMatch) {
+        const title = titleMatch[1].replace(/&#0*64;/g, '@');
+        const m = title.match(/^(.+?)\s*\(@/);
+        if (m) nameMatch = m;
+      }
+    }
 
     if (followersMatch) {
       return {
@@ -85,6 +95,14 @@ function extractProfileFromHTML(html, username) {
 
   // Check if page exists at all
   if (html.includes('Page Not Found') || html.includes('"HttpError"') || html.includes('Sorry, this page')) {
+    return null;
+  }
+
+  // Modern 404: IG returns a shell page with no profile markers. Real profiles
+  // always embed either `"username":"..."` or `instagram://user?username=...`.
+  const hasUsernameKey  = html.includes(`"username":"${username}"`);
+  const hasAppDeeplink  = html.includes(`instagram://user?username=${username}`);
+  if (!hasUsernameKey && !hasAppDeeplink) {
     return null;
   }
 
