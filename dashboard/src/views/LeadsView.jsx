@@ -126,6 +126,10 @@ export default function LeadsView() {
           campaign_enriched_data: campArray,
           outreach_status: lead.outreach_status || camp?.outreach_status || null,
           email_draft: emailDraft,
+          // Autonomy fields (Sprint 1): auto_approve_at lives on campaign_enriched_data,
+          // held_by_human is tucked into lead_magnets_data by the /hold endpoint.
+          auto_approve_at: camp?.auto_approve_at || null,
+          held_by_human: Boolean(camp?.lead_magnets_data?.held_by_human),
           _status: getLeadStatus(camp, emailDraft),
         };
       });
@@ -212,6 +216,30 @@ export default function LeadsView() {
       console.error('Error approving:', err);
       alert('Error al aprobar y enviar');
     }
+  };
+
+  const handleHoldLead = async (leadId) => {
+    try {
+      const res = await apiPost(`/leads/${leadId}/hold`, {});
+      if (!res.ok) throw new Error(`Hold failed: ${res.status}`);
+      // Toast-lite (no dep on a toast lib; reuse the existing alert pattern)
+      alert('Envío pausado 24 horas.');
+      fetchLeads();
+    } catch (err) {
+      console.error('Error holding lead:', err);
+      alert('Error al pausar el envío');
+    }
+  };
+
+  // Format the remaining time until auto-send as "HH:MM" (or null if not applicable).
+  const formatCountdown = (isoAt) => {
+    if (!isoAt) return null;
+    const ms = new Date(isoAt).getTime() - Date.now();
+    if (!Number.isFinite(ms) || ms <= 0) return '00:00';
+    const totalMinutes = Math.floor(ms / 60000);
+    const hh = String(Math.floor(totalMinutes / 60)).padStart(2, '0');
+    const mm = String(totalMinutes % 60).padStart(2, '0');
+    return `${hh}:${mm}`;
   };
 
   const handleRejectLead = async (leadId, agentNotes) => {
@@ -486,6 +514,48 @@ export default function LeadsView() {
                 )}
 
                 <div className="lead-contact-channels">
+                  {/* Autonomy badge + hold control (Sprint 1). Shows the
+                      countdown to auto-send and a pause button that
+                      extends auto_approve_at by +24h. */}
+                  {lead.auto_approve_at && lead._status === 'pendiente' && (
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px', marginBottom: '8px' }}>
+                      <span
+                        style={{
+                          fontSize: '0.78rem',
+                          padding: '4px 10px',
+                          borderRadius: '999px',
+                          background: lead.held_by_human ? 'rgba(234,179,8,0.12)' : 'rgba(59,130,246,0.12)',
+                          color: lead.held_by_human ? '#eab308' : '#60a5fa',
+                          border: `1px solid ${lead.held_by_human ? 'rgba(234,179,8,0.3)' : 'rgba(59,130,246,0.3)'}`,
+                          fontWeight: 600,
+                        }}
+                        title={`Auto-aprobación programada para ${new Date(lead.auto_approve_at).toLocaleString()}`}
+                      >
+                        {lead.held_by_human
+                          ? `⏸ En pausa — reanuda en ${formatCountdown(lead.auto_approve_at) || '--:--'}`
+                          : `⏱ Auto-enviará en ${formatCountdown(lead.auto_approve_at) || '--:--'}`}
+                      </span>
+                      {!lead.held_by_human && (
+                        <button
+                          onClick={() => handleHoldLead(lead.id)}
+                          style={{
+                            fontSize: '0.75rem',
+                            padding: '4px 10px',
+                            borderRadius: '6px',
+                            border: '1px solid rgba(234,179,8,0.35)',
+                            background: 'rgba(234,179,8,0.08)',
+                            color: '#eab308',
+                            cursor: 'pointer',
+                            fontWeight: 600,
+                          }}
+                          title="Extiende la ventana de auto-envío 24h"
+                        >
+                          Pausar 24h
+                        </button>
+                      )}
+                    </div>
+                  )}
+
                   <div className="outreach-action-row">
                     <button className="review-outreach-btn" onClick={() => handleOpenReview(lead)}>
                       <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path></svg>

@@ -11,6 +11,7 @@ import dotenv from 'dotenv';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { recordAgentEvent } from './lib/agentEventsSink.js';
 
 dotenv.config();
 
@@ -20,6 +21,52 @@ const __dirname = path.dirname(__filename);
 const supabaseUrl = process.env.SUPABASE_URL;
 const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_SERVICE_KEY || process.env.SUPABASE_ANON_KEY || process.env.VITE_SUPABASE_ANON_KEY;
 const supabase = (supabaseUrl && supabaseKey) ? createClient(supabaseUrl, supabaseKey) : null;
+
+const LEAD_MAGNET_BUCKET = process.env.SUPABASE_LEAD_MAGNET_BUCKET || 'lead-magnets';
+
+// Map file extension → Content-Type for Supabase Storage upload.
+function contentTypeFor(fileName) {
+  const ext = path.extname(fileName).toLowerCase();
+  if (ext === '.png')  return 'image/png';
+  if (ext === '.jpg' || ext === '.jpeg') return 'image/jpeg';
+  if (ext === '.webp') return 'image/webp';
+  if (ext === '.pdf')  return 'application/pdf';
+  return 'application/octet-stream';
+}
+
+/**
+ * Upload the chosen asset to the public lead-magnet bucket and return
+ * its public URL. Returns null (without throwing) if the bucket isn't
+ * reachable — the local path is still useful for SMTP attachments.
+ */
+export async function uploadMagnetToStorage({ absolutePath, fileName, brandId, leadId, storageClient = null }) {
+  // `storageClient` allows tests to inject a stubbed supabase client.
+  const client = storageClient || supabase;
+  if (!client) return null;
+  return _uploadWithClient(client, { absolutePath, fileName, brandId, leadId });
+}
+
+async function _uploadWithClient(client, { absolutePath, fileName, brandId, leadId }) {
+  try {
+    const buffer = fs.readFileSync(absolutePath);
+    const storagePath = `${brandId || 'unknown-brand'}/${leadId}/${fileName}`;
+    const { error: upErr } = await client.storage
+      .from(LEAD_MAGNET_BUCKET)
+      .upload(storagePath, buffer, {
+        contentType: contentTypeFor(fileName),
+        upsert: true,
+      });
+    if (upErr) {
+      console.warn(`  ⚠️ [Storage] Upload to bucket "${LEAD_MAGNET_BUCKET}" failed: ${upErr.message}. Crealo manualmente en Supabase si no existe.`);
+      return null;
+    }
+    const { data: urlData } = client.storage.from(LEAD_MAGNET_BUCKET).getPublicUrl(storagePath);
+    return urlData?.publicUrl || null;
+  } catch (e) {
+    console.warn(`  ⚠️ [Storage] Upload threw: ${e?.message}`);
+    return null;
+  }
+}
 
 // ────────────────────────────────────────────────────────────
 // NICHE → FOLDER MAPPING
@@ -49,8 +96,18 @@ const ASSETS_BASE = path.join(__dirname, 'assets', 'landing_niches');
  * @param {string} industry — e.g. "Landscaping", "Residential Cleaning"
  * @returns {string} Folder name inside assets/landing_niches/
  */
-function matchNicheFolder(industry) {
-  if (!industry) return DEFAULT_FOLDER;
+export function matchNicheFolder(industry, ctx = {}) {
+  if (!industry) {
+    recordAgentEvent({
+      trace_id: ctx.traceId || `lead-magnet-${ctx.recordId || 'unknown'}`,
+      brand_id: ctx.brandId || null,
+      agent: 'lead_magnet_worker',
+      event_type: 'LEAD_MAGNET_NO_NICHE',
+      status: 'fallback',
+      metadata: { industry: null, fallback: DEFAULT_FOLDER, reason: 'empty_industry' },
+    });
+    return DEFAULT_FOLDER;
+  }
   const lower = industry.toLowerCase();
 
   for (const niche of NICHE_MAP) {
@@ -60,6 +117,14 @@ function matchNicheFolder(industry) {
   }
 
   console.log(`  ⚠️ [Niche] No match for "${industry}", using default: ${DEFAULT_FOLDER}`);
+  recordAgentEvent({
+    trace_id: ctx.traceId || `lead-magnet-${ctx.recordId || 'unknown'}`,
+    brand_id: ctx.brandId || null,
+    agent: 'lead_magnet_worker',
+    event_type: 'LEAD_MAGNET_NO_NICHE',
+    status: 'fallback',
+    metadata: { industry, fallback: DEFAULT_FOLDER },
+  });
   return DEFAULT_FOLDER;
 }
 
@@ -97,17 +162,40 @@ function pickRandomImage(folderName) {
  * Main export — processes up to 10 IDLE leads per cycle.
  * Called by the setInterval loop in index.js (every 30s).
  */
+let _bucketCheckDone = false;
+async function warnIfBucketMissing() {
+  if (_bucketCheckDone || !supabase) return;
+  _bucketCheckDone = true;
+  try {
+    // listBuckets requires the service_role key; if it fails we just warn once.
+    const { data, error } = await supabase.storage.listBuckets();
+    if (error) {
+      console.warn(`⚠️ [Lead Magnet Worker] No se pudo listar buckets (${error.message}). Asegurate que exista "${LEAD_MAGNET_BUCKET}" como bucket PÚBLICO en Supabase.`);
+      return;
+    }
+    const exists = Array.isArray(data) && data.some(b => b.name === LEAD_MAGNET_BUCKET);
+    if (!exists) {
+      console.warn(`⚠️ [Lead Magnet Worker] Bucket "${LEAD_MAGNET_BUCKET}" no existe en Supabase Storage. Crealo manualmente (público) para que los mockups tengan URL embebible. Los uploads van a fallar silenciosamente hasta que lo crees.`);
+    }
+  } catch (e) {
+    console.warn(`⚠️ [Lead Magnet Worker] Chequeo de bucket falló: ${e?.message}`);
+  }
+}
+
 export async function processIdleMagnets() {
   if (!supabase) {
     console.error('❌ [Lead Magnet Worker] Supabase no está configurado (falta URL o Key).');
     return;
   }
 
+  await warnIfBucketMissing();
+
   const { data: campaignData, error } = await supabase
     .from('campaign_enriched_data')
     .select(`
       id,
       prospect_id,
+      brand_id,
       leads!inner (
         business_name,
         industry
@@ -127,7 +215,12 @@ export async function processIdleMagnets() {
 
   for (const record of campaignData) {
     const lead = record.leads;
-    const nicheFolder = matchNicheFolder(lead.industry);
+    const brandId = record.brand_id || null;
+    const nicheFolder = matchNicheFolder(lead.industry, {
+      brandId,
+      recordId: record.id,
+      traceId: `lead-magnet-${record.id}`,
+    });
     const image = pickRandomImage(nicheFolder);
 
     if (!image) {
@@ -140,12 +233,21 @@ export async function processIdleMagnets() {
       continue;
     }
 
+    // Upload to public Supabase Storage bucket (best-effort; falls back to local path).
+    const publicUrl = await uploadMagnetToStorage({
+      absolutePath: image.absolutePath,
+      fileName: image.fileName,
+      brandId,
+      leadId: record.prospect_id,
+    });
+
     // Update with image data and mark COMPLETED
     const magnetData = {
       magnet_type: 'website_screenshot',
       niche_folder: nicheFolder,
       image_path: image.relativePath,
       image_file: image.fileName,
+      public_url: publicUrl,
       assigned_at: new Date().toISOString(),
     };
 
@@ -162,6 +264,6 @@ export async function processIdleMagnets() {
       continue;
     }
 
-    console.log(`  ✅ ${lead.business_name} (${lead.industry}) → ${nicheFolder} → ${image.fileName}`);
+    console.log(`  ✅ ${lead.business_name} (${lead.industry}) → ${nicheFolder} → ${image.fileName}${publicUrl ? ' (uploaded)' : ' (local only)'}`);
   }
 }

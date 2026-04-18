@@ -1,57 +1,235 @@
 // ============================================================
 // agents/manager-daemon.js — Loop 24/7 autónomo del Manager
-// Ejecuta ciclos de prospección, revisión, despacho y reporte
-// en horas fijas sin intervención humana.
+//
+// Sprint 1 rewrite:
+//   - Four UTC cycles a day (8 / 12 / 18 / 23), fired within a
+//     ±90s window. No more 1h setInterval polling.
+//   - Scout rotation cursor is persisted in agent_memory.
+//   - Every cycle emits a DAEMON_CYCLE event to agent_events
+//     for cockpit observability.
+//   - Disabled when AUTONOMY_ENABLED !== 'true' (rollback safe).
 // ============================================================
 
-import { manager } from './manager.js';
+import {
+  EMPIRIKA_NICHES,
+  LATINO_METROS,
+  pickNext,
+  runRadarCycle,
+  runEnrichBacklog,
+} from '../workers/autonomy_orchestrator.js';
+import {
+  saveAgentMemory,
+  getAgentMemory,
+  getActiveBrands,
+} from '../lib/supabase.js';
+import { recordAgentEvent } from '../lib/agentEventsSink.js';
 
-const CICLOS = [
-  {
-    horas: [8],
-    nombre: 'PROSPECCION_MANANA',
-    tarea: 'Ciclo autónomo: pide a Scout 10 leads HOT nuevos priorizando los nichos con mejor historial en memoria. Para cada HOT, pide a Carlos el attack_angle. Guarda resumen con tag [CICLO_MANANA].'
-  },
-  {
-    horas: [12],
-    nombre: 'REVISION_MEDIODIA',
-    tarea: 'Ciclo autónomo: revisa leads de [CICLO_MANANA] sin outreach. Pide a Angela mensajes para los top 3 HOT pendientes. Guarda estado con tag [CICLO_MEDIODIA].'
-  },
-  {
-    horas: [18],
-    nombre: 'DESPACHO_TARDE',
-    tarea: 'Ciclo autónomo: despacha mensajes listos de [CICLO_MEDIODIA] con Sam. Registra cuántos salieron y a qué canales. Guarda con tag [CICLO_TARDE].'
-  },
-  {
-    horas: [23],
-    nombre: 'REPORTE_NOCTURNO',
-    tarea: 'Ciclo de aprendizaje: analiza todos los tags del día. ¿Qué nicho tuvo más HOT? ¿Qué agente tuvo más errores? ¿Qué ciudad fue más productiva? Guarda 3 lecciones con tag [LECCIONES_DIA]: 1) qué priorizar mañana, 2) qué evitar, 3) ajuste de comportamiento para algún agente.'
-  },
-];
+// ── Cycle definitions ────────────────────────────────────────
+export const CYCLES = Object.freeze([
+  { hourUtc: 8,  type: 'RADAR_PRIORITY' },
+  { hourUtc: 12, type: 'RADAR_ICP_PUSH' },
+  { hourUtc: 18, type: 'ENRICH_BACKLOG' },
+  { hourUtc: 23, type: 'REPORTE'        },
+]);
 
-const enEjecucion = new Set();
+const WINDOW_MS = 90_000;          // ±90s window around the exact hour
+const TICK_MS   = 60_000;          // minute-level tick so 90s is enough
+const FIRED_KEY_PREFIX = '[DAEMON_FIRED] '; // memory key dedupe per day/cycle
 
-async function ejecutarCiclo(ciclo) {
-  if (enEjecucion.has(ciclo.nombre)) return;
-  enEjecucion.add(ciclo.nombre);
-  console.log(`[Daemon] 🚀 ${ciclo.nombre} — ${new Date().toISOString()}`);
+// ── Cursor persistence helpers ───────────────────────────────
+async function loadCursor(brandId) {
   try {
-    await manager.chat(ciclo.tarea);
-    console.log(`[Daemon] ✅ ${ciclo.nombre} completado`);
-  } catch (err) {
-    console.error(`[Daemon] ❌ ${ciclo.nombre} error:`, err.message);
-  } finally {
-    enEjecucion.delete(ciclo.nombre);
+    const mem = await getAgentMemory('manager', brandId);
+    const raw = mem?.['[AUTO_CURSOR]'];
+    if (!raw) return { nicheIdx: 0, metroIdx: 0 };
+    const parsed = JSON.parse(raw);
+    return {
+      nicheIdx: Number.isInteger(parsed?.nicheIdx) ? parsed.nicheIdx : 0,
+      metroIdx: Number.isInteger(parsed?.metroIdx) ? parsed.metroIdx : 0,
+    };
+  } catch {
+    return { nicheIdx: 0, metroIdx: 0 };
   }
 }
 
-function tick() {
-  const hora = new Date().getHours();
-  CICLOS.filter(c => c.horas.includes(hora)).forEach(ejecutarCiclo);
+async function saveCursor(brandId, cursor) {
+  try {
+    await saveAgentMemory('manager', brandId, '[AUTO_CURSOR]', JSON.stringify(cursor));
+  } catch (err) {
+    console.warn('[Daemon] saveCursor failed', err.message);
+  }
 }
 
-export function startManagerDaemon() {
-  console.log('[Daemon] 🤖 Arrancando — ciclos: 8h, 12h, 18h, 23h');
-  tick();
-  setInterval(tick, 60 * 60 * 1000);
+// ── Daily dedupe: one firing per (UTC day, cycle, brand) ─────
+function todayKey() {
+  const d = new Date();
+  return d.toISOString().slice(0, 10); // YYYY-MM-DD (UTC)
 }
+
+const firedInMemory = new Set(); // process-local dedupe
+function markFired(brandId, type) {
+  firedInMemory.add(`${brandId}::${type}::${todayKey()}`);
+}
+function alreadyFired(brandId, type) {
+  return firedInMemory.has(`${brandId}::${type}::${todayKey()}`);
+}
+
+// ── Cycle runners ────────────────────────────────────────────
+async function runRadar({ brandId, count = 2 }) {
+  const cursor   = await loadCursor(brandId);
+  const { pairs, next } = pickNext(cursor, { count });
+  const result   = await runRadarCycle({ brandId, pairs, source: 'daemon' });
+  await saveCursor(brandId, next);
+  return { pairs, result, cursor: next };
+}
+
+async function runBacklog({ brandId }) {
+  return runEnrichBacklog({ brandId, limit: 20, concurrency: 3 });
+}
+
+async function runReport({ brandId }) {
+  const ymd = todayKey().replace(/-/g, '');
+  const memoryKey = `[DAEMON_REPORT_${ymd}]`;
+  const payload = {
+    generated_at: new Date().toISOString(),
+    cycles: CYCLES.map(c => c.type),
+    note: 'Daily autonomy report — see agent_events for per-cycle status.',
+  };
+  await saveAgentMemory('manager', brandId, memoryKey, JSON.stringify(payload));
+  return { ok: true, memory_key: memoryKey };
+}
+
+async function executeCycle(brandId, cycle) {
+  const startedAt = Date.now();
+  let status  = 'ok';
+  let metadata = { cycle: cycle.type, brand_id: brandId };
+  let errMsg  = null;
+
+  try {
+    if (cycle.type === 'RADAR_PRIORITY' || cycle.type === 'RADAR_ICP_PUSH') {
+      const out = await runRadar({ brandId });
+      metadata.pairs  = out.pairs;
+      metadata.cursor = out.cursor;
+      metadata.ok     = out.result?.ok !== false;
+
+      // Always follow a RADAR with a bounded backlog sweep.
+      const backlog = await runBacklog({ brandId });
+      metadata.backlog = {
+        processed: backlog?.processed ?? 0,
+        succeeded: backlog?.succeeded ?? 0,
+        blocked:   backlog?.blocked   ?? null,
+      };
+    } else if (cycle.type === 'ENRICH_BACKLOG') {
+      const backlog = await runBacklog({ brandId });
+      metadata.processed = backlog?.processed ?? 0;
+      metadata.succeeded = backlog?.succeeded ?? 0;
+      metadata.blocked   = backlog?.blocked   ?? null;
+    } else if (cycle.type === 'REPORTE') {
+      const rep = await runReport({ brandId });
+      metadata.memory_key = rep.memory_key;
+    } else {
+      status = 'error';
+      errMsg = `unknown cycle type: ${cycle.type}`;
+    }
+  } catch (err) {
+    status = 'error';
+    errMsg = err?.message || String(err);
+    console.error(`[Daemon] ${cycle.type} error:`, errMsg);
+  }
+
+  recordAgentEvent({
+    trace_id:   `daemon-${todayKey()}-${cycle.type}-${brandId}`,
+    brand_id:   brandId,
+    agent:      'manager',
+    event_type: 'DAEMON_CYCLE',
+    status,
+    duration_ms: Date.now() - startedAt,
+    error_message: errMsg,
+    metadata,
+  });
+
+  markFired(brandId, cycle.type);
+}
+
+// ── Tick loop ────────────────────────────────────────────────
+function inHourWindow(cycle, now = new Date()) {
+  // Fire when we are within ±WINDOW_MS of the top of `hourUtc`.
+  const target = new Date(Date.UTC(
+    now.getUTCFullYear(),
+    now.getUTCMonth(),
+    now.getUTCDate(),
+    cycle.hourUtc, 0, 0, 0
+  ));
+  return Math.abs(now.getTime() - target.getTime()) <= WINDOW_MS;
+}
+
+async function tick({ brandsProvider = getActiveBrands } = {}) {
+  if (process.env.AUTONOMY_ENABLED !== 'true') return;
+
+  let brands;
+  try {
+    brands = await brandsProvider();
+  } catch (err) {
+    console.warn('[Daemon] getActiveBrands failed:', err.message);
+    return;
+  }
+  if (!Array.isArray(brands) || brands.length === 0) return;
+
+  const now = new Date();
+  for (const cycle of CYCLES) {
+    if (!inHourWindow(cycle, now)) continue;
+
+    for (const brand of brands) {
+      if (!brand?.id) continue;
+      if (alreadyFired(brand.id, cycle.type)) continue;
+
+      // fire-and-await; daemon is meant to be serial per brand
+      try {
+        await executeCycle(brand.id, cycle);
+      } catch (err) {
+        console.error('[Daemon] executeCycle threw:', err?.message);
+      }
+    }
+  }
+}
+
+let _timer = null;
+
+export function start({ brandsProvider, tickMs = TICK_MS } = {}) {
+  if (_timer) return; // idempotent
+  if (process.env.AUTONOMY_ENABLED !== 'true') {
+    console.log('[Daemon] AUTONOMY_ENABLED!=true — daemon NOT started (rollback-safe)');
+    return;
+  }
+
+  const validTypes = new Set(CYCLES.map(c => c.type));
+  console.log(`[Daemon] starting — cycles: ${[...validTypes].join(', ')} (UTC hours: ${CYCLES.map(c => c.hourUtc).join(',')})`);
+
+  // kick once immediately (no-op if outside any window)
+  tick({ brandsProvider }).catch(err => console.warn('[Daemon] initial tick error', err?.message));
+
+  _timer = setInterval(() => {
+    tick({ brandsProvider }).catch(err => console.warn('[Daemon] tick error', err?.message));
+  }, tickMs);
+  if (typeof _timer.unref === 'function') _timer.unref();
+}
+
+export function stop() {
+  if (_timer) { clearInterval(_timer); _timer = null; }
+  firedInMemory.clear();
+}
+
+// ── Back-compat alias used by index.js (legacy name) ─────────
+export function startManagerDaemon() { return start(); }
+
+// ── Internal hooks for tests ─────────────────────────────────
+export const _internal = {
+  tick,
+  executeCycle,
+  inHourWindow,
+  loadCursor,
+  saveCursor,
+  firedInMemory,
+  EMPIRIKA_NICHES,
+  LATINO_METROS,
+};

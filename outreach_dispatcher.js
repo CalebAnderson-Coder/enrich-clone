@@ -17,6 +17,8 @@ import { sanitizeLeadData } from './lib/sanitize.js';
 import { logger } from './lib/logger.js';
 import { withRetry } from './lib/resilience.js';
 import { pushDraftPhoneToGHL } from './tools/email.js';
+import { assertSendAllowed, GuardrailBlocked } from './lib/guardrails.js';
+import { recordAgentEvent } from './lib/agentEventsSink.js';
 
 dotenv.config();
 
@@ -67,17 +69,127 @@ if (SMTP_USER && SMTP_PASS) {
 // ── Main export ───────────────────────────────────────────────
 
 /**
+ * Decide whether a single row is eligible for the autonomy fast-path.
+ * Pure function so we can unit-test the gate without Supabase.
+ */
+export function shouldAutoApprove(row, { now = Date.now(), autonomyEnabled } = {}) {
+  const flag = autonomyEnabled !== undefined
+    ? autonomyEnabled
+    : process.env.AUTONOMY_ENABLED === 'true';
+  if (!flag) return false;
+  if (!row) return false;
+  if (row.approved === true) return true; // already approved
+  if (row.held_by_human) return false;
+  if (!row.auto_approve_at) return false;
+  const t = new Date(row.auto_approve_at).getTime();
+  if (!Number.isFinite(t)) return false;
+  return t <= now;
+}
+
+/**
+ * Scan for DRAFT rows whose auto_approve_at has passed and promote
+ * them to APPROVED. Fires an AUTO_APPROVED event per row and
+ * respects send guardrails (stops on breach).
+ */
+async function autoApprovePastDueDrafts({ brandId, now = new Date() } = {}) {
+  if (!supabase) return 0;
+
+  const nowIso = now.toISOString();
+
+  let query = supabase
+    .from('campaign_enriched_data')
+    .select('id, brand_id, prospect_id, auto_approve_at, lead_magnets_data, outreach_status')
+    .in('outreach_status', ['DRAFT', 'DRAFT_PHONE'])
+    .not('auto_approve_at', 'is', null)
+    .lte('auto_approve_at', nowIso)
+    .limit(BATCH_LIMIT);
+  if (brandId) query = query.eq('brand_id', brandId);
+
+  const { data: rows, error } = await query;
+  if (error) {
+    logger.warn('auto-approve query error', { error: error.message });
+    return 0;
+  }
+  if (!rows || rows.length === 0) return 0;
+
+  let approved = 0;
+  for (const row of rows) {
+    const held = row.lead_magnets_data?.held_by_human === true;
+    if (held) continue;
+
+    // Per-brand guardrails: stop the batch on first breach so the
+    // remaining drafts roll over to the next cycle.
+    try {
+      await assertSendAllowed({ brandId: row.brand_id });
+    } catch (err) {
+      if (err instanceof GuardrailBlocked) {
+        logger.warn('Guardrail breached — halting auto-approval batch', {
+          reason: err.reason, remaining: rows.length - approved,
+        });
+        break;
+      }
+      throw err;
+    }
+
+    const { error: upErr } = await supabase
+      .from('campaign_enriched_data')
+      .update({ outreach_status: 'APPROVED' })
+      .eq('id', row.id);
+
+    if (upErr) {
+      logger.warn('auto-approve update error', { id: row.id, error: upErr.message });
+      continue;
+    }
+
+    recordAgentEvent({
+      trace_id: `auto-approve-${row.id}`,
+      brand_id: row.brand_id || null,
+      agent:    'dispatcher',
+      event_type: 'AUTO_APPROVED',
+      status:   'ok',
+      metadata: {
+        record_id:      row.id,
+        prospect_id:    row.prospect_id,
+        auto_approve_at: row.auto_approve_at,
+        via:            'timeout',
+      },
+    });
+
+    approved++;
+  }
+  return approved;
+}
+
+/**
  * Pre-renders email drafts for all leads whose magnet is COMPLETED
  * and saves the HTML to Supabase for client approval via dashboard.
  * NO emails are sent automatically — the client must approve each one.
  * @returns {{ rendered: number, skipped: number, errors: number }}
  */
-export async function dispatchPendingOutreach() {
+export async function dispatchPendingOutreach(opts = {}) {
   logger.info('Searching for leads ready for email pre-render');
 
   if (!supabase) {
     logger.error('Supabase not configured (missing URL or Key)');
     return { rendered: 0, skipped: 0, errors: 1 };
+  }
+
+  // ── Autonomy gate (Sprint 1) ────────────────────────────────
+  // When AUTONOMY_ENABLED=true, scan DRAFT rows whose auto_approve_at
+  // has passed (and not held by human) and promote them to APPROVED.
+  // When AUTONOMY_ENABLED!=true, this block is a no-op → legacy flow
+  // (manual approval via dashboard) is preserved untouched.
+  if (process.env.AUTONOMY_ENABLED === 'true') {
+    try {
+      const autoApproved = await autoApprovePastDueDrafts(opts);
+      if (autoApproved > 0) logger.info('Auto-approved drafts', { count: autoApproved });
+    } catch (err) {
+      if (err instanceof GuardrailBlocked) {
+        logger.warn('Guardrail blocked auto-approval', { reason: err.reason, details: err.details });
+      } else {
+        logger.warn('Auto-approve pass failed', { error: err?.message });
+      }
+    }
   }
 
   // ── 1. Fetch eligible records (COMPLETED magnets, still DRAFT) ──
@@ -319,9 +431,19 @@ Reglas: subject 30-60 chars, preview_text 40-90 chars, body min 80 chars, todo e
         magnetData.email_draft_html = html;
         magnetData.email_attachments = attachmentMeta.length > 0 ? attachmentMeta : null;
 
+        // Stamp auto_approve_at so the autonomy gate can pick this up
+        // after the timeout window. Only relevant when AUTONOMY_ENABLED
+        // is true; with the flag off the column is harmless.
+        const timeoutMs = Number(process.env.AUTO_APPROVE_TIMEOUT_MS || 7200000);
+        const autoAt = new Date(Date.now() + timeoutMs).toISOString();
+
         await supabase
           .from('campaign_enriched_data')
-          .update({ outreach_status: 'DRAFT', lead_magnets_data: magnetData })
+          .update({
+            outreach_status: 'DRAFT',
+            lead_magnets_data: magnetData,
+            auto_approve_at: autoAt,
+          })
           .eq('id', record.id);
         await supabase
           .from('leads')
@@ -357,9 +479,16 @@ Reglas: subject 30-60 chars, preview_text 40-90 chars, body min 80 chars, todo e
           }
         }
 
+        const timeoutMsPhone = Number(process.env.AUTO_APPROVE_TIMEOUT_MS || 7200000);
+        const autoAtPhone = new Date(Date.now() + timeoutMsPhone).toISOString();
+
         await supabase
           .from('campaign_enriched_data')
-          .update({ outreach_status: 'DRAFT_PHONE', lead_magnets_data: magnetData })
+          .update({
+            outreach_status: 'DRAFT_PHONE',
+            lead_magnets_data: magnetData,
+            auto_approve_at: autoAtPhone,
+          })
           .eq('id', record.id);
         await supabase
           .from('leads')

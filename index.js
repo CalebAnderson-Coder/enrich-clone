@@ -28,7 +28,8 @@ import { processIdleMagnets } from './lead_magnet_worker.js';
 import { startTranscriptionWorker } from './workers/transcription_worker.js';
 import { dispatchPendingOutreach } from './outreach_dispatcher.js';
 import { runEmailEnrichment } from './workers/email_enrichment_worker.js';
-import { startManagerDaemon } from './agents/manager-daemon.js';
+import { startManagerDaemon, start as startAutonomyDaemon } from './agents/manager-daemon.js';
+import { runPipelineForBrand, runEnrichForLead } from './workers/pipelineRunner.js';
 
 
 import path from 'path';
@@ -733,6 +734,8 @@ app.get('/api/cockpit/stream', async (req, res) => {
 // ============================================================
 
 // ---- End to End Pipeline (Macro-Flujo Asíncrono) ----
+// Body extracted to workers/pipelineRunner.js so the Manager daemon
+// can reuse it without routing through Express.
 app.post('/api/campaign/pipeline', async (req, res) => {
   const { industry, city } = req.body;
 
@@ -745,25 +748,12 @@ app.post('/api/campaign/pipeline', async (req, res) => {
 
   // Ejecución en segundo plano gobernada por el Agente Manager
   (async () => {
-    try {
-      console.log(`\n🚀 [Pipeline] Starting Macro-Flow via Manager Agent for ${industry} in ${city} (brand ${brandId})...`);
-
-      const managerPrompt = `Por favor, ejecuta un Macro-Flujo de prospectación (El Radar) para el Nicho: "${industry}" en la Ciudad: "${city}".
-
-INSTRUCCIONES PARA TI (Orquestador):
-1. Delega al agente 'scout' la tarea de buscar hasta 5 negocios para este nicho en esta ciudad usando scrapeGoogleMaps.
-2. Pide a Scout que filtre, califique (HOT, WARM, etc.) y guarde los leads en la base de datos.
-3. Cuando Scout regrese con los leads guardados, devuélveme un resumen estructurado indicando cuántos encontró y los mejores perfiles (HOT).
-
-Recuerda: Este flujo es puro volumen y prospección. Solo interactúa con 'scout'. NO analices ni escribas correos todavía.`;
-
-      // Aumentamos maxIterations a 20 para permitir delegación múltiple secuencial
-      const result = await runtime.run('Manager', managerPrompt, { currentAgent: 'Manager', maxIterations: 20, brandId });
-      
-      console.log(`\n✅ [Pipeline] Finalizado Exitosamente!\n\n=== REPORTE FINAL DEL MANAGER ===\n${result.response}\n`);
-      
-    } catch (err) {
-      console.error('Pipeline error:', err);
+    console.log(`\n🚀 [Pipeline] Starting Macro-Flow for ${industry} in ${city} (brand ${brandId})...`);
+    const out = await runPipelineForBrand({ brandId, niche: industry, metro: city, source: 'api' });
+    if (!out.success) {
+      console.error('Pipeline error:', out.error);
+    } else {
+      console.log(`\n✅ [Pipeline] Finalizado.\n=== REPORTE FINAL DEL MANAGER ===\n${out.response}\n`);
     }
   })();
 });
@@ -970,7 +960,8 @@ app.get('/api/leads', async (req, res) => {
         facebook_url:        p.facebook_url    || radarParsed.facebook_url    || null,
         instagram_url:       p.instagram_url   || radarParsed.instagram_url   || null,
         linkedin_url:        p.linkedin_url    || radarParsed.linkedin_url    || null,
-        lead_magnet_path:    camp?.lead_magnets_data?.path || null,
+        lead_magnet_path:    camp?.lead_magnets_data?.image_path || camp?.lead_magnets_data?.path || null,
+        lead_magnet_url:     camp?.lead_magnets_data?.public_url || null,
         lead_magnet_status:  camp?.lead_magnet_status || null,
         campaign_id:         camp?.id || null,
         created_at:          p.created_at,
@@ -1004,71 +995,64 @@ app.get('/api/leads/:id', async (req, res) => {
 });
 
 // ---- Enrich Lead (MEGA Profile) ----
+// Body extracted to workers/pipelineRunner.js so the autonomy daemon
+// can enqueue HOT leads into Macro-Flujo 2 without going through HTTP.
 app.post('/api/leads/:id/enrich', async (req, res) => {
   try {
     const brandId = req.user.brandId;
-    const lead = await getLeadById(req.params.id, brandId);
-    if (!lead) return res.status(404).json({ error: 'Lead not found' });
-
-    console.log(`\n🔬 [Enrich] Deep profiling: ${lead.business_name}`);
-
-    // Run all specialist agents in sequence for deep analysis
-    const enrichPrompt = `Inicia el Macro-Flujo 2 (El Francotirador - MEGA Enrichment + Ventas) para este negocio (lead HOT):
-- Negocio: ${lead.business_name}
-- Industria: ${lead.industry || 'N/A'}
-- Ciudad: ${lead.metro_area}
-- Web: ${lead.website || 'Sin web'}
-- Rating: ${lead.rating} (${lead.review_count} reseñas)
-- Google Maps: ${lead.google_maps_url || 'N/A'}
-
-INSTRUCCIONES DE DELEGACIÓN ESTRICTA EN ORDEN:
-1. Delega a 'Helena', 'Sam' y 'Kai' para hacer una radiografía técnica del lead (SEO/Velocidad, Ads y Redes Sociales).
-2. Con los hallazgos de esos tres agentes, delega a 'Carlos' para armar el 'Attack Angle' estratégico.
-3. Con el Angle de Carlos listo, delega a 'Angela' para crear el copy de multi-contacto (Email, WhatsApp, Instagram).
-4. Devuélveme todo consolidado en español (Markdown).
-
-MANDATORIO: Al final de tu respuesta, DEBES incluir el bloque JSON con los borradores así:
-OUTREACH_JSON_START
-{
-  "subject": "Email Subject",
-  "body": "Email Body HTML",
-  "whatsapp": "WhatsApp Msg",
-  "instagram": "Instagram/FB DM"
-}
-OUTREACH_JSON_END`;
-
-    const result = await runtime.run('Manager', enrichPrompt, {
-      currentAgent: 'Manager',
-      maxIterations: 30,
-      brandId
-    });
-
-    // ---- Persistencia Estructurada ----
-    let parsedOutreach = null;
-    const jsonMatch = result.response.match(/OUTREACH_JSON_START([\s\S]*?)OUTREACH_JSON_END/);
-
-    if (jsonMatch && jsonMatch[1]) {
-      try {
-        parsedOutreach = JSON.parse(jsonMatch[1].trim());
-        console.log(`📦 [Enrich] Parsed outreach drafts for ${lead.business_name}`);
-
-        // Save to DB
-        await updateLeadOutreach(lead.id, parsedOutreach, 'PENDING', null, brandId);
-      } catch (e) {
-        console.error('❌ [Enrich] Failed to parse outreach JSON:', e.message);
-      }
+    const out = await runEnrichForLead({ leadId: req.params.id, brandId, source: 'api' });
+    if (!out.success) {
+      if (out.error === 'Lead not found') return res.status(404).json({ error: out.error });
+      return res.status(500).json({ error: out.error });
     }
-
-    res.json({
-      success: true,
-      lead_id: lead.id,
-      business_name: lead.business_name,
-      enrichment: result.response,
-      parsed_outreach: parsedOutreach,
-      iterations: result.iterations,
-    });
+    console.log(`\n🔬 [Enrich] Deep profiling finished: ${out.business_name}`);
+    res.json(out);
   } catch (err) {
     console.error('Enrich error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ---- Hold autonomous send for a lead (+24h) ----
+// Extends auto_approve_at by 24h and marks held_by_human=true so the
+// dispatcher leaves the draft alone until a human flips the switch.
+app.post('/api/leads/:id/hold', async (req, res) => {
+  try {
+    const brandId = req.user.brandId;
+    const leadId  = req.params.id;
+
+    const { createClient } = await import('@supabase/supabase-js');
+    const sb = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY);
+
+    // Pull the most recent campaign row for this lead
+    const { data: rows, error: e1 } = await sb
+      .from('campaign_enriched_data')
+      .select('id, auto_approve_at, lead_magnets_data')
+      .eq('brand_id', brandId)
+      .eq('prospect_id', leadId)
+      .order('created_at', { ascending: false })
+      .limit(1);
+
+    if (e1)                return res.status(500).json({ error: e1.message });
+    if (!rows || rows.length === 0) return res.status(404).json({ error: 'No campaign row for lead' });
+
+    const row = rows[0];
+    const base = row.auto_approve_at ? new Date(row.auto_approve_at) : new Date();
+    const extended = new Date(Math.max(base.getTime(), Date.now()) + 24 * 60 * 60 * 1000).toISOString();
+
+    const magnet = row.lead_magnets_data && typeof row.lead_magnets_data === 'object'
+      ? { ...row.lead_magnets_data, held_by_human: true, held_at: new Date().toISOString() }
+      : { held_by_human: true, held_at: new Date().toISOString() };
+
+    const { error: e2 } = await sb
+      .from('campaign_enriched_data')
+      .update({ auto_approve_at: extended, lead_magnets_data: magnet })
+      .eq('id', row.id);
+
+    if (e2) return res.status(500).json({ error: e2.message });
+    res.json({ success: true, auto_approve_at: extended, held_by_human: true });
+  } catch (err) {
+    console.error('Hold error:', err);
     res.status(500).json({ error: err.message });
   }
 });
@@ -1349,7 +1333,14 @@ setInterval(async () => {
 
 startTranscriptionWorker();
 
-if (process.env.MANAGER_DAEMON_ENABLED !== 'false') {
+// Sprint 1 autonomy daemon — gated behind AUTONOMY_ENABLED=true.
+// When the flag is off, start() is a no-op (rollback-safe) and the
+// legacy hour-tick daemon is skipped entirely.
+if (process.env.AUTONOMY_ENABLED === 'true') {
+  startAutonomyDaemon();
+} else if (process.env.MANAGER_DAEMON_ENABLED !== 'false') {
+  // Preserve legacy behaviour for deployments that have NOT flipped
+  // AUTONOMY_ENABLED yet: the old hourly setInterval tick.
   startManagerDaemon();
 }
 
@@ -1439,10 +1430,33 @@ DELEGACIÓN:
 
         // --- 2. COMPOSE EMAIL DRAFT (ANGELA) ---
         console.log(`\n✉️ [Auto-Enrich] Pasando información a Angela para redactar Outbound Draft...`);
+
+        // Fetch lead magnet data (public_url + local image_path) to feed Angela.
+        let leadMagnetUrl = null;
+        let leadMagnetPath = null;
+        try {
+          const { data: campRow } = await supabaseClient
+            .from('campaign_enriched_data')
+            .select('lead_magnets_data')
+            .eq('prospect_id', lead.id)
+            .limit(1)
+            .maybeSingle();
+          leadMagnetUrl  = campRow?.lead_magnets_data?.public_url || null;
+          leadMagnetPath = campRow?.lead_magnets_data?.image_path || null;
+        } catch (e) {
+          console.warn('[Auto-Enrich] No se pudo leer lead_magnets_data:', e?.message);
+        }
+
+        const magnetBlock = leadMagnetUrl
+          ? `\nLead Magnet Visual:\n- lead_magnet_url: ${leadMagnetUrl}\n- Usa esta URL pública en el HTML del email como <img src="${leadMagnetUrl}" alt="Mockup web ${lead.business_name}" style="max-width:100%;border-radius:8px;margin:16px 0;" /> y menciona en el primer email que le armamos un mockup rápido de cómo se vería su sitio.`
+          : leadMagnetPath
+            ? `\nLead Magnet Visual:\n- lead_magnet_path (local, sin URL pública aún): ${leadMagnetPath}\n- No lo embebas como <img>; solo mencioná que tenemos un mockup listo para mostrarle.`
+            : '';
+
         const angelaPrompt = `El prospecto con ID ${lead.id} ha sido analizado. Escribe su correo de prospección.
 Business: ${lead.business_name}
 Industry: ${lead.industry}
-Website: ${lead.website}
+Website: ${lead.website}${magnetBlock}
 
 Genera un HTML con el Asunto (Subject) en una línea H3 y el cuerpo del correo. Luego DEBES USAR LA HERRAMIENTA update_lead_outreach para guardar el HTML generado en el lead con status DRAFT.
 Al hacerlo, usa el argumento lead_id: "${lead.id}" y en html_content el contenido redactado.`;

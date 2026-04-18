@@ -69,26 +69,18 @@ services:
       - key: VITE_API_URL
         value: ""
 
-  # ── Lyra: Autonomous B2B Content Engine ──────────────────────
-  # Runs Mon-Fri at 12:00 UTC (8:00 AM ET)
-  # Pipeline: BrightData Research → Gemini Draft → Buffer → LinkedIn
-  - type: cron
-    name: lyra-daily-engine
-    env: node
-    region: ohio
-    schedule: "0 12 * * 1-5"
-    buildCommand: cd lyra-engine && npm install
-    startCommand: cd lyra-engine && node index.js
-    envVars:
-      - key: GEMINI_API_KEY
-        sync: false
-      - key: BRIGHTDATA_API_TOKEN
-        sync: false
-      - key: BUFFER_ACCESS_TOKEN
-        sync: false
-      - key: BUFFER_PROFILE_ID
-        sync: false
-      - key: SUPABASE_URL
-        sync: false
-      - key: SUPABASE_SERVICE_KEY
-        sync: false
+      # ── Sprint 1: Autonomía (DISABLED by default; flip to "true" in dashboard when ready) ──
+      - key: AUTONOMY_ENABLED
+        value: "false"
+      - key: AUTO_APPROVE_TIMEOUT_MS
+        value: "7200000"
+      - key: MAX_SENDS_PER_HOUR
+        value: "30"
+      - key: MAX_LEADS_PER_DAY_PER_BRAND
+        value: "50"
+      - key: BOUNCE_RATE_CIRCUIT_BREAKER
+        value: "0.05"
+
+      # ── Sprint 4: Lead magnet bucket (Supabase Storage público) ──
+      - key: SUPABASE_LEAD_MAGNET_BUCKET
+        value: "lead-magnets"
