@@ -528,6 +528,218 @@ await test('Manager system prompt contains the Estratega constitution-rejection 
          'Manager prompt must contain rejection verb');
 });
 
+// ═════════════════════════════════════════════════════════════
+//   Sprint 5 — Multichannel (WhatsApp Baileys + SMS Twilio)
+// ═════════════════════════════════════════════════════════════
+import {
+  assertSpanishOnly,
+  SpanishOnlyViolation,
+  canSendToday,
+  getWarmupState,
+} from '../tools/baileysWhatsApp.js';
+import { dispatchApprovedMultichannel } from '../outreach_dispatcher.js';
+
+// Helper: build a Supabase-compatible stub so the dispatcher query
+// resolves to the pairs we want. The chain is awaitable and any
+// filter method returns self, just like PostgREST.
+function makeMultichannelClient({ approvedRows = [], warmupState, updates, inserts }) {
+  return {
+    from(table) {
+      const chain = {};
+      const passthrough = () => chain;
+      ['select', 'eq', 'in', 'ilike', 'order', 'limit', 'gte', 'lte', 'not', 'or', 'maybeSingle'].forEach((m) => {
+        chain[m] = passthrough;
+      });
+      chain.insert = (row) => { inserts.push({ table, row }); return chain; };
+      chain.update = (row) => { updates.push({ table, row }); return chain; };
+      chain.upsert = (row) => { inserts.push({ table, row, upsert: true }); return chain; };
+      chain.then = (onFulfilled, onRejected) => {
+        let result;
+        if (table === 'campaign_enriched_data')  result = { data: approvedRows, error: null };
+        else if (table === 'whatsapp_warmup')    result = { data: warmupState, error: null };
+        else if (table === 'whatsapp_sessions')  result = { data: null, error: null };
+        else                                     result = { data: [], error: null };
+        return Promise.resolve(result).then(onFulfilled, onRejected);
+      };
+      return chain;
+    },
+  };
+}
+
+// ── Test 19 — Spanish-only guard on sendText body ────────────
+await test('assertSpanishOnly throws SpanishOnlyViolation for "hello" body', () => {
+  let threw = false;
+  try {
+    assertSpanishOnly('hello amigo, tengo un mockup para ti');
+  } catch (err) {
+    threw = err instanceof SpanishOnlyViolation && err.code === 'SPANISH_ONLY_VIOLATION';
+  }
+  assert(threw, 'must throw SpanishOnlyViolation on english trigger');
+
+  // Happy-path: pure Spanish must pass without throwing.
+  let ok = true;
+  try { assertSpanishOnly('Hola, te armé un mockup rápido de tu sitio.'); }
+  catch { ok = false; }
+  assert(ok, 'pure spanish must pass');
+});
+
+// ── Test 20 — canSendToday reflects warmup counter vs cap ────
+await test('canSendToday returns false when sends_count >= cap, true otherwise', async () => {
+  const full = { sends_count: 5, cap: 5, week_since_start: 1, ymd: '2026-04-18' };
+  const partial = { sends_count: 4, cap: 5, week_since_start: 1, ymd: '2026-04-18' };
+
+  function makeClient(state) {
+    return {
+      from() {
+        const chain = {};
+        const pass = () => chain;
+        ['select', 'eq', 'order', 'limit'].forEach((m) => { chain[m] = pass; });
+        chain.maybeSingle = async () => ({ data: state, error: null });
+        chain.then = (onFulfilled) => Promise.resolve({ data: state, error: null }).then(onFulfilled);
+        chain.insert = async () => ({ data: state, error: null });
+        return chain;
+      },
+    };
+  }
+
+  const canFull = await canSendToday('brand-x', { client: makeClient(full) });
+  const canPart = await canSendToday('brand-x', { client: makeClient(partial) });
+  assert(canFull === false, `cap reached → must be false (got ${canFull})`);
+  assert(canPart === true,  `under cap → must be true (got ${canPart})`);
+});
+
+// ── Test 21 — dispatcher: WhatsApp path when probe.exists=true ──
+await test('dispatchApprovedMultichannel: WA exists → status WHATSAPP_SENT + event sent', async () => {
+  const prior = process.env.MULTICHANNEL_ENABLED;
+  const priorLearning = process.env.LEARNING_ENABLED;
+  process.env.MULTICHANNEL_ENABLED = 'true';
+  process.env.LEARNING_ENABLED = 'false'; // keep logOutreachEvent silent
+
+  const updates = [];
+  const inserts = [];
+  const approvedRows = [{
+    id: 'cd-1', brand_id: 'brand-x', prospect_id: 'lead-1',
+    outreach_status: 'APPROVED',
+    lead_magnets_data: { whatsapp_draft: 'Hola, te armé un mockup rápido.' },
+    leads: {
+      id: 'lead-1', business_name: 'Test Biz',
+      phone: '+13055551234', email_address: null, industry: 'roofing', metro_area: 'Miami',
+    },
+  }];
+  const client = makeMultichannelClient({
+    approvedRows,
+    warmupState: { sends_count: 0, cap: 5, week_since_start: 1 },
+    updates, inserts,
+  });
+
+  let sentCalled = 0;
+  const baileys = {
+    canSendToday: async () => true,
+    checkWhatsApp: async () => ({ exists: true, jid: '13055551234@s.whatsapp.net' }),
+    sendText: async () => { sentCalled++; return { messageId: 'wa-msg-1', jid: 'x', sentAt: 'now' }; },
+    assertSpanishOnly: assertSpanishOnly,
+  };
+
+  try {
+    const res = await dispatchApprovedMultichannel({
+      client, baileys,
+      smsSender: async () => ({ messageSid: 'should-not-be-called' }),
+    });
+    assert(res.processed === 1,  `processed=1, got ${res.processed}`);
+    assert(res.whatsapp === 1,   `whatsapp=1, got ${res.whatsapp}`);
+    assert(sentCalled === 1,     `sendText called once, got ${sentCalled}`);
+    const setSent = updates.find(u => u.table === 'campaign_enriched_data' && u.row.outreach_status === 'WHATSAPP_SENT');
+    assert(!!setSent, 'must flip outreach_status to WHATSAPP_SENT');
+  } finally {
+    process.env.MULTICHANNEL_ENABLED = prior;
+    process.env.LEARNING_ENABLED = priorLearning;
+  }
+});
+
+// ── Test 22 — dispatcher: WA exists=false → SMS fallback ─────
+await test('dispatchApprovedMultichannel: WA miss + SMS success → SMS_SENT', async () => {
+  const prior = process.env.MULTICHANNEL_ENABLED;
+  process.env.MULTICHANNEL_ENABLED = 'true';
+
+  const updates = [];
+  const inserts = [];
+  const approvedRows = [{
+    id: 'cd-2', brand_id: 'brand-x', prospect_id: 'lead-2',
+    outreach_status: 'APPROVED',
+    lead_magnets_data: { whatsapp_draft: 'Hola, tenemos un mockup para ti.' },
+    leads: {
+      id: 'lead-2', business_name: 'Test Biz 2',
+      phone: '+13055550000', email_address: null, industry: 'roofing', metro_area: 'Houston',
+    },
+  }];
+  const client = makeMultichannelClient({
+    approvedRows,
+    warmupState: { sends_count: 0, cap: 5, week_since_start: 1 },
+    updates, inserts,
+  });
+
+  const baileys = {
+    canSendToday: async () => true,
+    checkWhatsApp: async () => ({ exists: false }),
+    sendText: async () => { throw new Error('should not call'); },
+    assertSpanishOnly: assertSpanishOnly,
+  };
+  let smsCalls = 0;
+  const smsSender = async () => { smsCalls++; return { messageSid: 'SM123', status: 'queued' }; };
+
+  try {
+    const res = await dispatchApprovedMultichannel({ client, baileys, smsSender });
+    assert(res.processed === 1,  `processed=1, got ${res.processed}`);
+    assert(res.sms === 1,        `sms=1, got ${res.sms}`);
+    assert(smsCalls === 1,       `sms sender called once, got ${smsCalls}`);
+    const setSent = updates.find(u => u.table === 'campaign_enriched_data' && u.row.outreach_status === 'SMS_SENT');
+    assert(!!setSent, 'must flip outreach_status to SMS_SENT');
+  } finally {
+    process.env.MULTICHANNEL_ENABLED = prior;
+  }
+});
+
+// ── Test 23 — dispatcher: both channels fail → CALL_SCHEDULED ──
+await test('dispatchApprovedMultichannel: WA miss + SMS fail → CALL_SCHEDULED', async () => {
+  const prior = process.env.MULTICHANNEL_ENABLED;
+  process.env.MULTICHANNEL_ENABLED = 'true';
+
+  const updates = [];
+  const inserts = [];
+  const approvedRows = [{
+    id: 'cd-3', brand_id: 'brand-x', prospect_id: 'lead-3',
+    outreach_status: 'APPROVED',
+    lead_magnets_data: { whatsapp_draft: 'Hola, un mockup para ti.' },
+    leads: {
+      id: 'lead-3', business_name: 'Test Biz 3',
+      phone: '+13055559999', email_address: null, industry: 'roofing', metro_area: 'Dallas',
+    },
+  }];
+  const client = makeMultichannelClient({
+    approvedRows,
+    warmupState: { sends_count: 0, cap: 5, week_since_start: 1 },
+    updates, inserts,
+  });
+
+  const baileys = {
+    canSendToday: async () => true,
+    checkWhatsApp: async () => ({ exists: false }),
+    sendText: async () => { throw new Error('should not call'); },
+    assertSpanishOnly: assertSpanishOnly,
+  };
+  const smsSender = async () => ({ status: 'failed', error: 'twilio_not_configured' });
+
+  try {
+    const res = await dispatchApprovedMultichannel({ client, baileys, smsSender });
+    assert(res.processed === 1,  `processed=1, got ${res.processed}`);
+    assert(res.call === 1,       `call=1 fallback, got ${res.call}`);
+    const scheduled = updates.find(u => u.table === 'campaign_enriched_data' && u.row.outreach_status === 'CALL_SCHEDULED');
+    assert(!!scheduled, 'must flip outreach_status to CALL_SCHEDULED');
+  } finally {
+    process.env.MULTICHANNEL_ENABLED = prior;
+  }
+});
+
 // ─────────────────────────────────────────────────────────────
 console.log('\n══════════════════════════════════════════════');
 console.log('  RESULTS');

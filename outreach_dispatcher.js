@@ -19,6 +19,8 @@ import { withRetry } from './lib/resilience.js';
 import { pushDraftPhoneToGHL } from './tools/email.js';
 import { assertSendAllowed, GuardrailBlocked } from './lib/guardrails.js';
 import { recordAgentEvent } from './lib/agentEventsSink.js';
+import { logOutreachEvent } from './tools/outreachEvents.js';
+import { sendSMS } from './scripts/twilio.js';
 
 dotenv.config();
 
@@ -596,6 +598,184 @@ Reglas: subject 30-60 chars, preview_text 40-90 chars, body min 80 chars, todo e
   }
 
   logger.info('Dispatch summary', { rendered: stats.rendered, skipped: stats.skipped, errors: stats.errors });
+  return stats;
+}
+
+// ═════════════════════════════════════════════════════════════
+// Multichannel dispatcher (Sprint 5)
+//
+// Processes APPROVED rows whose source was DRAFT_PHONE (i.e. no
+// email on file) via WhatsApp → SMS → CALL_SCHEDULED ladder.
+// Fully gated behind MULTICHANNEL_ENABLED — with the flag off
+// this function is a short-circuit no-op and the legacy email-
+// only path is preserved untouched.
+//
+// Injection points (for tests):
+//   deps.baileys   — { checkWhatsApp, sendText, canSendToday }
+//   deps.smsSender — async ({ to, body }) => { messageSid, status }
+//   deps.client    — Supabase client
+//   deps.verifyFn  — async (draft, ctx) => { blocked, draft }
+//
+// Production imports resolve the real implementations lazily.
+// ═════════════════════════════════════════════════════════════
+
+export async function dispatchApprovedMultichannel(opts = {}) {
+  if (process.env.MULTICHANNEL_ENABLED !== 'true') {
+    return { skipped: 'disabled', processed: 0 };
+  }
+
+  const db = opts.client || supabase;
+  if (!db) return { skipped: 'no_supabase', processed: 0 };
+
+  const brandId = opts.brandId || process.env.BRAND_ID || null;
+
+  // Pull APPROVED rows that came from DRAFT_PHONE (hint in lead_magnets_data).
+  let query = db
+    .from('campaign_enriched_data')
+    .select(`
+      id, brand_id, prospect_id, outreach_status, lead_magnets_data,
+      leads!inner (id, business_name, phone, email_address, industry, metro_area)
+    `)
+    .eq('outreach_status', 'APPROVED')
+    .limit(BATCH_LIMIT);
+  if (brandId) query = query.eq('brand_id', brandId);
+
+  const { data: rows, error } = await query;
+  if (error) {
+    logger.warn('multichannel query error', { error: error.message });
+    return { error: error.message, processed: 0 };
+  }
+  if (!rows?.length) return { processed: 0 };
+
+  // Filter to DRAFT_PHONE-origin rows (no email, has phone).
+  const eligible = rows.filter((r) => !r.leads?.email_address && r.leads?.phone);
+  const stats = { processed: 0, whatsapp: 0, sms: 0, call: 0, errors: 0 };
+
+  // Lazy-load Baileys (keeps the dep optional when the flag is off).
+  let baileys = opts.baileys || null;
+  if (!baileys) {
+    try {
+      baileys = await import('./tools/baileysWhatsApp.js');
+    } catch (err) {
+      logger.warn('baileys import failed — SMS-only path', { error: err?.message });
+    }
+  }
+  const smsSender = opts.smsSender || sendSMS;
+
+  for (const row of eligible) {
+    const lead = row.leads;
+    const rowBrandId = row.brand_id;
+
+    // Guardrails: halt batch on breach so caps hold across channels.
+    try {
+      await assertSendAllowed({ brandId: rowBrandId });
+    } catch (err) {
+      if (err instanceof GuardrailBlocked) {
+        logger.warn('Guardrail breached — halting multichannel batch', { reason: err.reason });
+        break;
+      }
+      throw err;
+    }
+
+    const magnetData = row.lead_magnets_data || {};
+    const waBody  = magnetData.whatsapp_draft || null;
+    const smsBody = magnetData.sms_draft     || waBody;
+
+    // ── Spanish-only gate (IRON RULE #1) ─────────────────────
+    // Reuse the Baileys guard so SMS obeys the same rule.
+    if (baileys?.assertSpanishOnly && waBody) {
+      try { baileys.assertSpanishOnly(waBody); }
+      catch (err) {
+        logger.warn('WA draft failed spanish-only guard — skipping', {
+          lead: lead.business_name, error: err.message,
+        });
+        await db.from('campaign_enriched_data')
+          .update({ outreach_status: 'BLOCKED_LOW_QUALITY' })
+          .eq('id', row.id);
+        stats.errors++;
+        continue;
+      }
+    }
+
+    let dispatched = false;
+
+    // ── 1) WhatsApp path ────────────────────────────────────
+    if (baileys?.checkWhatsApp && baileys?.sendText && waBody) {
+      try {
+        const allowed = await baileys.canSendToday(rowBrandId, { client: db });
+        if (allowed) {
+          const probe = await baileys.checkWhatsApp(lead.phone, { brandId: rowBrandId });
+          if (probe?.exists) {
+            await db.from('campaign_enriched_data')
+              .update({ outreach_status: 'WHATSAPP_QUEUED' }).eq('id', row.id);
+            const send = await baileys.sendText({
+              brandId: rowBrandId, to: lead.phone, body: waBody, client: db,
+            });
+            await db.from('campaign_enriched_data')
+              .update({ outreach_status: 'WHATSAPP_SENT' }).eq('id', row.id);
+            await logOutreachEvent({
+              leadId: lead.id, brandId: rowBrandId, channel: 'whatsapp',
+              eventType: 'sent', messageId: send.messageId,
+              metadata: { jid: send.jid },
+            });
+            stats.whatsapp++;
+            dispatched = true;
+          }
+        }
+      } catch (err) {
+        logger.warn('WhatsApp send failed — falling through to SMS', {
+          lead: lead.business_name, error: err.message,
+        });
+        await logOutreachEvent({
+          leadId: lead.id, brandId: rowBrandId, channel: 'whatsapp',
+          eventType: 'failed', metadata: { error: err.message },
+        });
+      }
+    }
+
+    // ── 2) SMS fallback ─────────────────────────────────────
+    if (!dispatched && smsBody) {
+      try {
+        const smsResult = await smsSender({ to: lead.phone, body: smsBody });
+        if (smsResult?.messageSid) {
+          await db.from('campaign_enriched_data')
+            .update({ outreach_status: 'SMS_SENT' }).eq('id', row.id);
+          await logOutreachEvent({
+            leadId: lead.id, brandId: rowBrandId, channel: 'sms',
+            eventType: 'sent', messageId: smsResult.messageSid,
+          });
+          stats.sms++;
+          dispatched = true;
+        } else {
+          logger.warn('SMS send failed', {
+            lead: lead.business_name, error: smsResult?.error,
+          });
+          await logOutreachEvent({
+            leadId: lead.id, brandId: rowBrandId, channel: 'sms',
+            eventType: 'failed', metadata: { error: smsResult?.error || 'unknown' },
+          });
+        }
+      } catch (err) {
+        logger.warn('SMS send threw', { error: err.message });
+      }
+    }
+
+    // ── 3) Human call fallback ──────────────────────────────
+    if (!dispatched) {
+      await db.from('campaign_enriched_data')
+        .update({ outreach_status: 'CALL_SCHEDULED' }).eq('id', row.id);
+      await logOutreachEvent({
+        leadId: lead.id, brandId: rowBrandId, channel: 'phone',
+        eventType: 'stage_change',
+        metadata: { reason: 'no_digital_channel_available' },
+      });
+      stats.call++;
+    }
+
+    stats.processed++;
+  }
+
+  logger.info('Multichannel dispatch summary', stats);
   return stats;
 }
 

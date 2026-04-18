@@ -27,7 +27,7 @@ import { supabase as supabaseClient } from './lib/supabase.js';
 import { fetchPage } from './tools/webResearch.js';
 import { processIdleMagnets } from './lead_magnet_worker.js';
 import { startTranscriptionWorker } from './workers/transcription_worker.js';
-import { dispatchPendingOutreach } from './outreach_dispatcher.js';
+import { dispatchPendingOutreach, dispatchApprovedMultichannel } from './outreach_dispatcher.js';
 import { runEmailEnrichment } from './workers/email_enrichment_worker.js';
 import { startManagerDaemon, start as startAutonomyDaemon } from './agents/manager-daemon.js';
 import { runPipelineForBrand, runEnrichForLead } from './workers/pipelineRunner.js';
@@ -271,6 +271,61 @@ app.post('/webhook/smtp-bounce', async (req, res) => {
     return res.status(200).json({ ok: true });
   } catch (err) {
     console.error('[SMTP Bounce Webhook] error:', err.message);
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * POST /webhook/twilio-status — Twilio Messaging Status Callback (Sprint 5)
+ * Body: application/x-www-form-urlencoded { MessageSid, MessageStatus, To, ... }
+ * Maps to outreach_events + flips SMS_DELIVERED / SMS_FAILED in campaign_enriched_data.
+ * PUBLIC (no auth): Twilio posts here directly.
+ */
+app.post('/webhook/twilio-status', async (req, res) => {
+  try {
+    const { MessageSid, MessageStatus, To, ErrorCode, ErrorMessage } = req.body || {};
+    if (!MessageSid || !MessageStatus) {
+      return res.status(400).json({ error: 'MessageSid + MessageStatus required' });
+    }
+    if (!supabaseClient) return res.status(204).end();
+
+    const status = String(MessageStatus).toLowerCase();
+    let eventType = 'stage_change';
+    let outreachStatus = null;
+    if (status === 'delivered')          { eventType = 'delivered'; outreachStatus = 'SMS_DELIVERED'; }
+    else if (status === 'failed' || status === 'undelivered') {
+      eventType = 'failed'; outreachStatus = 'SMS_FAILED';
+    } else if (status === 'sent') { eventType = 'sent'; }
+
+    // Resolve lead by To phone (best-effort).
+    let leadId = null, brandId = null;
+    if (To) {
+      const { data: lead } = await supabaseClient
+        .from('leads')
+        .select('id, brand_id')
+        .eq('phone', To)
+        .maybeSingle();
+      if (lead) { leadId = lead.id; brandId = lead.brand_id; }
+    }
+
+    if (outreachStatus && leadId) {
+      await supabaseClient
+        .from('campaign_enriched_data')
+        .update({ outreach_status: outreachStatus })
+        .eq('prospect_id', leadId);
+    }
+
+    if (brandId) {
+      await logOutreachEvent({
+        leadId, brandId, channel: 'sms', eventType,
+        messageId: MessageSid,
+        metadata: { status, error_code: ErrorCode || null, error: ErrorMessage || null },
+      });
+    }
+
+    return res.status(200).json({ ok: true });
+  } catch (err) {
+    console.error('[Twilio Status Webhook] error:', err.message);
     return res.status(500).json({ error: err.message });
   }
 });
@@ -1163,6 +1218,178 @@ app.get('/api/leads/:id', async (req, res) => {
   }
 });
 
+// ---- Get Lead FULL (Sprint 5 — consolidated for LeadDetailView) ----
+// Returns lead + campaign_enriched_data + events_timeline + GHL link
+// + landing_page in one shot so the SPA can render /leads/:id
+// without chaining three requests.
+app.get('/api/leads/:id/full', async (req, res) => {
+  try {
+    const brandId = req.user.brandId;
+    const leadId  = req.params.id;
+    if (!supabaseClient) return res.status(500).json({ error: 'supabase_not_configured' });
+
+    // Core lead
+    const lead = await getLeadById(leadId, brandId);
+    if (!lead) return res.status(404).json({ error: 'Lead not found' });
+
+    // Campaign row (most recent)
+    const { data: campaignRows } = await supabaseClient
+      .from('campaign_enriched_data')
+      .select('*')
+      .eq('brand_id', brandId)
+      .eq('prospect_id', leadId)
+      .order('created_at', { ascending: false })
+      .limit(1);
+    const campaign = campaignRows?.[0] || null;
+
+    // Events timeline (DESC, last 100)
+    const { data: events } = await supabaseClient
+      .from('outreach_events')
+      .select('*')
+      .eq('brand_id', brandId)
+      .eq('lead_id', leadId)
+      .order('occurred_at', { ascending: false })
+      .limit(100);
+
+    // Surface friendly fields for the detail view.
+    const magnet   = campaign?.lead_magnets_data || {};
+    const ghlId    = magnet?.ghl_contact_id || null;
+    const ghlLocId = process.env.EMPIRIKA_GHL_LOCATION_ID || '';
+    const ghlLink  = ghlId && ghlLocId
+      ? `https://app.gohighlevel.com/v2/location/${ghlLocId}/contacts/detail/${ghlId}`
+      : null;
+
+    const landingUrl = magnet?.landing_url || magnet?.public_url || null;
+    const visitCount = Number(magnet?.landing_visit_count || 0);
+
+    res.json({
+      lead,
+      campaign_enriched_data: campaign ? {
+        id:                campaign.id,
+        mega_profile:      lead.mega_profile || null,
+        radiography_technical: campaign.radiography_technical || null,
+        attack_angle:      campaign.attack_angle || null,
+        outreach_copy: {
+          email_subject: magnet?.email_draft_subject || null,
+          email_body:    magnet?.email_draft_html    || null,
+          whatsapp:      magnet?.whatsapp_draft      || null,
+          instagram:     magnet?.instagram_draft     || null,
+        },
+        call_script:       magnet?.call_script || null,
+        landing_url:       landingUrl,
+        outreach_status:   campaign.outreach_status || null,
+        auto_approve_at:   campaign.auto_approve_at || null,
+        follow_up_sequence: magnet?.follow_up_sequence || null,
+        verifier_report:   campaign.verifier_report || null,
+      } : null,
+      events_timeline: events || [],
+      ghl_contact_id:  ghlId,
+      ghl_link:        ghlLink,
+      landing_page:    landingUrl ? { url: landingUrl, visit_count: visitCount } : null,
+    });
+  } catch (err) {
+    console.error('Lead full error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ---- WhatsApp (Baileys) — connection status ----
+app.get('/api/whatsapp/qr/:brandId', async (req, res) => {
+  try {
+    if (process.env.MULTICHANNEL_ENABLED !== 'true') {
+      return res.status(200).json({ status: 'DISABLED' });
+    }
+    // Tenant check: only allow the user to peek at their own brand.
+    if (req.user?.brandId && req.user.brandId !== req.params.brandId) {
+      return res.status(403).json({ error: 'forbidden' });
+    }
+    const { getConnectionStatus } = await import('./tools/baileysWhatsApp.js');
+    const out = await getConnectionStatus(req.params.brandId);
+    res.json(out);
+  } catch (err) {
+    console.error('whatsapp/qr error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ---- WhatsApp (Baileys) — kickoff pairing ----
+app.post('/api/whatsapp/connect/:brandId', async (req, res) => {
+  try {
+    if (process.env.MULTICHANNEL_ENABLED !== 'true') {
+      return res.status(200).json({ status: 'DISABLED' });
+    }
+    if (req.user?.brandId && req.user.brandId !== req.params.brandId) {
+      return res.status(403).json({ error: 'forbidden' });
+    }
+    const { connect } = await import('./tools/baileysWhatsApp.js');
+    // Fire & forget — client should poll /api/whatsapp/qr/:brandId.
+    connect({ brandId: req.params.brandId })
+      .catch((err) => console.warn('[whatsapp/connect bg]', err?.message));
+    res.status(202).json({ status: 'starting', polling_required: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ---- Fleet learning summary (CockpitView "Learning Progress") ----
+app.get('/api/fleet/learning-summary', async (req, res) => {
+  try {
+    if (!supabaseClient) return res.status(200).json({ ok: true, summary: null });
+    const brandId = req.user.brandId;
+
+    // Reply rate last 30d (coarse — counts on outreach_events).
+    const since30 = new Date(Date.now() - 30 * 86400_000).toISOString();
+    const { data: events } = await supabaseClient
+      .from('outreach_events')
+      .select('event_type, occurred_at')
+      .eq('brand_id', brandId)
+      .gte('occurred_at', since30)
+      .limit(5000);
+
+    const byDay = new Map();
+    let totalSent = 0, totalReplied = 0;
+    for (const e of events || []) {
+      const day = String(e.occurred_at).slice(0, 10);
+      if (!byDay.has(day)) byDay.set(day, { sent: 0, replied: 0 });
+      const bucket = byDay.get(day);
+      if (e.event_type === 'sent')    { bucket.sent++;    totalSent++;    }
+      if (e.event_type === 'replied') { bucket.replied++; totalReplied++; }
+    }
+    const trend = Array.from(byDay.entries())
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([ymd, v]) => ({ ymd, ...v, reply_rate: v.sent ? v.replied / v.sent : 0 }));
+
+    // Latest [STRATEGY_PROPOSAL] from agent memory.
+    const { data: strat } = await supabaseClient
+      .from('agent_memory')
+      .select('key, value, created_at')
+      .eq('agent_name', 'Estratega')
+      .eq('brand_id', brandId)
+      .like('key', '[STRATEGY_PROPOSAL]%')
+      .order('created_at', { ascending: false })
+      .limit(1);
+    const latestProposal = strat?.[0] || null;
+
+    res.json({
+      ok: true,
+      summary: {
+        reply_rate_30d: totalSent ? totalReplied / totalSent : 0,
+        sent_30d:     totalSent,
+        replied_30d:  totalReplied,
+        trend,
+        latest_proposal: latestProposal ? {
+          key:   latestProposal.key,
+          title: (latestProposal.value?.hypothesis || latestProposal.value?.title || '').toString().slice(0, 140),
+          created_at: latestProposal.created_at,
+        } : null,
+      },
+    });
+  } catch (err) {
+    console.error('learning-summary error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ---- Enrich Lead (MEGA Profile) ----
 // Body extracted to workers/pipelineRunner.js so the autonomy daemon
 // can enqueue HOT leads into Macro-Flujo 2 without going through HTTP.
@@ -1491,6 +1718,14 @@ setInterval(async () => {
   try { await dispatchPendingOutreach(); }
   catch (e) { console.error('Interval error (outreach):', e.message); }
 }, 15 * 60_000);
+
+// Sprint 5: Multichannel dispatcher — every 10 minutes.
+// Gated behind MULTICHANNEL_ENABLED=true (see outreach_dispatcher.js).
+// With the flag off this is a no-op, so rollback leaves email-only flow intact.
+setInterval(async () => {
+  try { await dispatchApprovedMultichannel(); }
+  catch (e) { console.error('Interval error (multichannel):', e.message); }
+}, 10 * 60_000);
 
 // Email enrichment — kickoff inmediato + cada 6 horas
 // Kickoff arranca al boot/redeploy para no esperar 6h tras cada restart.

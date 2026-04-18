@@ -604,6 +604,8 @@ export default function CockpitView() {
           <AgentScoreboard agents={stats?.agents} />
           {/* E) Learning curve */}
           <LearningCurve memory={stats?.memory} />
+          {/* Sprint 5 — Learning Progress (reply rate 30d + latest proposal) */}
+          <LearningProgress />
         </motion.div>
       </div>
 
@@ -615,3 +617,50 @@ export default function CockpitView() {
     </div>
   );
 }
+
+// ─────────────────────────────────────────────────────────────
+// Sprint 5 — Learning Progress panel
+// Consumes GET /api/fleet/learning-summary.
+// Graceful empty state when the endpoint / data is not ready.
+// ─────────────────────────────────────────────────────────────
+function LearningProgress() {
+  const [data, setData] = useState(null);
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      try {
+        const res = await apiGet('/fleet/learning-summary');
+        if (!res.ok) return;
+        const json = await res.json();
+        if (alive) setData(json?.summary || null);
+      } catch { /* silent */ }
+    })();
+    return () => { alive = false; };
+  }, []);
+
+  return (
+    <div className={`${GLASS} p-4`}>
+      <div className="flex items-center gap-2 mb-3">
+        <Brain size={14} className="text-fuchsia-300" />
+        <span className="text-sm font-semibold">Learning Progress · 30d</span>
+      </div>
+      <div className="text-[11px] uppercase tracking-widest text-white/40">Reply rate</div>
+      <div className="text-2xl font-semibold mt-1">
+        {data ? fmtPct(data.reply_rate_30d, 1) : '—'}
+      </div>
+      <div className="text-[11px] text-white/40">
+        {data ? `${fmtNumber(data.replied_30d)} replies · ${fmtNumber(data.sent_30d)} sends` : 'cargando…'}
+      </div>
+      {data?.latest_proposal && (
+        <div className="mt-4 border-t border-white/10 pt-3">
+          <div className="text-[10px] uppercase tracking-widest text-fuchsia-300 mb-1">
+            Última propuesta Estratega
+          </div>
+          <div className="text-sm">{data.latest_proposal.title || '—'}</div>
+          <div className="text-[11px] text-white/40 mt-1">{fmtRelative(data.latest_proposal.created_at)}</div>
+        </div>
+      )}
+    </div>
+  );
+}
+

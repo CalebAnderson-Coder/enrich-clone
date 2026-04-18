@@ -103,6 +103,30 @@ services:
       - key: ESTRATEGA_WEEKLY_HOUR_UTC
         value: "12"
 
+      # ── Sprint 5: Multichannel (WhatsApp Baileys + SMS Twilio) ──
+      - key: MULTICHANNEL_ENABLED
+        value: "false"
+      - key: WA_WARMUP_WEEK1_CAP
+        value: "5"
+      - key: WA_WARMUP_WEEK2_CAP
+        value: "15"
+      - key: WA_WARMUP_WEEK3_CAP
+        value: "30"
+      - key: WA_WARMUP_WEEK4PLUS_CAP
+        value: "50"
+      - key: TWILIO_ACCOUNT_SID
+        sync: false
+      - key: TWILIO_AUTH_TOKEN
+        sync: false
+      - key: TWILIO_FROM_NUMBER
+        sync: false
+
+      # ── Sprint 5: Dashboard V2 (LeadDetailView /leads/:id) ──
+      - key: DASHBOARD_V2_ENABLED
+        value: "false"
+      - key: VITE_DASHBOARD_V2_ENABLED
+        value: "false"
+
   # ── Lyra: Autonomous B2B Content Engine ──────────────────────
   # Runs Mon-Fri at 12:00 UTC (8:00 AM ET)
   # Pipeline: BrightData Research → Gemini Draft → Buffer → LinkedIn
