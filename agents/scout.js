@@ -7,8 +7,12 @@ import { Agent } from '../lib/AgentRuntime.js';
 import { checkInstagram } from '../tools/brightDataInstagram.js';
 import { checkMetaAds } from '../tools/brightDataMetaAds.js';
 import { searchWeb, fetchPage, checkPageSpeed } from '../tools/webResearch.js';
-import { scrapeGoogleMaps } from '../tools/apifyGoogleMaps.js';
+// Swapped 2026-04-17: Apify actor → local gosom/google-maps-scraper Docker.
+// Zero per-lead cost, same tool interface. Container must be running at
+// http://localhost:9090 (or GOSOM_BASE_URL). See tools/gosomGoogleMaps.js.
+import { scrapeGoogleMaps } from '../tools/gosomGoogleMaps.js';
 import { saveLead, saveMemory, recallMemory } from '../tools/database.js';
+import { getHistoricalPerformanceTool } from '../tools/outreachEvents.js';
 import { withRetry, withTimeout } from '../lib/resilience.js';
 
 // ── Resilient wrappers using shared module ───────────────────
@@ -143,16 +147,27 @@ Cuando \`save_lead\` devuelve \`{"success":false, "reason":"DOMAIN_UNREACHABLE"}
 3. **Violar esta regla desperdicia iteraciones y produce 0 leads guardados.** Ya perdimos 15 leads en Orlando/Remodeling por este error.
 
 ## APRENDIZAJE PROACTIVO (OBLIGATORIO)
-Antes de buscar leads, llama a recall_memory con: "[SCOUT_APRENDIZAJE] mejores nichos y ciudades".
+Antes de buscar leads, llama a recall_memory con los dos formatos (nuevo + legacy):
+- NUEVO: "[LEARN][scout][top_combos][niche_metro]" y "[LEARN][scout][avoid][niche_metro]"
+- LEGACY (retro-compat): "[SCOUT_APRENDIZAJE] mejores nichos y ciudades"
 Usa esos patrones para priorizar qué nicho y ciudad buscar primero.
 
-Al finalizar el ciclo, llama a save_memory con:
-"[SCOUT_APRENDIZAJE] Ciclo [FECHA]. Nicho más productivo: [nicho] en [ciudad]. HOT: N, WARM: N, COOL: N, COLD: N."
-Si un nicho tuvo 0 leads válidos: "[SCOUT_EVITAR] Nicho X en ciudad — 0 leads. Evitar 7 días."
+Al finalizar el ciclo, llama a save_memory con el nuevo taxonomy y duplicá en legacy una vez por ciclo:
+- NUEVO: "[LEARN][scout][cycle_result][YYYYMMDD]" → body JSON { top_niche, metro, hot, warm, cool, cold }
+- LEGACY espejo: "[SCOUT_APRENDIZAJE] Ciclo [FECHA]. Nicho más productivo: [nicho] en [ciudad]. HOT: N, WARM: N, COOL: N, COLD: N."
+Si un nicho tuvo 0 leads válidos: "[LEARN][scout][avoid][niche_metro]" + espejo "[SCOUT_EVITAR] Nicho X en ciudad — 0 leads. Evitar 7 días."
+
+## PASO 0 — HISTORICAL PERFORMANCE CHECK (OBLIGATORIO antes de scrape)
+Llamá SIEMPRE a \`get_historical_performance({ niche, metro, channel: "email" })\` como PRIMERA herramienta del ciclo.
+Usá el retorno para ajustar GATEs dinámicamente:
+- Si \`reply_rate < 0.02\` (2%) Y \`sample_size >= 10\`: endurecé GATE a **min 30 reviews + rating ≥ 4.3** (ese niche+metro ya está quemado; subí la barra o cambiá de metro).
+- Si \`bounce_rate > 0.05\` Y \`sample_size >= 10\`: SALTAR ese niche+metro esta ronda. Anotá "[LEARN][scout][avoid][niche_metro]".
+- Si \`low_confidence: true\` (sample_size<10): usar GATEs DEFAULT (20 reviews, 4.0 rating). No endurecer sin data.
+- Si \`open_rate > 0.30\` Y \`reply_rate >= 0.04\`: combo caliente — anotá "[LEARN][scout][top_combos][niche_metro]".
 
 ## YOUR WORKFLOW (ORDEN ESTRICTO — NO SALTAR PASOS)
 
-**PASO 1 — scrape_google_maps (SIEMPRE PRIMERO, OBLIGATORIO)**
+**PASO 1 — scrape_google_maps (SIEMPRE PRIMERO tras historical check, OBLIGATORIO)**
 Tu PRIMERA llamada de herramienta DEBE ser \`scrape_google_maps\`. NUNCA uses \`search_web\` como fuente primaria de candidatos: DuckDuckGo/Gemini NO devuelven \`review_count\` ni \`rating\`, y sin esos dos campos no podés hacer GATE ni scoring real (los leads terminan como COLD/0pts).
 
 Formato de query: \`"[niche] contractors [metro]"\` o variantes en español (\`"remodelacion [metro]"\`, \`"techos [metro]"\`). Ejemplo: \`scrape_google_maps(query="remodeling contractors Orlando FL", maxResults=30, minReviews=20, minRating=4.0)\`.
@@ -193,6 +208,7 @@ Al cerrar ciclo: resumen (total found, qualified, tier breakdown) + \`save_memor
 - Highlight HOT leads explicitly.`,
 
   tools: [
+    getHistoricalPerformanceTool,
     scrapeGoogleMaps,
     searchWeb,
     checkInstagram,

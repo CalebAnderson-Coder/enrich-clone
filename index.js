@@ -30,6 +30,8 @@ import { dispatchPendingOutreach } from './outreach_dispatcher.js';
 import { runEmailEnrichment } from './workers/email_enrichment_worker.js';
 import { startManagerDaemon, start as startAutonomyDaemon } from './agents/manager-daemon.js';
 import { runPipelineForBrand, runEnrichForLead } from './workers/pipelineRunner.js';
+import { logOutreachEvent, LEARNING_ENABLED } from './tools/outreachEvents.js';
+import crypto from 'crypto';
 
 
 import path from 'path';
@@ -105,6 +107,171 @@ if (!process.env.API_SECRET_KEY) {
   console.error('❌ FATAL: API_SECRET_KEY is not set. Configure it in your environment.');
   process.exit(1);
 }
+
+// ============================================================
+// PUBLIC LEARNING-LOOP ENDPOINTS (must be BEFORE authMiddleware)
+// ============================================================
+
+// 1x1 transparent GIF (hardcoded bytes, no file I/O).
+const TRANSPARENT_GIF = Buffer.from(
+  'R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7',
+  'base64'
+);
+
+/**
+ * GET /pixel/:leadId.gif — open-tracking pixel.
+ * Always returns the GIF (no-cache) so the client never sees an error.
+ * Event logging is best-effort and async.
+ */
+app.get('/pixel/:leadId.gif', (req, res) => {
+  // Serve the image synchronously, never block on DB work.
+  res.set('Content-Type', 'image/gif');
+  res.set('Cache-Control', 'no-store, no-cache, must-revalidate, private');
+  res.set('Pragma', 'no-cache');
+  res.set('Expires', '0');
+  res.status(200).end(TRANSPARENT_GIF);
+
+  if (!LEARNING_ENABLED()) return;
+  const rawLeadId = req.params.leadId;
+  if (!rawLeadId || !/^[a-f0-9-]{8,}$/i.test(rawLeadId)) return;
+
+  // Resolve brand + log event async; swallow all errors.
+  (async () => {
+    try {
+      if (!supabaseClient) return;
+      const { data: lead } = await supabaseClient
+        .from('leads')
+        .select('id, brand_id')
+        .eq('id', rawLeadId)
+        .maybeSingle();
+      if (!lead?.brand_id) return;
+
+      const ip = (req.headers['x-forwarded-for'] || req.ip || '').toString().split(',')[0].trim();
+      const ipHash = ip ? crypto.createHash('sha256').update(ip).digest('hex').slice(0, 16) : null;
+      const ua = String(req.headers['user-agent'] || '').slice(0, 180);
+
+      await logOutreachEvent({
+        leadId:   lead.id,
+        brandId:  lead.brand_id,
+        channel:  'pixel',
+        eventType: 'opened',
+        metadata: { ip_hash: ipHash, user_agent: ua },
+      });
+    } catch { /* silent */ }
+  })();
+});
+
+/**
+ * POST /webhook/ghl-stage — GoHighLevel stage-change webhook.
+ * Verifies HMAC-SHA256 signature against GHL_WEBHOOK_SECRET.
+ * Maps stage names to event_types and logs as channel='ghl'.
+ */
+app.post('/webhook/ghl-stage', express.raw({ type: '*/*', limit: '200kb' }), async (req, res) => {
+  const secret = process.env.GHL_WEBHOOK_SECRET;
+  if (!secret) {
+    // No secret configured = endpoint disabled, respond 204 so GHL retries quietly.
+    return res.status(204).end();
+  }
+  try {
+    const signature = String(req.headers['x-ghl-signature'] || req.headers['x-signature'] || '');
+    const rawBody   = Buffer.isBuffer(req.body) ? req.body : Buffer.from(JSON.stringify(req.body || {}));
+    const expected  = crypto.createHmac('sha256', secret).update(rawBody).digest('hex');
+    const sigBuf    = Buffer.from(signature);
+    const expBuf    = Buffer.from(expected);
+    if (sigBuf.length !== expBuf.length || !crypto.timingSafeEqual(sigBuf, expBuf)) {
+      return res.status(401).json({ error: 'invalid_signature' });
+    }
+
+    const payload = JSON.parse(rawBody.toString('utf8') || '{}');
+    const contactId = payload.contact_id || payload.contactId || payload.contact?.id || null;
+    const stage     = String(payload.stage || payload.stageName || payload.pipelineStage || '').toLowerCase();
+    if (!contactId) return res.status(400).json({ error: 'missing contact_id' });
+
+    // Map stage → event_type (conservative defaults).
+    let eventType = 'stage_change';
+    if (/repl|contest|respond/.test(stage))       eventType = 'replied';
+    else if (/bounce|undeliver|fail/.test(stage)) eventType = 'bounced';
+    else if (/unsub/.test(stage))                 eventType = 'unsubscribed';
+    else if (/read|open/.test(stage))             eventType = 'read';
+
+    // Resolve lead + brand via ghl_contact_id on campaign_enriched_data.
+    let leadId  = null;
+    let brandId = null;
+    if (supabaseClient) {
+      const { data: camp } = await supabaseClient
+        .from('campaign_enriched_data')
+        .select('prospect_id, brand_id')
+        .eq('ghl_contact_id', contactId)
+        .limit(1)
+        .maybeSingle();
+      if (camp) {
+        leadId  = camp.prospect_id;
+        brandId = camp.brand_id;
+      }
+    }
+    if (!brandId) return res.status(202).json({ ok: true, note: 'unknown contact — ignored' });
+
+    await logOutreachEvent({
+      leadId,
+      brandId,
+      channel:  'ghl',
+      eventType,
+      metadata: { stage, contact_id: contactId, raw_stage_source: payload.stage ? 'stage' : 'stageName' },
+      messageId: contactId,
+    });
+    return res.status(200).json({ ok: true, event_type: eventType });
+  } catch (err) {
+    console.error('[GHL Webhook] error:', err.message);
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * POST /webhook/smtp-bounce — generic SMTP bounce ingestion.
+ * Stamps campaign_enriched_data.outreach_status='BOUNCED' so the legacy
+ * tier-2 circuit breaker trips, AND logs an outreach_events row.
+ */
+app.post('/webhook/smtp-bounce', async (req, res) => {
+  try {
+    const { email, message_id, reason } = req.body || {};
+    const targetEmail = String(email || '').trim().toLowerCase();
+    if (!targetEmail && !message_id) {
+      return res.status(400).json({ error: 'email or message_id required' });
+    }
+
+    if (!supabaseClient) return res.status(204).end();
+
+    let lead = null;
+    if (targetEmail) {
+      const { data } = await supabaseClient
+        .from('leads')
+        .select('id, brand_id')
+        .eq('email_address', targetEmail)
+        .maybeSingle();
+      lead = data || null;
+    }
+
+    if (lead?.id) {
+      await supabaseClient
+        .from('campaign_enriched_data')
+        .update({ outreach_status: 'BOUNCED' })
+        .eq('prospect_id', lead.id);
+
+      await logOutreachEvent({
+        leadId:    lead.id,
+        brandId:   lead.brand_id,
+        channel:   'email',
+        eventType: 'bounced',
+        metadata:  { email: targetEmail, reason: reason || null },
+        messageId: message_id || null,
+      });
+    }
+    return res.status(200).json({ ok: true });
+  } catch (err) {
+    console.error('[SMTP Bounce Webhook] error:', err.message);
+    return res.status(500).json({ error: err.message });
+  }
+});
 
 app.use('/api', authMiddleware);
 

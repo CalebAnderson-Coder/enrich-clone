@@ -23,6 +23,7 @@ import {
   getActiveBrands,
 } from '../lib/supabase.js';
 import { recordAgentEvent } from '../lib/agentEventsSink.js';
+import { runConsolidator } from '../workers/learning_consolidator.js';
 
 // ── Cycle definitions ────────────────────────────────────────
 export const CYCLES = Object.freeze([
@@ -90,13 +91,26 @@ async function runBacklog({ brandId }) {
 async function runReport({ brandId }) {
   const ymd = todayKey().replace(/-/g, '');
   const memoryKey = `[DAEMON_REPORT_${ymd}]`;
+
+  // Nightly learning-loop digest (silent no-op when LEARNING_ENABLED!=true).
+  let learning = { skipped: 'learning_disabled' };
+  if (process.env.LEARNING_ENABLED === 'true') {
+    try {
+      learning = await runConsolidator({ brandId, windowDays: 7 });
+    } catch (err) {
+      console.warn('[Daemon] learning consolidator failed:', err?.message);
+      learning = { ok: false, error: err?.message };
+    }
+  }
+
   const payload = {
     generated_at: new Date().toISOString(),
     cycles: CYCLES.map(c => c.type),
     note: 'Daily autonomy report — see agent_events for per-cycle status.',
+    learning,
   };
   await saveAgentMemory('manager', brandId, memoryKey, JSON.stringify(payload));
-  return { ok: true, memory_key: memoryKey };
+  return { ok: true, memory_key: memoryKey, learning };
 }
 
 async function executeCycle(brandId, cycle) {

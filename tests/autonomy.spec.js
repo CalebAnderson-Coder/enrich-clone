@@ -24,6 +24,9 @@ import { GuardrailBlocked, getEnvCaps, getBounceRateLast24h } from '../lib/guard
 import { getActiveBrands } from '../lib/supabase.js';
 import * as dispatcher from '../outreach_dispatcher.js';
 import * as daemon from '../agents/manager-daemon.js';
+import { logOutreachEvent, getHistoricalPerformance } from '../tools/outreachEvents.js';
+import { aggregateCombos, runConsolidator } from '../workers/learning_consolidator.js';
+import { angela } from '../agents/angela.js';
 
 let passed = 0;
 let failed = 0;
@@ -206,8 +209,19 @@ await test('autoApprovePastDueDrafts returns 0 and issues no UPDATE when lock is
 await test('getBounceRateLast24h: 3 BOUNCED + 7 SENT ⇒ 0.3; empty ⇒ 0', async () => {
   function makeClient({ bounced, total }) {
     return {
-      from() {
-        const statuses = [];
+      from(table) {
+        // Tier 1 (outreach_events) is bypassed by returning an error
+        // so the helper falls through to Tier 2 (campaign_enriched_data)
+        // — which is what this test was written to cover.
+        if (table === 'outreach_events') {
+          const chain = {
+            select() { return chain; },
+            eq() { return chain; },
+            in() { return chain; },
+            gte: async () => ({ count: 0, error: { message: 'not-applied' } }),
+          };
+          return chain;
+        }
         const chain = {
           select() { return chain; },
           eq() { return chain; },
@@ -235,6 +249,124 @@ await test('getBounceRateLast24h: 3 BOUNCED + 7 SENT ⇒ 0.3; empty ⇒ 0', asyn
     client: makeClient({ bounced: 0, total: 0 }),
   });
   assert(zero === 0, `expected 0 for empty data, got ${zero}`);
+});
+
+// ── Test 9 — logOutreachEvent silent-fails when LEARNING_ENABLED=false ──
+await test('logOutreachEvent returns null when LEARNING_ENABLED=false (rollback-safe)', async () => {
+  const prior = process.env.LEARNING_ENABLED;
+  process.env.LEARNING_ENABLED = 'false';
+  try {
+    const r = await logOutreachEvent({
+      brandId: 'brand-x',
+      channel: 'email',
+      eventType: 'sent',
+    });
+    assert(r === null, `expected null when disabled, got ${JSON.stringify(r)}`);
+  } finally {
+    process.env.LEARNING_ENABLED = prior;
+  }
+});
+
+// ── Test 10 — getHistoricalPerformance aggregates buckets + low_confidence ──
+await test('getHistoricalPerformance: 3 replies / 12 sends ⇒ reply_rate 0.25 and low_confidence=false', async () => {
+  const rows = [
+    ...Array(12).fill({ event_type: 'sent' }),
+    ...Array(5).fill({ event_type: 'opened' }),
+    ...Array(3).fill({ event_type: 'replied' }),
+    { event_type: 'bounced' },
+  ];
+  function makeChain(data) {
+    // Supabase PostgREST builder: every filter method returns the same
+    // builder; `await` on the builder triggers the HTTP request (thenable).
+    const result = { data, error: null, count: data.length };
+    const chain = {};
+    const passthrough = () => chain;
+    ['select', 'eq', 'ilike', 'in', 'order', 'limit', 'gte', 'lte', 'not', 'or'].forEach(m => {
+      chain[m] = passthrough;
+    });
+    chain.then = (onFulfilled, onRejected) => Promise.resolve(result).then(onFulfilled, onRejected);
+    return chain;
+  }
+  const fakeClient = { from: () => makeChain(rows) };
+  const res = await getHistoricalPerformance({
+    niche: 'roofing', metro: 'Houston', channel: 'email', windowDays: 30, client: fakeClient,
+  });
+  assert(res.sends === 12,   `expected 12 sends, got ${res.sends}`);
+  assert(res.replies === 3,  `expected 3 replies, got ${res.replies}`);
+  assert(Math.abs(res.reply_rate - 0.25) < 1e-9, `expected reply_rate 0.25, got ${res.reply_rate}`);
+  assert(res.low_confidence === false, 'sample_size 12 should NOT be low_confidence');
+
+  // Empty path → low_confidence true, zeroed
+  const emptyClient = { from: () => makeChain([]) };
+  const empty = await getHistoricalPerformance({ niche: 'x', metro: 'y', client: emptyClient });
+  assert(empty.sends === 0,            'empty → sends 0');
+  assert(empty.reply_rate === 0,       'empty → reply_rate 0');
+  assert(empty.low_confidence === true,'empty → low_confidence true');
+});
+
+// ── Test 11 — runConsolidator returns skipped shape when LEARNING disabled ──
+await test('runConsolidator returns skipped shape when LEARNING_ENABLED=false (no memory writes)', async () => {
+  const prior = process.env.LEARNING_ENABLED;
+  process.env.LEARNING_ENABLED = 'false';
+  let saved = 0;
+  try {
+    const r = await runConsolidator({
+      brandId: 'brand-x',
+      saveMemoryFn: async () => { saved++; },
+    });
+    assert(r.ok === true,                 'ok should be true even when skipped');
+    assert(r.skipped === 'learning_disabled', `expected skipped=learning_disabled, got ${r.skipped}`);
+    assert(Array.isArray(r.top) && r.top.length === 0, 'top must be empty array');
+    assert(saved === 0, `expected 0 memory writes, got ${saved}`);
+  } finally {
+    process.env.LEARNING_ENABLED = prior;
+  }
+
+  // aggregateCombos math sanity
+  const combos = aggregateCombos([
+    { event_type: 'sent',   niche: 'roofing', metro: 'houston' },
+    { event_type: 'sent',   niche: 'roofing', metro: 'houston' },
+    { event_type: 'replied',niche: 'roofing', metro: 'houston' },
+  ]);
+  assert(combos.length === 1,                         'one combo bucket');
+  assert(combos[0].sent === 2 && combos[0].replied === 1, 'sent/replied counted');
+  assert(Math.abs(combos[0].reply_rate - 0.5) < 1e-9, `reply_rate 0.5, got ${combos[0].reply_rate}`);
+});
+
+// ── Test 12 — /pixel/:leadId.gif + webhooks wired BEFORE authMiddleware ──
+await test('index.js registers /pixel/:leadId.gif + webhooks BEFORE app.use(/api, authMiddleware)', async () => {
+  // Pure source-level check — importing index.js would boot the HTTP
+  // listener, which is exactly what we want to avoid in unit tests.
+  const fs = await import('node:fs');
+  const url = new URL('../index.js', import.meta.url);
+  const src = fs.readFileSync(url, 'utf8');
+
+  const pixelIdx  = src.indexOf("app.get('/pixel/:leadId.gif'");
+  const ghlIdx    = src.indexOf("app.post('/webhook/ghl-stage'");
+  const bounceIdx = src.indexOf("app.post('/webhook/smtp-bounce'");
+  const authIdx   = src.indexOf("app.use('/api', authMiddleware)");
+
+  assert(pixelIdx > 0,                          'pixel endpoint must be declared');
+  assert(ghlIdx > 0,                            'ghl-stage webhook must be declared');
+  assert(bounceIdx > 0,                         'smtp-bounce webhook must be declared');
+  assert(authIdx > 0,                           'authMiddleware line not found');
+  assert(pixelIdx  < authIdx,                   'pixel endpoint MUST precede authMiddleware');
+  assert(ghlIdx    < authIdx,                   'ghl-stage webhook MUST precede authMiddleware');
+  assert(bounceIdx < authIdx,                   'smtp-bounce webhook MUST precede authMiddleware');
+
+  // 1x1 GIF sanity: the hardcoded base64 constant decodes to a valid 35-43 byte GIF
+  const gifMatch = src.match(/const TRANSPARENT_GIF = Buffer\.from\(\s*'([^']+)'/);
+  assert(gifMatch && gifMatch[1].length > 20, 'TRANSPARENT_GIF base64 constant must exist');
+  const decoded = Buffer.from(gifMatch[1], 'base64');
+  assert(decoded.length >= 35 && decoded.length <= 60, `GIF bytes length sanity (got ${decoded.length})`);
+  assert(decoded.slice(0,3).toString() === 'GIF', 'GIF header byte check (GIF8)');
+});
+
+// ── Test 13 — Angela prompt enforces Spanish-only (regression guard) ──
+await test('Angela system prompt retains "100% en español" / "cero inglés" rule', () => {
+  const p = angela.systemPrompt || '';
+  const hasSpanishOnly = /español/i.test(p) && /(cero\s+ingl[eé]s|zero\s+english|100%\s+en\s+espa)/i.test(p);
+  assert(hasSpanishOnly, 'Angela prompt MUST keep the Spanish-only guarantee');
 });
 
 // ─────────────────────────────────────────────────────────────

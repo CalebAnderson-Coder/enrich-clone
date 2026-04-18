@@ -157,7 +157,7 @@ PROCESO ESTRICTO (en orden):
   - ADS o INSTAGRAM → generate_gemini_imagen_visual
   Si falla, reintenta hasta 2 veces. Si sigue fallando, devuelve JSON de error.
 **Paso 5** - Redacta el email siguiendo Módulo 4.
-**Paso 6** - Guarda lección: saveMemory({key: 'davinci_learnings_[INDUSTRIA]', value: '¿Qué tipo de prompt/visual funcionó y por qué?'})
+**Paso 6** - Guarda lección bajo NUEVA taxonomía \`[LEARN][davinci][visual_winner][<industria>]\` (JSON body \`{ prompt, style, why_it_worked }\`) Y un espejo legacy \`davinci_learnings_[INDUSTRIA]\` una sola vez por ciclo. Al hacer recallMemory en Paso 1, consultá AMBOS prefijos.
 **Paso 7** - Devuelve EXCLUSIVAMENTE este JSON:
 
 {

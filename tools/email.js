@@ -10,8 +10,26 @@ import { createClient } from '@supabase/supabase-js';
 import { sendEmailInputSchema, sendBatchEmailsInputSchema } from '../lib/schemas.js';
 import { withRetry } from '../lib/resilience.js';
 import { logger } from '../lib/logger.js';
+import { logOutreachEvent, LEARNING_ENABLED } from './outreachEvents.js';
 import dotenv from 'dotenv';
 dotenv.config();
+
+// ── Pixel injection (learning-loop open tracking) ───────────
+// Returns html with a transparent 1x1 <img> embedded before </body>.
+// Only active when LEARNING_ENABLED=true AND PIXEL_BASE_URL is set.
+// Silent no-op otherwise — HTML passes through untouched.
+function injectOpenPixel(html, { leadId }) {
+  if (!LEARNING_ENABLED()) return html;
+  const base = process.env.PIXEL_BASE_URL
+            || process.env.FRONTEND_URL
+            || process.env.RENDER_EXTERNAL_URL
+            || '';
+  if (!base || !leadId || typeof html !== 'string' || html.length === 0) return html;
+  const pixel = `<img src="${base.replace(/\/$/, '')}/pixel/${leadId}.gif" width="1" height="1" alt="" style="display:block;border:0;" />`;
+  return html.includes('</body>')
+    ? html.replace('</body>', `${pixel}</body>`)
+    : html + pixel;
+}
 
 const supabaseUrl = process.env.SUPABASE_URL;
 const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_SERVICE_KEY || process.env.SUPABASE_ANON_KEY || process.env.VITE_SUPABASE_ANON_KEY;
@@ -291,7 +309,18 @@ async function handlePostSendActions(to) {
 
     if (lead) {
       // 2. Sync to GHL
-      await syncToGHL(to, lead);
+      const ghlOk = await syncToGHL(to, lead);
+
+      // Learning loop: channel=ghl, event=sent on successful sync.
+      if (ghlOk) {
+        logOutreachEvent({
+          leadId:   lead.id,
+          brandId:  lead.brand_id,
+          channel:  'ghl',
+          eventType: 'sent',
+          metadata: { to },
+        }).catch(() => {});
+      }
 
       // 3. Update campaign_enriched_data and mark as SENT
       await supabase
@@ -314,7 +343,7 @@ async function handlePostSendActions(to) {
 }
 
 // ── Core sendMail helper ──────────────────────────────────────
-async function sendMail({ to, subject, html_body, from_name }) {
+async function sendMail({ to, subject, html_body, from_name, lead_id, brand_id }) {
   const smtpUser   = process.env.SMTP_USER;
   const fromAddr   = smtpUser || process.env.RESEND_FROM_EMAIL || 'onboarding@resend.dev';
   const senderName = from_name
@@ -322,47 +351,111 @@ async function sendMail({ to, subject, html_body, from_name }) {
     || 'Ángela · Empírika Digital';
   const fromField  = `"${senderName}" <${fromAddr}>`;
 
-  let finalResult = null;
+  // Resolve lead + brand context so we can (a) inject the open pixel
+  // and (b) log outreach events when LEARNING_ENABLED=true. Best-effort
+  // lookup — if the lead can't be resolved we still send the email.
+  let resolvedLeadId  = lead_id || null;
+  let resolvedBrandId = brand_id || null;
+  if (LEARNING_ENABLED() && supabase && (!resolvedLeadId || !resolvedBrandId)) {
+    try {
+      const { data: leadRow } = await supabase
+        .from('leads')
+        .select('id, brand_id')
+        .eq('email_address', to)
+        .limit(1)
+        .maybeSingle();
+      if (leadRow) {
+        resolvedLeadId  = resolvedLeadId  || leadRow.id;
+        resolvedBrandId = resolvedBrandId || leadRow.brand_id;
+      }
+    } catch { /* swallow — pixel injection just skips */ }
+  }
 
-  // Priority 1: Gmail SMTP — with retry for transient failures
-  if (_transporter) {
-    const info = await withRetry(
-      () => _transporter.sendMail({
-        from:    fromField,
-        to:      [to],
-        subject,
-        html:    html_body,
-      }),
-      { maxRetries: 3, baseDelayMs: 1000, label: 'SMTP-send' }
-    );
-    finalResult = { status: 'sent', email_id: info.messageId, to, subject, transport: 'smtp' };
-  }
-  // Priority 2: Resend API — with retry
-  else if (process.env.RESEND_API_KEY) {
-    const apiKey = process.env.RESEND_API_KEY;
-    const res  = await withRetry(
-      () => fetch('https://api.resend.com/emails', {
-        method:  'POST',
-        headers: { 'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
-        body:    JSON.stringify({ from: fromField, to: [to], subject, html: html_body }),
-      }),
-      { maxRetries: 2, baseDelayMs: 1000, label: 'Resend-send' }
-    );
-    const data = await res.json();
-    if (data.id) {
-      finalResult = { status: 'sent', email_id: data.id, to, subject, transport: 'resend' };
-    } else {
-      return { status: 'error', error: data };
+  const finalHtml = injectOpenPixel(html_body || '', { leadId: resolvedLeadId });
+
+  let finalResult = null;
+  let sendError   = null;
+
+  try {
+    // Priority 1: Gmail SMTP — with retry for transient failures
+    if (_transporter) {
+      const info = await withRetry(
+        () => _transporter.sendMail({
+          from:    fromField,
+          to:      [to],
+          subject,
+          html:    finalHtml,
+        }),
+        { maxRetries: 3, baseDelayMs: 1000, label: 'SMTP-send' }
+      );
+      finalResult = { status: 'sent', email_id: info.messageId, to, subject, transport: 'smtp' };
     }
+    // Priority 2: Resend API — with retry
+    else if (process.env.RESEND_API_KEY) {
+      const apiKey = process.env.RESEND_API_KEY;
+      const res  = await withRetry(
+        () => fetch('https://api.resend.com/emails', {
+          method:  'POST',
+          headers: { 'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+          body:    JSON.stringify({ from: fromField, to: [to], subject, html: finalHtml }),
+        }),
+        { maxRetries: 2, baseDelayMs: 1000, label: 'Resend-send' }
+      );
+      const data = await res.json();
+      if (data.id) {
+        finalResult = { status: 'sent', email_id: data.id, to, subject, transport: 'resend' };
+      } else {
+        sendError = data;
+      }
+    }
+    // Priority 3: MOCK
+    else {
+      logger.info('MOCK email', { to, subject });
+      finalResult = {
+        status: 'mock_sent',
+        note:   'No email transport configured. Email logged but not sent.',
+        to, subject,
+      };
+    }
+  } catch (err) {
+    sendError = err;
   }
-  // Priority 3: MOCK
-  else {
-    logger.info('MOCK email', { to, subject });
-    finalResult = {
-      status: 'mock_sent',
-      note:   'No email transport configured. Email logged but not sent.',
-      to, subject,
-    };
+
+  // ── Learning loop event logging (silent-fail) ─────────────
+  if (finalResult && (finalResult.status === 'sent' || finalResult.status === 'mock_sent')) {
+    if (resolvedBrandId) {
+      logOutreachEvent({
+        leadId:    resolvedLeadId,
+        brandId:   resolvedBrandId,
+        channel:   'email',
+        eventType: 'sent',
+        metadata:  { to, subject, transport: finalResult.transport || 'mock' },
+        messageId: finalResult.email_id || null,
+      }).catch(() => {});
+    }
+  } else if (sendError) {
+    if (resolvedBrandId) {
+      const errMsg = sendError?.message || (typeof sendError === 'object' ? JSON.stringify(sendError).slice(0, 400) : String(sendError));
+      logOutreachEvent({
+        leadId:    resolvedLeadId,
+        brandId:   resolvedBrandId,
+        channel:   'email',
+        eventType: 'failed',
+        metadata:  { to, subject, error: errMsg },
+      }).catch(() => {});
+    }
+    // 5xx / bounce-like error → stamp BOUNCED so the legacy bounce-rate
+    // fallback in lib/guardrails.js still trips the breaker when
+    // outreach_events has no data yet.
+    if (isBounceLikeError(sendError) && supabase && resolvedLeadId) {
+      try {
+        await supabase
+          .from('campaign_enriched_data')
+          .update({ outreach_status: 'BOUNCED' })
+          .eq('prospect_id', resolvedLeadId);
+      } catch { /* best-effort */ }
+    }
+    return { status: 'error', error: sendError?.message || sendError };
   }
 
   // Once mail is sent successfully or mocked => trigger GHL logic
@@ -371,6 +464,16 @@ async function sendMail({ to, subject, html_body, from_name }) {
   }
 
   return finalResult;
+}
+
+// Heuristic for 5xx / hard-bounce style failures. We do not want
+// transient SMTP 4xx to poison the breaker.
+function isBounceLikeError(err) {
+  if (!err) return false;
+  const code = err?.responseCode || err?.statusCode || err?.status;
+  if (Number.isFinite(code) && code >= 500 && code < 600) return true;
+  const msg = String(err?.message || err?.error || '').toLowerCase();
+  return /bounce|undeliverable|mailbox\s+unavailable|5\.\d\.\d|no\s+such\s+user|recipient\s+rejected/.test(msg);
 }
 
 // ── Tool: send_email ──────────────────────────────────────────

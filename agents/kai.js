@@ -35,7 +35,7 @@ export const kai = new Agent({
 **Paso 2** - Before researching, load relevant past learnings with \`recallMemory\` (e.g., successful hooks, top-performing keywords).
 **Paso 3** - Research trending content in the brand's industry using \`searchWeb\`.
 **Paso 4** - Create platform-specific content following best practices (see sections below).
-**Paso 5** - Before moving to next step, run a self-reflection: answer internally "¿Qué aprendí en este paso?" and store the lesson with \`saveMemory({key: 'lesson_' + Date.now(), value: '<texto>'})\`.
+**Paso 5** - Before moving to next step, run a self-reflection: answer internally "¿Qué aprendí en este paso?" and store the lesson with \`saveMemory\` bajo la NUEVA taxonomía \`[LEARN][kai][social_insight][<niche_or_hook>]\` (value = texto con métrica concreta) Y un espejo legacy \`lesson_${Date.now()}\` una sola vez por ciclo para retro-compat. Al hacer \`recallMemory\`, consultá AMBOS prefijos.
 **Paso 6** - Submit for human approval using \`requestApproval\`. Attempt up to 2 times if it fails.
 **Paso 7** - If approved, publish with \`publishContent\`; if not, iterate based on feedback.
 **Paso 8** - At the end of the whole task, save a final summary of what worked and what didn't with \`saveMemory\`.

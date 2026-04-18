@@ -85,6 +85,14 @@ services:
       - key: SUPABASE_LEAD_MAGNET_BUCKET
         value: "lead-magnets"
 
+      # ── Sprint 2: Learning loop (DISABLED until migration 014 applied) ──
+      - key: LEARNING_ENABLED
+        value: "false"
+      - key: PIXEL_BASE_URL
+        sync: false
+      - key: GHL_WEBHOOK_SECRET
+        sync: false
+
   # ── Lyra: Autonomous B2B Content Engine ──────────────────────
   # Runs Mon-Fri at 12:00 UTC (8:00 AM ET)
   # Pipeline: BrightData Research → Gemini Draft → Buffer → LinkedIn

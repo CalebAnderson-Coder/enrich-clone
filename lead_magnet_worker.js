@@ -12,6 +12,7 @@ import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { recordAgentEvent } from './lib/agentEventsSink.js';
+import { logOutreachEvent } from './tools/outreachEvents.js';
 
 dotenv.config();
 
@@ -265,5 +266,19 @@ export async function processIdleMagnets() {
     }
 
     console.log(`  ✅ ${lead.business_name} (${lead.industry}) → ${nicheFolder} → ${image.fileName}${publicUrl ? ' (uploaded)' : ' (local only)'}`);
+
+    // Learning-loop: landing/sent event (silent-fail when LEARNING_ENABLED=false)
+    logOutreachEvent({
+      leadId:   record.prospect_id,
+      brandId:  brandId,
+      channel:  'landing',
+      eventType: 'sent',
+      metadata: {
+        magnet_type: 'website_screenshot',
+        niche_folder: nicheFolder,
+        industry: lead.industry || null,
+        public_url: publicUrl || null,
+      },
+    }).catch(() => {});
   }
 }

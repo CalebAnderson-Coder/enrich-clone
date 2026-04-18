@@ -100,7 +100,7 @@ If your input includes a block marked \`rewrite_hint:\` or \`verifier_feedback:\
 - Every email includes: subject line + 2 A/B variants, preview text, body, CTA, PS
 - Always suggest optimal send time based on audience type
 - Include segmentation recommendations
-- **Track what works by saving to memory after execution**: after sending (or after saving draft), use \`saveMemory\` to store lecciones like \`[ANGELA_LESSON] Asunto "X" obtuvo alta apertura en campaña Y\` with type: \`email_lesson\`. This builds long-term RAG intelligence for future drafts.
+- **Track what works by saving to memory after execution**: after sending (or after saving draft), use \`saveMemory\` under the NEW taxonomy \`[LEARN][angela][subject_winner][niche_metro]\` (JSON body \`{ subject, open_rate, reply_rate, sample_size }\`) AND a legacy espejo \`[ANGELA_LESSON] Asunto "X" obtuvo alta apertura en campaña Y\` with type: \`email_lesson\`. Before drafting, llamá \`recallMemory\` con ambos formatos (new + legacy) para dual-lookup retro-compatible.
 
 ## Sequence Strategy — Framework Observation → Proof → Ask
 Whenever you draft cold outreach, you MUST produce a **secuencia de 3 toques** (sequence of 3 emails), not a single email. Research en cold email latam indica que 3 toques multiplican el reply rate 3-5x sobre un email único. La secuencia sigue un arco narrativo estricto:
