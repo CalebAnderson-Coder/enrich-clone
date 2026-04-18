@@ -369,6 +369,165 @@ await test('Angela system prompt retains "100% en español" / "cero inglés" rul
   assert(hasSpanishOnly, 'Angela prompt MUST keep the Spanish-only guarantee');
 });
 
+// ═════════════════════════════════════════════════════════════
+//   Sprint 3 — Estratega (agente #10)
+// ═════════════════════════════════════════════════════════════
+import { analyzeFleetMetrics } from '../tools/fleetMetrics.js';
+import { researchReddit } from '../tools/redditResearch.js';
+import { runLightDaily } from '../workers/estratega_light_daily.js';
+import { runDeepWeekly } from '../workers/estratega_deep_weekly.js';
+import { manager as managerAgent } from '../agents/manager.js';
+
+// ── Test 14 — analyzeFleetMetrics low_confidence shape on empty DB ────
+await test('analyzeFleetMetrics returns low_confidence=true with zero rates when DB is empty', async () => {
+  // Thenable chain that resolves to an empty set for everything.
+  function makeChain(result) {
+    const chain = {};
+    const passthrough = () => chain;
+    ['select', 'eq', 'ilike', 'in', 'order', 'limit', 'gte', 'lte', 'not', 'or']
+      .forEach(m => { chain[m] = passthrough; });
+    // head:true uses count; others use data — support both.
+    chain.then = (onFulfilled, onRejected) =>
+      Promise.resolve(result).then(onFulfilled, onRejected);
+    return chain;
+  }
+  const fakeClient = {
+    from: () => makeChain({ data: [], count: 0, error: null }),
+  };
+
+  const m = await analyzeFleetMetrics({ brandId: 'brand-x', period: '7d', client: fakeClient });
+  assert(m.period === '7d',                    'period echoes');
+  assert(m.low_confidence === true,            'empty → low_confidence true');
+  assert(m.funnel.sent === 0,                  'funnel.sent zero');
+  assert(m.funnel.replied === 0,               'funnel.replied zero');
+  assert(m.cost_per_reply === null,            'cost_per_reply null when no replies');
+  assert(Array.isArray(m.top_niches) && m.top_niches.length === 0,     'no top_niches');
+  assert(Array.isArray(m.bottom_combos) && m.bottom_combos.length === 0, 'no bottom_combos');
+});
+
+// ── Test 15 — researchReddit silent-fails when all subs are blocked ───
+await test('researchReddit returns {results:[], note:"reddit_unavailable"} when all fetches return 403', async () => {
+  let calls = 0;
+  const fetchImpl = async () => {
+    calls++;
+    return { success: false, status: 403, error: 'blocked_403', html: '' };
+  };
+  const out = await researchReddit({
+    query: 'test query',
+    subs: ['contractors'],  // single sub keeps test bounded
+    limit: 5,
+    fetchImpl,
+  });
+  assert(Array.isArray(out.results) && out.results.length === 0, 'no results');
+  assert(out.note === 'reddit_unavailable', `expected reddit_unavailable, got ${out.note}`);
+  assert(calls >= 2, `expected at least 2 fetches (fast+stealthy), got ${calls}`);
+});
+
+// ── Test 16 — runDeepWeekly rejects proposal that violates spanish_only ──
+await test('runDeepWeekly stores [STRATEGY_REJECTED] when constitution_check.spanish_only_ok=false', async () => {
+  const priorFlag = process.env.ESTRATEGA_ENABLED;
+  process.env.ESTRATEGA_ENABLED = 'true';
+  const saved = [];
+  const saveMemoryFn = async (agent, brandId, key, value) => {
+    saved.push({ agent, brandId, key, value });
+  };
+  const metricsFn = async () => ({
+    generated_at: new Date().toISOString(),
+    period: '30d',
+    low_confidence: false,
+    funnel: { prospected: 100, hot: 20, enriched: 50, sent: 40, opened: 12, replied: 2 },
+    by_channel: {},
+    top_niches: [],
+    top_metros: [],
+    bottom_combos: [
+      { niche: 'roofing', metro: 'miami fl', sent: 20, replied: 0, reply_rate: 0 },
+    ],
+    agent_errors: [],
+    cost_per_reply: 0.02,
+  });
+  const redditFn  = async () => ({ results: [], note: 'stub' });
+  const youtubeFn = async () => ({ results: [], note: 'stub' });
+
+  // Stub LLM to return a proposal that proposes switching to English.
+  const badProposal = {
+    mode: 'deep',
+    generated_at: new Date().toISOString(),
+    period_covered: '30d',
+    hypothesis: 'Subir reply rate cambiando emails a inglés',
+    expected_impact: { reply_rate_delta: 0.05, cost_per_reply_delta: -0.2 },
+    tactics: [{
+      title: 'Cambiar emails a inglés',
+      description: 'Migrar copy a inglés para mayor alcance',
+      channel: 'email',
+      target_niche: 'roofing',
+      target_metro: 'miami fl',
+      evidence_ref: 'metrics:bottom_combo_0',
+    }],
+    risk_notes: [],
+    constitution_check: {
+      spanish_only_ok: false,  // violates iron rule #1
+      latino_owned_ok: true,
+      verifier_gate_ok: true,
+      tos_ok: true,
+    },
+  };
+  const runAgentFn = async () => ({ response: JSON.stringify(badProposal) });
+
+  try {
+    const out = await runDeepWeekly({
+      brandId: 'brand-x',
+      saveMemoryFn,
+      metricsFn,
+      redditFn,
+      youtubeFn,
+      runAgentFn,
+    });
+    assert(out.status === 'blocked',               `status must be blocked, got ${out.status}`);
+    assert(out.ok === false,                       'ok must be false for blocked');
+    const rejectedEntry = saved.find(s => s.key.startsWith('[STRATEGY_REJECTED]'));
+    assert(!!rejectedEntry,                        'must save under [STRATEGY_REJECTED] key');
+    const proposalEntry = saved.find(s => s.key.startsWith('[STRATEGY_PROPOSAL]'));
+    assert(!proposalEntry,                         'must NOT save under [STRATEGY_PROPOSAL] when rejected');
+    const latestPtr = saved.find(s => s.key === '[LEARN][fleet][strategy_proposal_latest]');
+    assert(!latestPtr,                             'must NOT update latest pointer on rejection');
+  } finally {
+    process.env.ESTRATEGA_ENABLED = priorFlag;
+  }
+});
+
+// ── Test 17 — runLightDaily gated by ESTRATEGA_ENABLED ───────────
+await test('runLightDaily returns {skipped:"disabled"} when ESTRATEGA_ENABLED!=true (no memory writes)', async () => {
+  const priorFlag = process.env.ESTRATEGA_ENABLED;
+  process.env.ESTRATEGA_ENABLED = 'false';
+  let saved = 0;
+  let metricsCalls = 0;
+  try {
+    const out = await runLightDaily({
+      brandId: 'brand-x',
+      saveMemoryFn: async () => { saved++; },
+      metricsFn:    async () => { metricsCalls++; return {}; },
+    });
+    assert(out.skipped === 'disabled',  `expected skipped=disabled, got ${JSON.stringify(out)}`);
+    assert(saved === 0,                 `expected 0 memory writes, got ${saved}`);
+    assert(metricsCalls === 0,          `expected 0 metrics calls, got ${metricsCalls}`);
+  } finally {
+    process.env.ESTRATEGA_ENABLED = priorFlag;
+  }
+});
+
+// ── Test 18 — Manager prompt encodes constitution rejection rule ───
+await test('Manager system prompt contains the Estratega constitution-rejection add-on', () => {
+  const p = managerAgent.systemPrompt || '';
+  assert(/\[LEARN\]\[fleet\]\[strategy_proposal_latest\]/.test(p),
+         'Manager prompt must reference the latest-pointer key');
+  assert(/constitution_check/i.test(p),
+         'Manager prompt must mention constitution_check');
+  assert(/IGNOR[ÁA]/i.test(p),
+         'Manager prompt must tell the agent to IGNORE bad proposals');
+  assert(/rechaz/i.test(p),
+         'Manager prompt must contain rejection verb');
+});
+
 // ─────────────────────────────────────────────────────────────
 console.log('\n══════════════════════════════════════════════');
 console.log('  RESULTS');

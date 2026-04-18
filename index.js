@@ -19,6 +19,7 @@ import { scout } from './agents/scout.js';
 import { carlos } from './agents/carlos.js';
 import { davinci } from './agents/davinci.js';
 import { verifier } from './agents/verifier.js';
+import { estratega } from './agents/estratega.js';
 import { getPendingJobs, updateJobStatus, getActiveBrands, createJob, getJobById } from './lib/supabase.js';
 import { authMiddleware } from './lib/auth.js';
 import { getLeads, getLeadById, updateOutreachStatus, getLeadsStats, updateLeadOutreach } from './tools/database.js';
@@ -66,6 +67,7 @@ runtime.registerAgent(kai);
 runtime.registerAgent(carlos);
 runtime.registerAgent(davinci);
 runtime.registerAgent(verifier);
+runtime.registerAgent(estratega); // 🆕 Sprint 3: Estratega (agent #10)
 
 console.log(`🧠 Agent Runtime initialized with ${runtime.agents.size} agents`);
 console.log(`   Agents: ${Array.from(runtime.agents.keys()).join(', ')}`);

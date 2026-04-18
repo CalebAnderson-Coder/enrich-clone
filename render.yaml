@@ -93,6 +93,16 @@ services:
       - key: GHL_WEBHOOK_SECRET
         sync: false
 
+      # ── Sprint 3: Estratega (agente #10) — DISABLED por default ──
+      - key: ESTRATEGA_ENABLED
+        value: "false"
+      - key: ESTRATEGA_DAILY_HOUR_UTC
+        value: "23"
+      - key: ESTRATEGA_WEEKLY_DAY
+        value: "0"
+      - key: ESTRATEGA_WEEKLY_HOUR_UTC
+        value: "12"
+
   # ── Lyra: Autonomous B2B Content Engine ──────────────────────
   # Runs Mon-Fri at 12:00 UTC (8:00 AM ET)
   # Pipeline: BrightData Research → Gemini Draft → Buffer → LinkedIn

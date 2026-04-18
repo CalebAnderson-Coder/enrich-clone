@@ -24,6 +24,8 @@ import {
 } from '../lib/supabase.js';
 import { recordAgentEvent } from '../lib/agentEventsSink.js';
 import { runConsolidator } from '../workers/learning_consolidator.js';
+import { runLightDaily } from '../workers/estratega_light_daily.js';
+import { runDeepWeekly } from '../workers/estratega_deep_weekly.js';
 
 // ── Cycle definitions ────────────────────────────────────────
 export const CYCLES = Object.freeze([
@@ -31,6 +33,9 @@ export const CYCLES = Object.freeze([
   { hourUtc: 12, type: 'RADAR_ICP_PUSH' },
   { hourUtc: 18, type: 'ENRICH_BACKLOG' },
   { hourUtc: 23, type: 'REPORTE'        },
+  // Sprint 3: Estratega weekly deep cycle — only fires when dayOfWeekUtc matches.
+  // Sunday = 0 (Date.getUTCDay()). Gate ESTRATEGA_ENABLED is evaluated at run time.
+  { hourUtc: 12, type: 'STRATEGY_DEEP', dayOfWeekUtc: 0 },
 ]);
 
 const WINDOW_MS = 90_000;          // ±90s window around the exact hour
@@ -141,6 +146,36 @@ async function executeCycle(brandId, cycle) {
     } else if (cycle.type === 'REPORTE') {
       const rep = await runReport({ brandId });
       metadata.memory_key = rep.memory_key;
+      // Sprint 3: al cierre del REPORTE, si NO es domingo y el Estratega está
+      // habilitado, correr el light-daily del Estratega (7d metrics snapshot).
+      const isSundayUtc = new Date().getUTCDay() === 0;
+      if (!isSundayUtc && process.env.ESTRATEGA_ENABLED === 'true') {
+        try {
+          const light = await runLightDaily({ brandId });
+          metadata.estratega_light = {
+            ok: !!light?.ok,
+            skipped: light?.skipped || null,
+          };
+        } catch (err) {
+          metadata.estratega_light = { ok: false, error: err?.message };
+        }
+      }
+    } else if (cycle.type === 'STRATEGY_DEEP') {
+      if (process.env.ESTRATEGA_ENABLED !== 'true') {
+        metadata.skipped = 'estratega_disabled';
+      } else {
+        const deep = await runDeepWeekly({ brandId });
+        metadata.estratega_deep = {
+          ok: !!deep?.ok,
+          status: deep?.status || null,
+          skipped: deep?.skipped || null,
+          ymd: deep?.ymd || null,
+        };
+        if (deep && deep.ok === false && deep.error) {
+          status = 'error';
+          errMsg = deep.error;
+        }
+      }
     } else {
       status = 'error';
       errMsg = `unknown cycle type: ${cycle.type}`;
@@ -199,6 +234,8 @@ async function tick({ brandsProvider } = {}) {
   const now = new Date();
   for (const cycle of CYCLES) {
     if (!inHourWindow(cycle, now)) continue;
+    // Day-of-week filter (optional per cycle). Sunday=0.
+    if (Number.isInteger(cycle.dayOfWeekUtc) && now.getUTCDay() !== cycle.dayOfWeekUtc) continue;
 
     for (const brand of brands) {
       if (!brand?.id) continue;
