@@ -296,11 +296,12 @@ export async function pushDraftPhoneToGHL(prospect, { callScript = null, whatsap
   }
 }
 
-async function handlePostSendActions(to) {
-  if (!supabase) return;
+export async function handlePostSendActions(to, { client } = {}) {
+  const db = client || supabase;
+  if (!db) return;
   try {
     // 1. Find lead info
-    const { data: lead } = await supabase
+    const { data: lead } = await db
       .from('leads')
       .select('*')
       .eq('email_address', to)
@@ -323,16 +324,25 @@ async function handlePostSendActions(to) {
       }
 
       // 3. Update campaign_enriched_data and mark as SENT
-      await supabase
+      const sentAt = new Date().toISOString();
+      await db
         .from('campaign_enriched_data')
         .update({ ghl_tag: 'lead-automatizado', outreach_status: 'SENT' })
         .eq('prospect_id', lead.id);
 
       // 4. Mapear status en Leads Dashboard
-      await supabase
+      await db
         .from('leads')
         .update({ outreach_status: 'SENT' })
         .eq('id', lead.id);
+
+      // 5. Sync first_contact_date on first successful send (idempotent: only when NULL)
+      await db
+        .from('leads')
+        .update({ first_contact_date: sentAt })
+        .eq('id', lead.id)
+        .is('first_contact_date', null);
+      console.log('[dispatcher] synced first_contact_date', lead.id);
     } else {
       logger.warn('Lead not found in Supabase — doing basic GHL sync', { email: to });
       await syncToGHL(to, { business_name: 'Lead Desconocido' });
