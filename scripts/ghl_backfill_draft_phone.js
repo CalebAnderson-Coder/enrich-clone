@@ -153,8 +153,10 @@ function printSummary(results, label) {
   }
 
   // ── RESUME / ALL ──
-  if (RUN_RESUME) start = CANARY_SIZE; // skip the canary we already ran
-  const target = pending.slice(start);
+  // pending already excludes leads with ghl_contact_id, so we process everything.
+  // (Earlier versions sliced off CANARY_SIZE here, which dropped 3 leads when the
+  //  canary was already persisted — those leads are filtered out naturally now.)
+  const target = pending.slice(0);
   console.log(`⚡ Processing ${target.length} leads (DELAY ${DELAY_MS}ms each)\n`);
 
   const results = [];

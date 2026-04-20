@@ -1,65 +1,18 @@
 // ============================================================
 // tools/webResearch.js — Web research tools for agents
-// Uses BrightData → DuckDuckGo → Gemini Grounding fallback chain
+// Search chain: BrightData → DuckDuckGo. Gemini grounding is DISABLED
+// because it hallucinated URLs (2026-04-17 incident: 26 ghost domains
+// in Supabase, 10 pushed to GHL as fake contacts).
 // ============================================================
 
 import { Tool } from '../lib/AgentRuntime.js';
+import { scraplingFetch } from './scrapling.js';
 
-/**
- * Strategy 3 (last resort): Use Gemini's native Google Search Grounding
- * to perform a real-time search and return structured results.
- */
-async function searchWithGeminiGrounding(query, numResults = 5) {
-  const apiKey = process.env.GEMINI_API_KEY;
-  if (!apiKey) throw new Error('GEMINI_API_KEY not set');
-
-  const response = await fetch(
-    `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`,
-    {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        contents: [{ parts: [{ text: `Search for: ${query}\n\nReturn a JSON array of ${numResults} results with fields: title, description, url. Only return the JSON array, nothing else.` }] }],
-        tools: [{ google_search: {} }],
-        generationConfig: { temperature: 0.1 },
-      }),
-    }
-  );
-
-  if (!response.ok) {
-    const err = await response.text();
-    throw new Error(`Gemini API error (${response.status}): ${err}`);
-  }
-
-  const data = await response.json();
-  const text = data.candidates?.[0]?.content?.parts?.[0]?.text || '';
-
-  // Try to parse the JSON array from the response
-  const jsonMatch = text.match(/\[[\s\S]*\]/);
-  if (jsonMatch) {
-    try {
-      const results = JSON.parse(jsonMatch[0]);
-      return results.slice(0, numResults);
-    } catch {}
-  }
-
-  // Fallback: extract grounding metadata if direct parse fails
-  const groundingChunks = data.candidates?.[0]?.groundingMetadata?.groundingChunks || [];
-  if (groundingChunks.length > 0) {
-    return groundingChunks.slice(0, numResults).map(c => ({
-      title: c.web?.title || '',
-      description: '',
-      url: c.web?.uri || '',
-    }));
-  }
-
-  // Last resort: return text as single result so agent has SOMETHING to work with
-  if (text.length > 50) {
-    return [{ title: `Gemini search result for: ${query}`, description: text.slice(0, 500), url: '' }];
-  }
-
-  throw new Error('Gemini grounding returned no usable results');
-}
+// DISABLED: Gemini grounding fallback was the root cause of the 2026-04-17
+// ghost-domain incident. The model hallucinated URLs matching the pattern
+// "<latino-surname><niche><city>.com" that didn't resolve in DNS. We keep
+// the function body removed intentionally — do not restore without adding
+// a post-response DNS reachability filter to every returned URL.
 
 export const searchWeb = new Tool({
   name: 'search_web',
@@ -162,19 +115,14 @@ export const searchWeb = new Tool({
         console.log(`  ⚠️ [webResearch] DuckDuckGo failed: ${ddgErr.message}`);
       }
 
-      // Strategy 3: Gemini Google Search Grounding (most reliable, uses Gemini key we already have)
-      console.log(`  🤖 [webResearch] Using Gemini Search Grounding for: "${query}"`);
-      try {
-        const geminiResults = await searchWithGeminiGrounding(query, num_results);
-        if (geminiResults && geminiResults.length > 0) {
-          console.log(`  ✅ [webResearch] Gemini Grounding returned ${geminiResults.length} results`);
-          return JSON.stringify({ results: geminiResults });
-        }
-      } catch (geminiErr) {
-        console.log(`  ⚠️ [webResearch] Gemini Grounding failed: ${geminiErr.message}`);
-      }
-
-      return JSON.stringify({ error: "No results found for query across all search providers." });
+      // Strategy 3 (Gemini grounding) REMOVED — see header comment.
+      // When Bright Data + DDG both fail, we return an explicit error so
+      // downstream agents do NOT invent URLs to fill the gap.
+      return JSON.stringify({
+        error: 'SEARCH_UNAVAILABLE',
+        detail: 'Bright Data + DuckDuckGo both failed. Gemini fallback disabled to prevent URL hallucination. Agent MUST NOT fabricate results — skip this query.',
+        query,
+      });
 
     } catch (err) {
       return `Search failed: ${err.message}`;
@@ -184,61 +132,44 @@ export const searchWeb = new Tool({
 
 export const fetchPage = new Tool({
   name: 'fetch_webpage',
-  description: 'Fetch and extract text content from a webpage URL using Firecrawl. Returns clean Markdown content for analysis.',
+  description: 'Fetch and extract text content from a webpage URL using Scrapling (stealth-capable local scraper). Returns cleaned page text for analysis. Use stealthy=true for sites behind Cloudflare/WAF.',
   parameters: {
     type: 'object',
     properties: {
       url: { type: 'string', description: 'Full URL to fetch' },
+      stealthy: { type: 'boolean', description: 'Use headless browser + stealth patches for WAF-protected sites (slower). Default false.' },
     },
     required: ['url'],
   },
   fn: async (args) => {
-    let { url } = args;
+    let { url, stealthy = false } = args;
 
     try {
-      url = url.trim();
+      url = String(url || '').trim();
       if (!url.startsWith('http://') && !url.startsWith('https://')) {
         url = 'https://' + url;
       }
+      try { new URL(url); } catch { return `Error: URL inválida proporcionada (${url}).`; }
 
-      try {
-        new URL(url);
-      } catch (e) {
-        return `Error: URL inválida proporcionada (${url}).`;
+      console.log(`  🌐 [webResearch] Scraping via Scrapling (${stealthy ? 'stealthy' : 'fast'}): ${url}`);
+
+      const result = await scraplingFetch(url, { stealthy, timeoutMs: stealthy ? 45000 : 20000 });
+
+      if (!result.success) {
+        // If fast mode failed with what looks like a WAF block, retry stealthy once.
+        const looksBlocked = /403|503|cloudflare|captcha|blocked/i.test(result.error || '');
+        if (!stealthy && looksBlocked) {
+          console.log(`  🛡️ [webResearch] Retrying stealthy after WAF-like error: ${result.error}`);
+          const retry = await scraplingFetch(url, { stealthy: true, timeoutMs: 45000 });
+          if (retry.success) return (retry.text || '').slice(0, 8000);
+          return `Scrapling failed (fast + stealthy): ${retry.error || 'unknown'}`;
+        }
+        return `Scrapling error: ${result.error || 'unknown'}`;
       }
 
-      const apiKey = process.env.FIRECRAWL_API_KEY;
-      if (!apiKey) {
-        return 'Error: FIRECRAWL_API_KEY is not configured in the environment.';
-      }
-
-      console.log(`  🌐 [webResearch] Scraping website with Firecrawl: ${url}`);
-      const response = await fetch('https://api.firecrawl.dev/v1/scrape', {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${apiKey}`,
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({
-          url: url,
-          formats: ['markdown']
-        })
-      });
-
-      if (!response.ok) {
-        const errorData = await response.text();
-        return `Firecrawl API error (${response.status}): ${errorData}`;
-      }
-
-      const data = await response.json();
-      
-      if (data.success && data.data && data.data.markdown) {
-        const markdown = data.data.markdown.trim();
-        return markdown.slice(0, 8000); 
-      } else {
-        return 'Page content could not be extracted by Firecrawl.';
-      }
-
+      const text = (result.text || '').trim();
+      if (!text) return 'Page content could not be extracted (empty text).';
+      return text.slice(0, 8000);
     } catch (err) {
       return `Failed to fetch ${url}: ${err.message}`;
     }

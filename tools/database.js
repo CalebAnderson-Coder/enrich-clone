@@ -166,6 +166,41 @@ export const saveLead = new Tool({
       }
     }
 
+    // ── GATE: Dedup by normalized business_name + metro ────
+    // Kills the "Garcia Landscaping × 3 ghost domains" retry pattern:
+    // LLM loops with variant URLs until one passes DNS, polluting the table
+    // with N copies of the same business. Name+metro match catches them all.
+    if (supabase && args.business_name && args.metro_area) {
+      const normName = args.business_name.toLowerCase().trim().replace(/[^a-z0-9]+/g, ' ').replace(/\s+/g, ' ').trim();
+      const normMetro = args.metro_area.toLowerCase().trim().replace(/[^a-z0-9]+/g, ' ').replace(/\s+/g, ' ').trim();
+      if (normName.length >= 3) {
+        const { data: twins } = await supabase
+          .from('leads')
+          .select('id, business_name, metro_area, website')
+          .eq('brand_id', currentBrandId)
+          .ilike('business_name', `%${normName.split(' ')[0]}%`)
+          .limit(20);
+
+        const match = (twins || []).find(t => {
+          const tn = (t.business_name || '').toLowerCase().trim().replace(/[^a-z0-9]+/g, ' ').replace(/\s+/g, ' ').trim();
+          const tm = (t.metro_area || '').toLowerCase().trim().replace(/[^a-z0-9]+/g, ' ').replace(/\s+/g, ' ').trim();
+          return tn === normName && tm === normMetro;
+        });
+
+        if (match) {
+          console.log(`  🔄 [DEDUP-NAME] "${args.business_name}" (${args.metro_area}) already exists as id=${match.id} website=${match.website || 'null'}. Lead SKIPPED.`);
+          return JSON.stringify({
+            success: false,
+            rejected: true,
+            reason: 'DUPLICATE_NAME_METRO',
+            existing_id: match.id,
+            existing_name: match.business_name,
+            existing_website: match.website,
+          });
+        }
+      }
+    }
+
     const leadData = {
       business_name: args.business_name,
       owner_name: args.owner_name || null,

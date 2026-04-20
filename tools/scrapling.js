@@ -21,14 +21,58 @@ const DEFAULT_TIMEOUT_MS = 35000;
  * When stealthy=true, uses StealthyFetcher (Playwright + stealth patches) — slower
  * but passes Cloudflare/WAF in most cases. Default false is 10x faster HTTP fetch.
  */
+// ── Node-only fallback for environments without Python/scrapling ──
+// Uses native fetch with a desktop UA; no JS rendering. Good enough for
+// ~80% of small-business sites whose homepage + /contact are static HTML.
+async function nodeFetchFallback(url, timeoutMs) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const resp = await fetch(url, {
+      signal: controller.signal,
+      redirect: 'follow',
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Accept': 'text/html,application/xhtml+xml',
+      },
+    });
+    clearTimeout(timer);
+    if (!resp.ok && !(resp.status >= 300 && resp.status < 400)) {
+      return { success: false, url, status: resp.status, error: `http_${resp.status}` };
+    }
+    const html = await resp.text();
+    const text = html.replace(/<script[\s\S]*?<\/script>/gi, ' ')
+                     .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+                     .replace(/<[^>]+>/g, ' ')
+                     .replace(/\s+/g, ' ')
+                     .trim();
+    return { success: true, url, status: resp.status, html, text };
+  } catch (err) {
+    clearTimeout(timer);
+    return { success: false, url, error: `node_fetch_failed: ${err.message}` };
+  }
+}
+
+// Cache the result of the Python probe: undefined=unknown, true=ok, false=missing.
+let PY_AVAILABLE;
+
 export async function scraplingFetch(url, { stealthy = false, timeoutMs = DEFAULT_TIMEOUT_MS } = {}) {
+  // Skip Python path entirely if we've already proven it's unavailable.
+  if (PY_AVAILABLE === false) return nodeFetchFallback(url, timeoutMs);
+
   return new Promise((resolve) => {
     const payload = JSON.stringify({ url, stealthy, timeout_ms: timeoutMs });
 
-    const proc = spawn(PY, ['-u', SCRIPT_PATH], {
-      stdio: ['pipe', 'pipe', 'pipe'],
-      windowsHide: true,
-    });
+    let proc;
+    try {
+      proc = spawn(PY, ['-u', SCRIPT_PATH], {
+        stdio: ['pipe', 'pipe', 'pipe'],
+        windowsHide: true,
+      });
+    } catch (err) {
+      PY_AVAILABLE = false;
+      return resolve(nodeFetchFallback(url, timeoutMs));
+    }
 
     let stdout = '';
     let stderr = '';
@@ -42,18 +86,33 @@ export async function scraplingFetch(url, { stealthy = false, timeoutMs = DEFAUL
     proc.stdout.on('data', (chunk) => { stdout += chunk.toString('utf8'); });
     proc.stderr.on('data', (chunk) => { stderr += chunk.toString('utf8'); });
 
-    proc.on('error', (err) => {
+    proc.on('error', async (err) => {
       clearTimeout(killer);
+      // ENOENT / EACCES → Python not on PATH. Mark unavailable so we skip future spawns.
+      if (err.code === 'ENOENT' || err.code === 'EACCES') {
+        PY_AVAILABLE = false;
+        return resolve(await nodeFetchFallback(url, timeoutMs));
+      }
       resolve({ success: false, url, error: `spawn_failed: ${err.message}` });
     });
 
-    proc.on('close', () => {
+    proc.on('close', async (code) => {
       clearTimeout(killer);
       if (killed) return resolve({ success: false, url, error: 'timeout' });
       const trimmed = stdout.trim();
       if (!trimmed) {
+        // Empty stdout → Python wasn't found, or scrapling module isn't installed,
+        // or Python exited before reading stdin. Any of these means we can't use
+        // the Python path on this host — flip the probe and fall back permanently.
+        const pyMissing = code !== 0 || /ModuleNotFoundError|No module named|not recognized|command not found/i.test(stderr);
+        if (pyMissing) {
+          PY_AVAILABLE = false;
+          return resolve(await nodeFetchFallback(url, timeoutMs));
+        }
         return resolve({ success: false, url, error: `no_stdout. stderr=${stderr.slice(0, 300)}` });
       }
+      // Mark Python as available on first successful run.
+      if (PY_AVAILABLE === undefined) PY_AVAILABLE = true;
       // stdout may contain multiple JSON lines — take the last parseable one
       const lines = trimmed.split(/\r?\n/).filter(Boolean).reverse();
       for (const line of lines) {

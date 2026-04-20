@@ -175,13 +175,22 @@ app.post('/webhook/ghl-stage', express.raw({ type: '*/*', limit: '200kb' }), asy
     return res.status(204).end();
   }
   try {
-    const signature = String(req.headers['x-ghl-signature'] || req.headers['x-signature'] || '');
-    const rawBody   = Buffer.isBuffer(req.body) ? req.body : Buffer.from(JSON.stringify(req.body || {}));
-    const expected  = crypto.createHmac('sha256', secret).update(rawBody).digest('hex');
-    const sigBuf    = Buffer.from(signature);
-    const expBuf    = Buffer.from(expected);
-    if (sigBuf.length !== expBuf.length || !crypto.timingSafeEqual(sigBuf, expBuf)) {
-      return res.status(401).json({ error: 'invalid_signature' });
+    const rawBody = Buffer.isBuffer(req.body) ? req.body : Buffer.from(JSON.stringify(req.body || {}));
+
+    // GHL Workflows cannot compute HMAC in their webhook action, so we accept
+    // either a signature header OR a shared-secret via ?token=<secret> query
+    // param. The token is still the GHL_WEBHOOK_SECRET — rotating it rotates both.
+    const queryToken = String(req.query?.token || '');
+    const signature  = String(req.headers['x-ghl-signature'] || req.headers['x-signature'] || '');
+
+    const expected = crypto.createHmac('sha256', secret).update(rawBody).digest('hex');
+    const sigOk    = signature.length === expected.length &&
+                     crypto.timingSafeEqual(Buffer.from(signature), Buffer.from(expected));
+    const tokenOk  = queryToken.length === secret.length &&
+                     crypto.timingSafeEqual(Buffer.from(queryToken), Buffer.from(secret));
+
+    if (!sigOk && !tokenOk) {
+      return res.status(401).json({ error: 'invalid_signature_or_token' });
     }
 
     const payload = JSON.parse(rawBody.toString('utf8') || '{}');

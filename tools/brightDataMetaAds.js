@@ -22,7 +22,7 @@ async function checkAdLibrary(businessName, country, token) {
     body: JSON.stringify({
       url: searchUrl,
       format: 'raw',
-      zone: 'web_unlocker1',
+      zone: process.env.BRIGHTDATA_UNLOCKER_ZONE || 'mcp_unlocker',
     }),
   });
 

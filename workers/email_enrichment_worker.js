@@ -1,6 +1,6 @@
 // ============================================================
 // workers/email_enrichment_worker.js — Email Address Enrichment
-// Scrapes websites (homepage + /contact) via Firecrawl to find
+// Scrapes websites (homepage + /contact) via Scrapling to find
 // contact emails for leads that are missing email_address.
 // ============================================================
 
@@ -8,12 +8,9 @@ import dotenv from 'dotenv';
 dotenv.config();
 
 import { supabase } from '../lib/supabase.js';
+import { scraplingFetch } from '../tools/scrapling.js';
 
 // ── Config ───────────────────────────────────────────────────
-const FIRECRAWL_API_KEY = process.env.FIRECRAWL_API_KEY;
-if (!FIRECRAWL_API_KEY) {
-  console.warn('⚠️  [email_enrichment] FIRECRAWL_API_KEY not set — skipping run');
-}
 const BATCH_SIZE = 10;      // leads per batch
 const DELAY_MS  = 1500;     // delay between scrapes (rate limiting)
 const MAX_LEADS = parseInt(process.env.ENRICHMENT_MAX_LEADS || '500', 10);
@@ -82,32 +79,22 @@ function pickBestEmail(emails) {
   return emails.sort((a, b) => scoreEmail(b) - scoreEmail(a))[0];
 }
 
-// ── Firecrawl Scraper ────────────────────────────────────────
+// ── Scrapling Scraper (replaces Firecrawl) ──────────────────
 
 async function scrapePage(url) {
   try {
-    const response = await fetch('https://api.firecrawl.dev/v1/scrape', {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${FIRECRAWL_API_KEY}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        url,
-        formats: ['markdown'],
-      }),
-    });
-
-    if (!response.ok) {
-      console.log(`    ⚠️ Firecrawl ${response.status} for ${url}`);
+    // Fast HTTP first; if WAF-blocked, retry stealthy (headless + patches).
+    let r = await scraplingFetch(url, { stealthy: false, timeoutMs: 20000 });
+    if (!r.success && /403|503|cloudflare|captcha|blocked/i.test(r.error || '')) {
+      console.log(`    🛡️ WAF-like block, retrying stealthy: ${url}`);
+      r = await scraplingFetch(url, { stealthy: true, timeoutMs: 45000 });
+    }
+    if (!r.success) {
+      console.log(`    ⚠️ Scrapling failed ${url}: ${r.error}`);
       return null;
     }
-
-    const data = await response.json();
-    if (data.success && data.data?.markdown) {
-      return data.data.markdown;
-    }
-    return null;
+    // Emails live in text; markdown conversion is unnecessary for regex extraction.
+    return r.text || null;
   } catch (err) {
     console.log(`    ⚠️ Scrape error for ${url}: ${err.message}`);
     return null;
@@ -225,7 +212,7 @@ async function enrichLead(lead) {
 
   let allEmails = [];
 
-  // 1) Direct HTML fetch on homepage (faster than Firecrawl, good enough for email scraping)
+  // 1) Direct HTML fetch on homepage (faster than Scrapling, good enough for email scraping)
   const html = await directFetch(base);
   if (html) {
     allEmails.push(...extractEmails(html));
@@ -247,12 +234,12 @@ async function enrichLead(lead) {
     }
   }
 
-  // 4) Firecrawl as premium fallback (better JS rendering)
+  // 4) Scrapling stealthy fallback for JS-rendered / WAF-protected sites
   if (allEmails.length === 0) {
-    console.log(`    🔥 Trying Firecrawl for JS-rendered content...`);
-    const firecrawlContent = await scrapePage(base);
-    if (firecrawlContent) {
-      allEmails.push(...extractEmails(firecrawlContent));
+    console.log(`    🕵️  Trying Scrapling stealthy for JS/WAF content...`);
+    const scrapingContent = await scrapePage(base);
+    if (scrapingContent) {
+      allEmails.push(...extractEmails(scrapingContent));
     }
   }
 
@@ -328,10 +315,6 @@ function sleep(ms) {
 // ── Main ─────────────────────────────────────────────────────
 
 async function main() {
-  if (!FIRECRAWL_API_KEY) {
-    return { skipped: true, reason: 'FIRECRAWL_API_KEY missing' };
-  }
-
   console.log('╔══════════════════════════════════════════════════╗');
   console.log('║   📧 Email Enrichment Worker                    ║');
   console.log('╚══════════════════════════════════════════════════╝');
@@ -361,7 +344,7 @@ async function main() {
   console.log(`\n📊 Total leads without email: ${leads.length}`);
   console.log(`📊 Enrichable (have website): ${enrichable.length}`);
   console.log(`📊 Batch size: ${BATCH_SIZE} | Delay: ${DELAY_MS}ms`);
-  console.log(`📊 Firecrawl API: ${FIRECRAWL_API_KEY ? '✅ configured' : '❌ missing'}`);
+  console.log(`📊 Scraper: Scrapling (local, no API key required)`);
   console.log(`📊 Hunter.io API: ${process.env.HUNTER_API_KEY ? '✅ configured (fallback active)' : '⏭️ not configured (skipping)'}\n`);
 
   const results = {
