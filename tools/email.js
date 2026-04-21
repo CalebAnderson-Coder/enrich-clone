@@ -296,6 +296,122 @@ export async function pushDraftPhoneToGHL(prospect, { callScript = null, whatsap
   }
 }
 
+// ── GHL Pipeline Push for EMAIL path ─────────────────────────
+// Mirror of pushDraftPhoneToGHL but for the email-send path: creates
+// contact + opportunity in COLD LEADS / stage NUEVO so the stage auto-
+// migration (NUEVO → CONTACTADO) works for email leads too.
+// Returns { contactId, opportunityId, duplicate } or { error }.
+export async function pushEmailPathToGHL(prospect) {
+  const ghlKey     = process.env.EMPIRIKA_GHL_KEY || process.env.GHL_API_KEY;
+  const locationId = process.env.EMPIRIKA_GHL_LOCATION_ID || process.env.GHL_LOCATION_ID;
+  const pipelineId = process.env.GHL_PIPELINE_COLD_LEADS_ID || 'PbSBohJh1m1L08INwMzv';
+  const stageId    = process.env.GHL_STAGE_NUEVO_ID || '8e718ffe-25b0-40d6-9d43-86bd0a96c5d1';
+  if (!ghlKey || !locationId) return { error: 'missing_credentials' };
+
+  const companyName = prospect?.business_name || 'Lead';
+  const phone       = normalizeUSPhone(prospect?.phone);
+  const industry    = (prospect?.industry || '').toLowerCase().replace(/\s+/g, '-') || 'unknown';
+  const tags        = ['lead-automatizado', 'google-maps', 'empirika-engine', 'path-b-email', industry].filter(Boolean);
+
+  const contactPayload = {
+    firstName:   companyName,
+    email:       prospect?.email_address || prospect?.email || undefined,
+    phone:       phone || undefined,
+    locationId,
+    tags,
+    source:      'Empirika Engine - Agentic IA (Email Path)',
+    website:     prospect?.website || '',
+    city:        prospect?.metro_area || '',
+    companyName,
+    customFields: [
+      { key: 'score',         field_value: prospect?.qualification_score ?? '' },
+      { key: 'categoria',     field_value: prospect?.industry || '' },
+      { key: 'outreach_path', field_value: 'email' },
+    ],
+  };
+
+  try {
+    const contactRes = await withRetry(
+      () => fetch('https://services.leadconnectorhq.com/contacts/', {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${ghlKey}`, 'Version': '2021-07-28', 'Content-Type': 'application/json' },
+        body: JSON.stringify(contactPayload),
+      }),
+      { maxRetries: 2, baseDelayMs: 1000, label: 'GHL-contact-email' }
+    );
+    const cb = await contactRes.json().catch(() => ({}));
+    let contactId = cb?.contact?.id || cb?.id;
+    let isDuplicate = false;
+    if (!contactRes.ok) {
+      const dupId = cb?.meta?.contactId;
+      if (contactRes.status === 400 && dupId) {
+        contactId = dupId;
+        isDuplicate = true;
+      } else {
+        logger.warn('GHL email-path contact create failed', { status: contactRes.status, body: cb });
+        return { error: `contact_${contactRes.status}`, detail: cb };
+      }
+    }
+    if (!contactId) return { error: 'no_contact_id' };
+
+    const oppPayload = {
+      pipelineId,
+      pipelineStageId: stageId,
+      locationId,
+      contactId,
+      name:   `${companyName} — ${prospect?.industry || 'Lead'} (${prospect?.metro_area || 'US'})`,
+      status: 'open',
+      source: 'Empirika Engine — Email Path',
+    };
+    const oppRes = await withRetry(
+      () => fetch('https://services.leadconnectorhq.com/opportunities/', {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${ghlKey}`, 'Version': '2021-07-28', 'Content-Type': 'application/json' },
+        body: JSON.stringify(oppPayload),
+      }),
+      { maxRetries: 2, baseDelayMs: 1000, label: 'GHL-opp-email' }
+    );
+    const ob = await oppRes.json().catch(() => ({}));
+    if (!oppRes.ok) {
+      logger.warn('GHL email-path opportunity create failed', { status: oppRes.status, body: ob });
+      return { contactId, error: `opportunity_${oppRes.status}`, detail: ob };
+    }
+    const opportunityId = ob?.opportunity?.id || ob?.id || null;
+    return { contactId, opportunityId, duplicate: isDuplicate };
+  } catch (err) {
+    logger.warn('GHL email-path push exception', { error: err.message });
+    return { error: 'exception', detail: err.message };
+  }
+}
+
+// ── Move GHL opportunity to a target stage ───────────────────
+// Used after successful outbound send to migrate NUEVO → CONTACTADO.
+// Idempotent at the API level: GHL allows moving to the same stage
+// without error, so callers don't need to track whether it already moved.
+export async function moveOpportunityToStage(opportunityId, targetStageId) {
+  const ghlKey     = process.env.EMPIRIKA_GHL_KEY || process.env.GHL_API_KEY;
+  const locationId = process.env.EMPIRIKA_GHL_LOCATION_ID || process.env.GHL_LOCATION_ID;
+  const pipelineId = process.env.GHL_PIPELINE_COLD_LEADS_ID || 'PbSBohJh1m1L08INwMzv';
+  if (!ghlKey || !opportunityId || !targetStageId) return { ok: false, error: 'missing_args' };
+  try {
+    const res = await withRetry(
+      () => fetch(`https://services.leadconnectorhq.com/opportunities/${opportunityId}`, {
+        method: 'PUT',
+        headers: { 'Authorization': `Bearer ${ghlKey}`, 'Version': '2021-07-28', 'Content-Type': 'application/json' },
+        body: JSON.stringify({ pipelineId, pipelineStageId: targetStageId, locationId }),
+      }),
+      { maxRetries: 2, baseDelayMs: 1000, label: 'GHL-stage-move' }
+    );
+    if (!res.ok) {
+      const body = await res.text().catch(() => '');
+      return { ok: false, error: `stage_${res.status}`, detail: body.slice(0, 200) };
+    }
+    return { ok: true };
+  } catch (err) {
+    return { ok: false, error: 'exception', detail: err.message };
+  }
+}
+
 export async function handlePostSendActions(to, { client } = {}) {
   const db = client || supabase;
   if (!db) return;
@@ -308,45 +424,94 @@ export async function handlePostSendActions(to, { client } = {}) {
       .limit(1)
       .single();
 
-    if (lead) {
-      // 2. Sync to GHL
-      const ghlOk = await syncToGHL(to, lead);
-
-      // Learning loop: channel=ghl, event=sent on successful sync.
-      if (ghlOk) {
-        logOutreachEvent({
-          leadId:   lead.id,
-          brandId:  lead.brand_id,
-          channel:  'ghl',
-          eventType: 'sent',
-          metadata: { to },
-        }).catch(() => {});
-      }
-
-      // 3. Update campaign_enriched_data and mark as SENT
-      const sentAt = new Date().toISOString();
-      await db
-        .from('campaign_enriched_data')
-        .update({ ghl_tag: 'lead-automatizado', outreach_status: 'SENT' })
-        .eq('prospect_id', lead.id);
-
-      // 4. Mapear status en Leads Dashboard
-      await db
-        .from('leads')
-        .update({ outreach_status: 'SENT' })
-        .eq('id', lead.id);
-
-      // 5. Sync first_contact_date on first successful send (idempotent: only when NULL)
-      await db
-        .from('leads')
-        .update({ first_contact_date: sentAt })
-        .eq('id', lead.id)
-        .is('first_contact_date', null);
-      console.log('[dispatcher] synced first_contact_date', lead.id);
-    } else {
+    if (!lead) {
       logger.warn('Lead not found in Supabase — doing basic GHL sync', { email: to });
       await syncToGHL(to, { business_name: 'Lead Desconocido' });
+      return;
     }
+
+    // 2. Sync to GHL (contact-level, webhook/API)
+    const ghlOk = await syncToGHL(to, lead);
+    if (ghlOk) {
+      logOutreachEvent({
+        leadId:   lead.id,
+        brandId:  lead.brand_id,
+        channel:  'ghl',
+        eventType: 'sent',
+        metadata: { to },
+      }).catch(() => {});
+    }
+
+    // 2b. Ensure GHL opportunity exists + move NUEVO→CONTACTADO.
+    // Non-blocking: any failure here is logged but does not prevent
+    // the SENT status update below.
+    try {
+      const { data: camp } = await db
+        .from('campaign_enriched_data')
+        .select('id, lead_magnets_data')
+        .eq('prospect_id', lead.id)
+        .limit(1)
+        .maybeSingle();
+
+      if (camp) {
+        const magnetData = camp.lead_magnets_data || {};
+        let opportunityId = magnetData.ghl_opportunity_id;
+
+        if (!opportunityId) {
+          const push = await pushEmailPathToGHL(lead);
+          if (push.opportunityId) {
+            opportunityId                    = push.opportunityId;
+            magnetData.ghl_contact_id        = push.contactId;
+            magnetData.ghl_opportunity_id    = push.opportunityId;
+            magnetData.ghl_synced_at         = new Date().toISOString();
+            if (push.duplicate) magnetData.ghl_linked_to_existing = true;
+          } else if (push.error) {
+            magnetData.ghl_sync_error = push.error;
+          }
+        }
+
+        if (opportunityId && !magnetData.ghl_moved_to_contactado_at) {
+          const stageContactado = process.env.GHL_STAGE_CONTACTADO_ID || 'c1d2e758-5235-4469-b0b5-95d4fb06cdc4';
+          const mv = await moveOpportunityToStage(opportunityId, stageContactado);
+          if (mv.ok) {
+            magnetData.ghl_stage                   = 'CONTACTADO';
+            magnetData.ghl_moved_to_contactado_at  = new Date().toISOString();
+            logger.info('GHL stage NUEVO→CONTACTADO', { opportunityId, business: lead.business_name });
+          } else {
+            magnetData.ghl_stage_move_error = mv.error;
+            logger.warn('GHL stage move failed', { opportunityId, error: mv.error });
+          }
+        }
+
+        await db
+          .from('campaign_enriched_data')
+          .update({ lead_magnets_data: magnetData })
+          .eq('id', camp.id);
+      }
+    } catch (ghlErr) {
+      logger.warn('GHL opportunity auto-advance failed (non-blocking)', { email: to, error: ghlErr.message });
+    }
+
+    // 3. Update campaign_enriched_data and mark as SENT
+    const sentAt = new Date().toISOString();
+    await db
+      .from('campaign_enriched_data')
+      .update({ ghl_tag: 'lead-automatizado', outreach_status: 'SENT' })
+      .eq('prospect_id', lead.id);
+
+    // 4. Mapear status en Leads Dashboard
+    await db
+      .from('leads')
+      .update({ outreach_status: 'SENT' })
+      .eq('id', lead.id);
+
+    // 5. Sync first_contact_date on first successful send (idempotent: only when NULL)
+    await db
+      .from('leads')
+      .update({ first_contact_date: sentAt })
+      .eq('id', lead.id)
+      .is('first_contact_date', null);
+    console.log('[dispatcher] synced first_contact_date', lead.id);
   } catch (e) {
     logger.error('Post-send actions failed', { error: e.message });
   }
