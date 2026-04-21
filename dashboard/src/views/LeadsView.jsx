@@ -7,6 +7,7 @@ import { Card, CardContent } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
 import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog';
 import AnimatedCard from '@/components/shared/AnimatedCard';
 import StaggerChildren, { staggerItem } from '@/components/shared/StaggerChildren';
@@ -26,6 +27,8 @@ import {
   ExternalLink,
   Zap,
   MessageCircle,
+  Search,
+  X,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
@@ -57,6 +60,7 @@ export default function LeadsView() {
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [activeTab, setActiveTab] = useState('pendientes');
   const [tierFilter, setTierFilter] = useState('all');
+  const [searchQuery, setSearchQuery] = useState('');
   const [lightboxUrl, setLightboxUrl] = useState(null);
   const [lightboxLabel, setLightboxLabel] = useState('');
 
@@ -180,7 +184,32 @@ export default function LeadsView() {
     cold: leads.filter(l => getTier(l.qualification_score || 0) === 'cold').length,
   };
 
-  // Status tab filter, then tier filter
+  // Normalize search query once per render
+  const normalizedQuery = searchQuery.trim().toLowerCase();
+  const queryDigits = normalizedQuery.replace(/\D/g, '');
+
+  const matchesQuery = (lead) => {
+    if (!normalizedQuery) return true;
+    const haystackFields = [
+      lead.business_name,
+      lead.owner_name,
+      lead.email,
+      lead.website,
+      lead.city,
+      lead.metro_area,
+      lead.industry,
+    ];
+    const textHit = haystackFields.some(f => f && String(f).toLowerCase().includes(normalizedQuery));
+    if (textHit) return true;
+    // Phone match: compare digits only so "+1 305" matches "3055551234"
+    if (queryDigits.length >= 3 && lead.phone) {
+      const phoneDigits = String(lead.phone).replace(/\D/g, '');
+      if (phoneDigits.includes(queryDigits)) return true;
+    }
+    return false;
+  };
+
+  // Status tab filter, then tier filter, then search query
   const filteredLeads = leads
     .filter(lead => {
       if (activeTab === 'pendientes') return lead._status === 'pendiente';
@@ -191,7 +220,8 @@ export default function LeadsView() {
     .filter(lead => {
       if (tierFilter === 'all') return true;
       return getTier(lead.qualification_score || 0) === tierFilter;
-    });
+    })
+    .filter(matchesQuery);
 
   const tabCounts = {
     pendientes: leads.filter(l => l._status === 'pendiente').length,
@@ -301,10 +331,16 @@ export default function LeadsView() {
   );
 
   const renderEmptyState = () => {
-    const isAllApproved = activeTab === 'pendientes' && leads.length > 0;
+    const isAllApproved = activeTab === 'pendientes' && leads.length > 0 && !normalizedQuery;
     const Icon = isAllApproved ? CheckCircle : Inbox;
     const hotCount = tierCounts.hot;
-    const copy = isAllApproved
+    const copy = normalizedQuery
+      ? {
+          title: `Sin resultados para "${searchQuery.trim()}"`,
+          body: 'Probá con otro término o limpiá la búsqueda para ver todos los leads.',
+          cta: { label: 'Limpiar búsqueda', action: () => setSearchQuery('') },
+        }
+      : isAllApproved
       ? {
           title: '¡Todo aprobado!',
           body: hotCount > 0
@@ -372,8 +408,41 @@ export default function LeadsView() {
           <p className="text-surface-400">Contactabilidad multicanal y pipeline de prospección</p>
         </div>
         <div className="bg-surface-800/60 border border-surface-700 px-4 py-2 rounded-full text-sm text-surface-400">
-          <strong className="text-surface-50 num-tabular">{leads.length}</strong> Leads totales
+          {normalizedQuery ? (
+            <>
+              <strong className="text-surface-50 num-tabular">{filteredLeads.length}</strong>
+              <span className="opacity-70"> de </span>
+              <strong className="text-surface-50 num-tabular">{leads.length}</strong> Leads
+            </>
+          ) : (
+            <>
+              <strong className="text-surface-50 num-tabular">{leads.length}</strong> Leads totales
+            </>
+          )}
         </div>
+      </div>
+
+      {/* Search bar */}
+      <div className="relative">
+        <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-surface-500 pointer-events-none" aria-hidden="true" />
+        <Input
+          type="search"
+          value={searchQuery}
+          onChange={(e) => setSearchQuery(e.target.value)}
+          placeholder="Buscar lead por nombre, dueño, email, teléfono, ciudad o industria…"
+          aria-label="Buscar leads"
+          className="h-11 pl-10 pr-10 bg-surface-900/60 border-surface-700 text-surface-100 placeholder:text-surface-500 focus-visible:ring-primary-500 focus-visible:border-primary-500"
+        />
+        {searchQuery && (
+          <button
+            type="button"
+            onClick={() => setSearchQuery('')}
+            aria-label="Limpiar búsqueda"
+            className="absolute right-2 top-1/2 -translate-y-1/2 p-1.5 rounded-md text-surface-400 hover:text-surface-100 hover:bg-surface-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-500"
+          >
+            <X className="h-4 w-4" />
+          </button>
+        )}
       </div>
 
       {/* Status tabs */}
