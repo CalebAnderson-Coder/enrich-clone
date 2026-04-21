@@ -111,12 +111,21 @@ export async function scraplingFetch(url, { stealthy = false, timeoutMs = DEFAUL
         }
         return resolve({ success: false, url, error: `no_stdout. stderr=${stderr.slice(0, 300)}` });
       }
-      // Mark Python as available on first successful run.
-      if (PY_AVAILABLE === undefined) PY_AVAILABLE = true;
       // stdout may contain multiple JSON lines — take the last parseable one
       const lines = trimmed.split(/\r?\n/).filter(Boolean).reverse();
       for (const line of lines) {
-        try { return resolve(JSON.parse(line)); } catch {}
+        try {
+          const parsed = JSON.parse(line);
+          // Sidecar caught ImportError and emitted valid JSON; treat as Python-unusable
+          // and fall back to Node fetch permanently.
+          if (parsed && parsed.success === false && typeof parsed.error === 'string' &&
+              /ModuleNotFoundError|No module named|ImportError/i.test(parsed.error)) {
+            PY_AVAILABLE = false;
+            return resolve(await nodeFetchFallback(url, timeoutMs));
+          }
+          if (PY_AVAILABLE === undefined) PY_AVAILABLE = true;
+          return resolve(parsed);
+        } catch {}
       }
       resolve({ success: false, url, error: `parse_failed: ${trimmed.slice(0, 300)}` });
     });
