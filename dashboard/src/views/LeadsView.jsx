@@ -426,7 +426,8 @@ export default function LeadsView() {
       <div className="relative">
         <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-surface-500 pointer-events-none" aria-hidden="true" />
         <Input
-          type="search"
+          type="text"
+          role="searchbox"
           value={searchQuery}
           onChange={(e) => setSearchQuery(e.target.value)}
           placeholder="Buscar lead por nombre, dueño, email, teléfono, ciudad o industria…"
