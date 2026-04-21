@@ -11,6 +11,7 @@ export default function LeadsView() {
   const [selectedLead, setSelectedLead] = useState(null);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [activeTab, setActiveTab] = useState('pendientes');
+  const [searchQuery, setSearchQuery] = useState('');
   const [lightboxUrl, setLightboxUrl] = useState(null);
   const [lightboxLabel, setLightboxLabel] = useState('');
 
@@ -144,14 +145,35 @@ export default function LeadsView() {
     }
   };
 
-  // Filter leads by active tab
-  const filteredLeads = leads.filter(lead => {
+  // Search filter: substring match over name/owner/email/web/city/metro/industry +
+  // digit-only match over phone (so "+1 305" matches "+13055551234").
+  const normalizedQuery = searchQuery.trim().toLowerCase();
+  const queryDigits = normalizedQuery.replace(/\D/g, '');
+
+  const matchesSearch = (lead) => {
+    if (!normalizedQuery) return true;
+    const fields = [
+      lead.business_name, lead.owner_name, lead.email, lead.website,
+      lead.city, lead.metro_area, lead.industry,
+    ];
+    if (fields.some(f => f && String(f).toLowerCase().includes(normalizedQuery))) return true;
+    if (queryDigits.length >= 3 && lead.phone) {
+      const phoneDigits = String(lead.phone).replace(/\D/g, '');
+      if (phoneDigits.includes(queryDigits)) return true;
+    }
+    return false;
+  };
+
+  const matchesTab = (lead) => {
     if (activeTab === 'pendientes') return lead._status === 'pendiente';
     if (activeTab === 'enviados') return lead._status === 'enviado';
     if (activeTab === 'rechazados') return lead._status === 'rechazado';
     return true; // 'todos'
-  });
+  };
 
+  const filteredLeads = leads.filter(l => matchesTab(l) && matchesSearch(l));
+
+  // Tab counts ignore search so the user sees total per-tab volumes regardless of query.
   const tabCounts = {
     pendientes: leads.filter(l => l._status === 'pendiente').length,
     enviados: leads.filter(l => l._status === 'enviado').length,
@@ -282,8 +304,73 @@ export default function LeadsView() {
           <p>Contactabilidad multicanal y pipeline de prospección</p>
         </div>
         <div style={{ background: 'rgba(255,255,255,0.05)', padding: '8px 16px', borderRadius: '20px', fontSize: '0.9rem', color: 'var(--text-secondary)' }}>
-          <strong style={{ color: '#fff' }}>{leads.length}</strong> Leads Totales
+          {normalizedQuery ? (
+            <><strong style={{ color: '#fff' }}>{filteredLeads.length}</strong> de <strong style={{ color: '#fff' }}>{leads.length}</strong> Leads</>
+          ) : (
+            <><strong style={{ color: '#fff' }}>{leads.length}</strong> Leads Totales</>
+          )}
         </div>
+      </div>
+
+      {/* Search bar — client requested (2026-04-21) */}
+      <div style={{
+        position: 'relative',
+        marginBottom: '16px',
+        display: 'flex',
+        alignItems: 'center',
+      }}>
+        <svg
+          width="18" height="18" viewBox="0 0 24 24" fill="none"
+          stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"
+          style={{ position: 'absolute', left: 14, color: 'var(--text-secondary)', pointerEvents: 'none' }}
+        >
+          <circle cx="11" cy="11" r="8"></circle>
+          <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+        </svg>
+        <input
+          type="text"
+          role="searchbox"
+          aria-label="Buscar leads"
+          placeholder="Buscar por nombre, dueño, email, teléfono, ciudad, rubro…"
+          value={searchQuery}
+          onChange={(e) => setSearchQuery(e.target.value)}
+          style={{
+            width: '100%',
+            padding: '11px 40px 11px 42px',
+            background: 'rgba(255,255,255,0.04)',
+            border: '1px solid rgba(255,255,255,0.08)',
+            borderRadius: '10px',
+            color: '#fff',
+            fontSize: '0.9rem',
+            outline: 'none',
+            transition: 'border-color 0.15s ease, background 0.15s ease',
+          }}
+          onFocus={(e) => { e.target.style.borderColor = 'rgba(139,92,246,0.5)'; e.target.style.background = 'rgba(255,255,255,0.06)'; }}
+          onBlur={(e) => { e.target.style.borderColor = 'rgba(255,255,255,0.08)'; e.target.style.background = 'rgba(255,255,255,0.04)'; }}
+        />
+        {searchQuery && (
+          <button
+            type="button"
+            onClick={() => setSearchQuery('')}
+            aria-label="Limpiar búsqueda"
+            style={{
+              position: 'absolute',
+              right: 10,
+              background: 'transparent',
+              border: 'none',
+              padding: 6,
+              borderRadius: '6px',
+              color: 'var(--text-secondary)',
+              cursor: 'pointer',
+              display: 'flex',
+            }}
+          >
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <line x1="18" y1="6" x2="6" y2="18"></line>
+              <line x1="6" y1="6" x2="18" y2="18"></line>
+            </svg>
+          </button>
+        )}
       </div>
 
       {/* Filter Tabs */}
@@ -323,11 +410,30 @@ export default function LeadsView() {
         </div>
       ) : filteredLeads.length === 0 ? (
         <div className="empty-leads-container">
-          <svg width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path><circle cx="9" cy="7" r="4"></circle><path d="M23 21v-2a4 4 0 0 0-3-3.87"></path><path d="M16 3.13a4 4 0 0 1 0 7.75"></path></svg>
-          <h3>{activeTab === 'pendientes' ? '¡Todo aprobado!' : 'No hay leads en esta categoría'}</h3>
-          <p>{activeTab === 'pendientes' 
-            ? 'Todos los leads han sido procesados. Revisa la pestaña "Enviados" para ver el historial.' 
-            : 'Los agentes están buscando activamente posibles prospectos en segundo plano.'}</p>
+          {normalizedQuery ? (
+            <>
+              <svg width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
+              <h3>Sin resultados para "{searchQuery}"</h3>
+              <p>
+                Probá con otro término o{' '}
+                <button
+                  onClick={() => setSearchQuery('')}
+                  style={{ background: 'transparent', border: 'none', color: '#8b5cf6', cursor: 'pointer', padding: 0, font: 'inherit', textDecoration: 'underline' }}
+                >
+                  limpiá la búsqueda
+                </button>
+                .
+              </p>
+            </>
+          ) : (
+            <>
+              <svg width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path><circle cx="9" cy="7" r="4"></circle><path d="M23 21v-2a4 4 0 0 0-3-3.87"></path><path d="M16 3.13a4 4 0 0 1 0 7.75"></path></svg>
+              <h3>{activeTab === 'pendientes' ? '¡Todo aprobado!' : 'No hay leads en esta categoría'}</h3>
+              <p>{activeTab === 'pendientes'
+                ? 'Todos los leads han sido procesados. Revisa la pestaña "Enviados" para ver el historial.'
+                : 'Los agentes están buscando activamente posibles prospectos en segundo plano.'}</p>
+            </>
+          )}
         </div>
       ) : (
         <div className="leads-grid">
