@@ -57,6 +57,30 @@ function saveMockLeads() {
 }
 
 
+// ── Industry taxonomy normalizer ─────────────────────────────
+// Maps Google Maps types[] + business name keywords to a fixed
+// taxonomy so the learning consolidator can slice by industry.
+// Returns exact strings from the taxonomy set; never 'Servicios'.
+function normalizeIndustry(types = [], name = '') {
+  const t = new Set((types || []).map(x => String(x).toLowerCase()));
+  const n = String(name || '').toLowerCase();
+
+  if (t.has('roofing_contractor') || /\broof/i.test(n)) return 'Roofing';
+  if (/\b(hvac|heating|air.?condition|a\/c)\b/i.test(n) || t.has('hvac_contractor')) return 'HVAC';
+  if (t.has('landscaper') || /\b(landscap|lawn|garden|tree service)\b/i.test(n)) return 'Landscaping';
+  if (/\b(cleaning|maid|janitor|housekeep)\b/i.test(n)) return 'Cleaning';
+  if (t.has('general_contractor') || /\b(construction|remodel|contractor|builder)\b/i.test(n)) return 'Construction';
+  if (t.has('plumber') || /\bplumb/i.test(n)) return 'Plumbing';
+  if (t.has('electrician') || /\belectric/i.test(n)) return 'Electrical';
+  if (t.has('restaurant') || t.has('food') || t.has('meal_takeaway') || t.has('cafe') || t.has('bakery') || /\b(restaurant|taco|taqueria|cocina|kitchen|cafe|bakery|food|catering)\b/i.test(n)) return 'Food Services';
+  if (t.has('car_repair') || t.has('car_wash') || /\b(auto|mechanic|tire|oil change)\b/i.test(n)) return 'Auto Services';
+  if (t.has('beauty_salon') || t.has('hair_care') || t.has('spa') || /\b(salon|barber|spa|nail)\b/i.test(n)) return 'Beauty & Personal Care';
+  if (t.has('store') || t.has('clothing_store') || t.has('grocery_or_supermarket')) return 'Retail';
+  if (t.has('lawyer') || t.has('accounting') || t.has('real_estate_agency') || t.has('insurance_agency')) return 'Professional Services';
+  if (/\b(home|pest|pool|fence|gutter|window|door|painting|flooring|carpet)\b/i.test(n)) return 'Home Services';
+  return 'Other';
+}
+
 export const saveLead = new Tool({
   name: 'save_lead',
   description: `Save a qualified lead to the database with its qualification score and tier. Use after Google Maps scraping and GATE filter verification. Returns the saved lead ID.`,
@@ -258,7 +282,7 @@ export const saveLead = new Tool({
     const leadData = {
       business_name: args.business_name,
       owner_name: args.owner_name || null,
-      industry: args.industry || null,
+      industry: normalizeIndustry(args.types, args.business_name),
       metro_area: args.metro_area,
       phone: args.phone || null,
       email: args.email || null,
