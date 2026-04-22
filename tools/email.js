@@ -416,13 +416,14 @@ export async function handlePostSendActions(to, { client } = {}) {
   const db = client || supabase;
   if (!db) return;
   try {
-    // 1. Find lead info
+    // 1. Find lead info (case-insensitive + trimmed — callers pass raw "to")
+    const toNorm = String(to || '').trim();
     const { data: lead } = await db
       .from('leads')
       .select('*')
-      .eq('email_address', to)
+      .ilike('email_address', toNorm)
       .limit(1)
-      .single();
+      .maybeSingle();
 
     if (!lead) {
       logger.warn('Lead not found in Supabase — doing basic GHL sync', { email: to });
@@ -430,7 +431,18 @@ export async function handlePostSendActions(to, { client } = {}) {
       return;
     }
 
-    // 2. Sync to GHL (contact-level, webhook/API)
+    // 2a. Log the email 'sent' event (learning-loop fuel). This is the
+    // authoritative signal — fires even when GHL sync fails, so the
+    // nightly consolidator sees real volume.
+    logOutreachEvent({
+      leadId:   lead.id,
+      brandId:  lead.brand_id,
+      channel:  'email',
+      eventType: 'sent',
+      metadata: { to: toNorm },
+    }).catch(() => {});
+
+    // 2b. Sync to GHL (contact-level, webhook/API)
     const ghlOk = await syncToGHL(to, lead);
     if (ghlOk) {
       logOutreachEvent({
@@ -438,7 +450,7 @@ export async function handlePostSendActions(to, { client } = {}) {
         brandId:  lead.brand_id,
         channel:  'ghl',
         eventType: 'sent',
-        metadata: { to },
+        metadata: { to: toNorm },
       }).catch(() => {});
     }
 
@@ -533,10 +545,11 @@ async function sendMail({ to, subject, html_body, from_name, lead_id, brand_id }
   let resolvedBrandId = brand_id || null;
   if (LEARNING_ENABLED() && supabase && (!resolvedLeadId || !resolvedBrandId)) {
     try {
+      const toNorm = String(to || '').trim();
       const { data: leadRow } = await supabase
         .from('leads')
         .select('id, brand_id')
-        .eq('email_address', to)
+        .ilike('email_address', toNorm)
         .limit(1)
         .maybeSingle();
       if (leadRow) {
