@@ -1216,6 +1216,135 @@ app.get('/api/leads', async (req, res) => {
   }
 });
 
+// ---- GHL Pipeline snapshot (COLD LEADS → NUEVO + CONTACTADO) ----
+// Joins GHL opportunities with Supabase lead data (business, metro, phone, email,
+// email draft sent) so the dashboard can show a full ficha per lead.
+app.get('/api/ghl/pipeline', async (req, res) => {
+  const GHL_KEY     = process.env.EMPIRIKA_GHL_KEY || process.env.GHL_API_KEY;
+  const LOCATION_ID = process.env.EMPIRIKA_GHL_LOCATION_ID || process.env.GHL_LOCATION_ID;
+  const PIPELINE_ID = process.env.GHL_COLD_PIPELINE_ID || 'PbSBohJh1m1L08INwMzv';
+  const STAGE_NUEVO      = process.env.GHL_STAGE_NUEVO_ID      || '8e718ffe-25b0-40d6-9d43-86bd0a96c5d1';
+  const STAGE_CONTACTADO = process.env.GHL_STAGE_CONTACTADO_ID || 'c1d2e758-5235-4469-b0b5-95d4fb06cdc4';
+  const GHL_BASE    = 'https://services.leadconnectorhq.com';
+
+  if (!GHL_KEY || !LOCATION_ID) {
+    return res.status(500).json({ error: 'GHL credentials not configured' });
+  }
+
+  const ghlHeaders = {
+    Authorization: `Bearer ${GHL_KEY}`,
+    Version:       '2021-04-15',
+    'Content-Type':'application/json',
+    Accept:        'application/json',
+  };
+
+  async function listOppsInStage(stageId) {
+    const all = [];
+    let page = 1;
+    while (page <= 10) {
+      const url = new URL(`${GHL_BASE}/opportunities/search`);
+      url.searchParams.set('location_id', LOCATION_ID);
+      url.searchParams.set('pipeline_id', PIPELINE_ID);
+      url.searchParams.set('pipeline_stage_id', stageId);
+      url.searchParams.set('limit', '100');
+      url.searchParams.set('page', String(page));
+      const r = await fetch(url, { headers: ghlHeaders });
+      if (!r.ok) throw new Error(`GHL ${r.status}`);
+      const body = await r.json();
+      const batch = body?.opportunities || [];
+      all.push(...batch);
+      if (batch.length < 100) break;
+      page++;
+    }
+    return all;
+  }
+
+  try {
+    const brandId = req.user.brandId;
+    const { createClient } = await import('@supabase/supabase-js');
+    const sb = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY);
+
+    // 1. Fetch GHL opps in parallel.
+    const [nuevoOpps, contactadoOpps] = await Promise.all([
+      listOppsInStage(STAGE_NUEVO),
+      listOppsInStage(STAGE_CONTACTADO),
+    ]);
+
+    // 2. Collect all contact IDs we need to enrich.
+    const contactIds = new Set();
+    for (const opp of [...nuevoOpps, ...contactadoOpps]) {
+      const cid = opp.contactId || opp.contact?.id;
+      if (cid) contactIds.add(cid);
+    }
+
+    // 3. Pull Supabase rows matching those ghl_contact_ids.
+    const { data: enriched } = await sb
+      .from('campaign_enriched_data')
+      .select('id, outreach_status, outreach_copy, lead_magnets_data, created_at, leads!inner(id, business_name, industry, metro_area, email_address, phone, website, qualification_score, rating, review_count, google_maps_url)')
+      .eq('brand_id', brandId);
+
+    const byContactId = new Map();
+    const byEmail = new Map();
+    for (const row of enriched || []) {
+      const md = row.lead_magnets_data || {};
+      const cid = md.ghl_contact_id;
+      if (cid && !byContactId.has(cid)) byContactId.set(cid, row);
+      const email = row.leads?.email_address?.toLowerCase();
+      if (email && !byEmail.has(email)) byEmail.set(email, row);
+    }
+
+    function hydrate(opp) {
+      const cid = opp.contactId || opp.contact?.id;
+      const oppEmail = (opp.contact?.email || '').toLowerCase();
+      const row = (cid && byContactId.get(cid)) || (oppEmail && byEmail.get(oppEmail)) || null;
+      const lead = row?.leads || null;
+      const md   = row?.lead_magnets_data || {};
+      const emailSubject = md.email_draft_subject || md.angela_email_subject || null;
+      const emailBody    = md.email_draft_html    || md.angela_email_body    || null;
+      return {
+        opportunity_id: opp.id,
+        opportunity_name: opp.name || lead?.business_name || '(sin nombre)',
+        contact_id: cid,
+        contact_name: opp.contact?.name || null,
+        contact_email: opp.contact?.email || lead?.email_address || null,
+        contact_phone: opp.contact?.phone || lead?.phone || null,
+        monetary_value: opp.monetaryValue || 0,
+        opp_created_at: opp.createdAt || null,
+        opp_updated_at: opp.updatedAt || null,
+        // Supabase enrichment
+        business_name: lead?.business_name || opp.name || null,
+        industry: lead?.industry || null,
+        metro_area: lead?.metro_area || null,
+        website: lead?.website || null,
+        rating: lead?.rating || null,
+        review_count: lead?.review_count || 0,
+        google_maps_url: lead?.google_maps_url || null,
+        qualification_score: lead?.qualification_score || null,
+        outreach_status: row?.outreach_status || null,
+        // Email content (for CONTACTADO ficha)
+        email_subject: emailSubject,
+        email_body: emailBody,
+        email_sent_at: md.sent_at || md.email_sent_at || null,
+        ghl_moved_to_contactado_at: md.ghl_moved_to_contactado_at || null,
+      };
+    }
+
+    const nuevo      = nuevoOpps.map(hydrate);
+    const contactado = contactadoOpps.map(hydrate);
+
+    res.json({
+      updated_at: new Date().toISOString(),
+      counts: { nuevo: nuevo.length, contactado: contactado.length },
+      pipeline_id: PIPELINE_ID,
+      nuevo,
+      contactado,
+    });
+  } catch (err) {
+    console.error('[GHL pipeline]', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ---- Get Lead Detail (MEGA Profile) ----
 app.get('/api/leads/:id', async (req, res) => {
   try {

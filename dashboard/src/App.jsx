@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import {
   MessageSquare, User, Calendar, Megaphone, Activity, FileText,
   Settings, Search, PlusCircle, CheckCircle, XCircle, Loader2, Send, LogOut,
-  LayoutDashboard
+  LayoutDashboard, Target
 } from 'lucide-react';
 // import { motion, AnimatePresence } from 'framer-motion';
 
@@ -16,6 +16,7 @@ import HistoryView from './views/HistoryView';
 import LeadsView from './views/LeadsView';
 import CampaignView from './views/CampaignView';
 import CockpitView from './views/CockpitView';
+import GHLView from './views/GHLView';
 import LoginView from './views/LoginView';
 import { useAuth } from './components/AuthProvider';
 import { apiGet, apiPost } from './lib/apiClient';
@@ -176,6 +177,7 @@ function AppAuthed({ signOut }) {
   const renderMainContent = () => {
     switch (currentView) {
       case 'cockpit': return <div className="flex-1 overflow-y-auto h-full"><CockpitView /></div>;
+      case 'ghl': return <div className="flex-1 overflow-y-auto h-full"><GHLView /></div>;
       case 'leads': return <div className="flex-1 overflow-y-auto h-full"><LeadsView /></div>;
       case 'performance': return <div className="flex-1 overflow-y-auto h-full"><PerformanceView /></div>;
       case 'campaign': return <div className="flex-1 overflow-y-auto h-full"><CampaignView /></div>;
@@ -320,6 +322,7 @@ function AppAuthed({ signOut }) {
           <div className="mb-6">
             <h3 className="sidebar-section-title">Canales</h3>
             <NavItem icon={LayoutDashboard} label="Flota · Cockpit" isActive={currentView==='cockpit'} onClick={()=>{setCurrentView('cockpit'); setActiveChannel('cockpit');}} />
+            <NavItem icon={Target} label="Go High Level" isActive={currentView==='ghl'} onClick={()=>{setCurrentView('ghl'); setActiveChannel('ghl');}} />
             <NavItem icon={MessageSquare} label="General" isActive={currentView==='chat' && activeChannel==='general'} onClick={()=>{setCurrentView('chat'); setActiveChannel('general');}} />
             <NavItem icon={Activity} label="Rendimiento" isActive={currentView==='performance'} onClick={()=>{setCurrentView('performance'); setActiveChannel('rendimiento');}} />
             <NavItem icon={User} label="Leads Precualificados" isActive={currentView==='leads'} onClick={()=>{setCurrentView('leads'); setActiveChannel('leads');}} />
