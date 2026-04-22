@@ -123,6 +123,60 @@ export const saveLead = new Tool({
       });
     }
 
+    // ── GATE: Franchise / Corporate chain blocklist ─────────
+    // Rejects known franchise and multi-location corporate names that don't
+    // fit Empírika's ICP (independent Latino-owned small business).
+    const FRANCHISE_BLOCKLIST = [
+      /\bcertapro\b/i,
+      /\bthe maids\b/i,
+      /\bwow\s*1\s*day\b/i,
+      /\bruppert\b/i,
+      /\babacus\b/i,
+      /\bmerry maids\b/i,
+      /\bmolly maid\b/i,
+      /\bservpro\b/i,
+      /\bstanley steemer\b/i,
+      /\btwo men and a truck\b/i,
+      /\bchem-?dry\b/i,
+      /\bterminix\b/i,
+      /\borkin\b/i,
+      /\bjan-?pro\b/i,
+      /\bjani-?king\b/i,
+      /\bcoverall\b/i,
+      /\bbudget blinds\b/i,
+      /\bmr\.?\s*(rooter|electric|handyman|appliance)\b/i,
+      /\bmister sparky\b/i,
+      /\baire serv\b/i,
+      /\bbenjamin franklin plumbing\b/i,
+      /\bone hour (heating|air)\b/i,
+      /\broto-?rooter\b/i,
+      /\banago\b/i,
+      /\bsparkling\s*clean/i,
+      /\bamerican leak detection\b/i,
+    ];
+    const isFranchise = FRANCHISE_BLOCKLIST.some(rx => rx.test(args.business_name || ''));
+    if (isFranchise) {
+      console.log(`  🚫 [GATE] Franchise blocked: "${args.business_name}" — matched franchise blocklist.`);
+      return JSON.stringify({
+        success: false,
+        rejected: true,
+        reason: 'franchise_blocked',
+        business_name: args.business_name,
+      });
+    }
+
+    // ── GATE: Too large (>500 reviews = corporate scale) ───
+    if (args.review_count && args.review_count > 500) {
+      console.log(`  🚫 [GATE] Too large: "${args.business_name}" — review_count=${args.review_count} > 500.`);
+      return JSON.stringify({
+        success: false,
+        rejected: true,
+        reason: 'too_large_review_count',
+        review_count: args.review_count,
+        business_name: args.business_name,
+      });
+    }
+
     // ── GATE: Domain Validation ─────────────────────────────
     // Reject leads with fabricated/unreachable domains before saving
     if (args.website) {
