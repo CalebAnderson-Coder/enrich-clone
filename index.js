@@ -1259,29 +1259,28 @@ app.get('/api/ghl/pipeline', async (req, res) => {
     return all;
   }
 
+  let stage = 'init';
   try {
-    const brandId = req.user.brandId;
+    const brandId = req.user?.brandId;
+    console.log(`[GHL pipeline] start brand=${brandId} loc=${LOCATION_ID?.slice(0,6)} keyLen=${GHL_KEY?.length}`);
+    if (!brandId) return res.status(400).json({ error: 'req.user.brandId missing', stage: 'auth' });
+
     const { createClient } = await import('@supabase/supabase-js');
     const sb = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY);
 
-    // 1. Fetch GHL opps in parallel.
-    const [nuevoOpps, contactadoOpps] = await Promise.all([
-      listOppsInStage(STAGE_NUEVO),
-      listOppsInStage(STAGE_CONTACTADO),
-    ]);
+    stage = 'ghl_nuevo';
+    const nuevoOpps = await listOppsInStage(STAGE_NUEVO);
+    stage = 'ghl_contactado';
+    const contactadoOpps = await listOppsInStage(STAGE_CONTACTADO);
+    console.log(`[GHL pipeline] fetched nuevo=${nuevoOpps.length} contactado=${contactadoOpps.length}`);
 
-    // 2. Collect all contact IDs we need to enrich.
-    const contactIds = new Set();
-    for (const opp of [...nuevoOpps, ...contactadoOpps]) {
-      const cid = opp.contactId || opp.contact?.id;
-      if (cid) contactIds.add(cid);
-    }
-
-    // 3. Pull Supabase rows matching those ghl_contact_ids.
-    const { data: enriched } = await sb
+    stage = 'supabase_enrich';
+    const { data: enriched, error: sbErr } = await sb
       .from('campaign_enriched_data')
       .select('id, outreach_status, outreach_copy, lead_magnets_data, created_at, leads!inner(id, business_name, industry, metro_area, email_address, phone, website, qualification_score, rating, review_count, google_maps_url)')
       .eq('brand_id', brandId);
+    if (sbErr) throw new Error(`supabase: ${sbErr.message}`);
+    console.log(`[GHL pipeline] supabase rows=${enriched?.length || 0}`);
 
     const byContactId = new Map();
     const byEmail = new Map();
@@ -1340,8 +1339,8 @@ app.get('/api/ghl/pipeline', async (req, res) => {
       contactado,
     });
   } catch (err) {
-    console.error('[GHL pipeline]', err);
-    res.status(500).json({ error: err.message });
+    console.error(`[GHL pipeline] FAIL stage=${stage}:`, err.stack || err.message);
+    res.status(500).json({ error: err.message, stage });
   }
 });
 
