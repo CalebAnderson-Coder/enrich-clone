@@ -85,9 +85,9 @@ services:
       - key: SUPABASE_LEAD_MAGNET_BUCKET
         value: "lead-magnets"
 
-      # ── Sprint 2: Learning loop (DISABLED until migration 014 applied) ──
+      # ── Sprint 2: Learning loop ──
       - key: LEARNING_ENABLED
-        value: "false"
+        value: "true"
       - key: PIXEL_BASE_URL
         sync: false
       - key: GHL_WEBHOOK_SECRET
