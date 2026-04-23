@@ -26,6 +26,7 @@ import { recordAgentEvent } from '../lib/agentEventsSink.js';
 import { runConsolidator } from '../workers/learning_consolidator.js';
 import { runLightDaily } from '../workers/estratega_light_daily.js';
 import { runDeepWeekly } from '../workers/estratega_deep_weekly.js';
+import { runNightlyAudit } from '../workers/nightly_auditor.js';
 
 // ── Cycle definitions ────────────────────────────────────────
 export const CYCLES = Object.freeze([
@@ -36,6 +37,9 @@ export const CYCLES = Object.freeze([
   // Sprint 3: Estratega weekly deep cycle — only fires when dayOfWeekUtc matches.
   // Sunday = 0 (Date.getUTCDay()). Gate ESTRATEGA_ENABLED is evaluated at run time.
   { hourUtc: 12, type: 'STRATEGY_DEEP', dayOfWeekUtc: 0 },
+  // Layer 1 nightly auditor (plan: .omc/plans/autonomy-3layer-v2.md §B.3).
+  // 03:15 UTC staggers away from render.yaml validate-lead-domains-nightly at 03:00.
+  { hourUtc: 3, minuteUtc: 15, type: 'AUDIT' },
 ]);
 
 const WINDOW_MS = 90_000;          // ±90s window around the exact hour
@@ -160,6 +164,16 @@ async function executeCycle(brandId, cycle) {
           metadata.estratega_light = { ok: false, error: err?.message };
         }
       }
+    } else if (cycle.type === 'AUDIT') {
+      const audit = await runNightlyAudit({ brandId });
+      metadata.audit = {
+        run_id: audit.run_id,
+        metrics_written: audit.metrics_written,
+        errors: audit.errors?.length || 0,
+      };
+      if (audit.errors?.length) {
+        metadata.audit_errors_sample = audit.errors.slice(0, 3);
+      }
     } else if (cycle.type === 'STRATEGY_DEEP') {
       if (process.env.ESTRATEGA_ENABLED !== 'true') {
         metadata.skipped = 'estratega_disabled';
@@ -202,12 +216,14 @@ async function executeCycle(brandId, cycle) {
 
 // ── Tick loop ────────────────────────────────────────────────
 function inHourWindow(cycle, now = new Date()) {
-  // Fire when we are within ±WINDOW_MS of the top of `hourUtc`.
+  // Fire when we are within ±WINDOW_MS of the target.
+  // Target = top of `hourUtc`, plus optional `minuteUtc` offset (default 0).
+  const minute = Number.isInteger(cycle.minuteUtc) ? cycle.minuteUtc : 0;
   const target = new Date(Date.UTC(
     now.getUTCFullYear(),
     now.getUTCMonth(),
     now.getUTCDate(),
-    cycle.hourUtc, 0, 0, 0
+    cycle.hourUtc, minute, 0, 0
   ));
   return Math.abs(now.getTime() - target.getTime()) <= WINDOW_MS;
 }
