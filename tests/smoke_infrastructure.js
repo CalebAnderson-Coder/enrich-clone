@@ -573,6 +573,17 @@ test('normalizeUSPhone returns empty on falsy/empty input', () => {
   assert(normalizeUSPhone('abc') === '', `non-digits should return empty, got ${normalizeUSPhone('abc')}`);
 });
 
+// Regression: upstream producía '+1' + basura cuando un scraper devolvía un
+// teléfono con country code no-US. Ej. '+56 407-293-2642' → '+1564072932642'.
+// El fix rechaza longitudes ambiguas para que el contacto GHL se cree sin
+// teléfono en vez de con uno basura que Meta/Twilio luego rebota silenciosamente.
+test('normalizeUSPhone rejects foreign country codes instead of injecting +1', () => {
+  assert(normalizeUSPhone('+56 407 293-2642') === '', `foreign cc must return empty, got ${normalizeUSPhone('+56 407 293-2642')}`);
+  assert(normalizeUSPhone('+1564072932642')   === '', `already-corrupt 13-digit must return empty, got ${normalizeUSPhone('+1564072932642')}`);
+  assert(normalizeUSPhone('1564072932642')    === '', `13-digit raw must return empty, got ${normalizeUSPhone('1564072932642')}`);
+  assert(normalizeUSPhone('123')              === '', `short junk must return empty, got ${normalizeUSPhone('123')}`);
+});
+
 await testAsync('pushDraftPhoneToGHL skips when credentials missing', async () => {
   const mod = await import('../tools/email.js');
   const prev = {

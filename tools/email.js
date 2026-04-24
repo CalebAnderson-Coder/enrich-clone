@@ -58,10 +58,16 @@ export function normalizeUSPhone(raw) {
   if (!raw) return '';
   const digits = String(raw).replace(/\D/g, '');
   if (digits.length === 0) return '';
-  if (digits.length === 11 && digits.startsWith('1')) return '+' + digits;
+  // US/CA sin country code.
   if (digits.length === 10) return '+1' + digits;
-  if (String(raw).startsWith('+1')) return '+1' + digits.replace(/^1/, '');
-  return '+1' + digits;
+  // US/CA con country code.
+  if (digits.length === 11 && digits.startsWith('1')) return '+' + digits;
+  // Cualquier otra longitud (9, 12+, 13…) es un input ambiguo o con country
+  // code extranjero mal mapeado (e.g. `+56 407-293-2642` venía produciendo
+  // `+1564072932642` en el fallback viejo). Rechazamos en vez de inventar
+  // un `+1` delante: mejor crear el contacto sin teléfono (visible como
+  // problema) que con un teléfono basura que Meta/Twilio luego rebota.
+  return '';
 }
 
 // ── GoHighLevel Sync ──────────────────────────────────────────

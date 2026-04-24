@@ -17,7 +17,17 @@ dotenv.config();
 
 const accountSid = process.env.TWILIO_ACCOUNT_SID;
 const authToken  = process.env.TWILIO_AUTH_TOKEN;
-const twilioClient = accountSid && authToken ? twilio(accountSid, authToken) : null;
+const apiKeySid    = process.env.TWILIO_API_KEY_SID;
+const apiKeySecret = process.env.TWILIO_API_KEY_SECRET;
+
+// Prefer API Key auth (survives auth-token rotations). Fall back to Auth Token.
+const twilioClient = (apiKeySid && apiKeySecret && accountSid)
+  ? twilio(apiKeySid, apiKeySecret, { accountSid })
+  : (accountSid && authToken ? twilio(accountSid, authToken) : null);
+
+// Exported so sibling scripts (e.g. wa_lookup_gate.js) can reuse the same
+// authenticated client instead of constructing a second one.
+export { twilioClient };
 
 /**
  * Module-level sender used by outreach_dispatcher.js.
