@@ -10,8 +10,20 @@
 // ============================================================
 
 import { Tool } from '../lib/AgentRuntime.js';
+import { scrapeGoogleMaps as brightDataScrape } from './brightDataGoogleMaps.js';
 
 const BASE = process.env.GOSOM_BASE_URL || 'http://localhost:9090';
+// Render's container can't reach localhost:9090 (gosom is a dev-only Docker
+// container on the operator's PC). When the URL is local-only AND we're not
+// running on the operator's PC, prefer brightdata directly.
+const GOSOM_IS_LOCAL_ONLY = /^https?:\/\/(localhost|127\.0\.0\.1)/i.test(BASE);
+function gosomReachable() {
+  // If GOSOM_BASE_URL is explicitly a non-local URL, assume reachable.
+  if (!GOSOM_IS_LOCAL_ONLY) return true;
+  // Local URL + Render NODE_ENV=production → not reachable.
+  if (process.env.NODE_ENV === 'production') return false;
+  return true;
+}
 const POLL_INTERVAL_MS = 3000;
 const DEFAULT_MAX_TIME_SEC = 300;   // 5 min per job (gosom's own internal cap)
 const POLL_TIMEOUT_MS = 360_000;    // 6 min wall-clock timeout on the JS side
@@ -137,6 +149,15 @@ export const scrapeGoogleMaps = new Tool({
   },
   fn: async (args) => {
     const { query, maxResults = 20, minReviews = 20, minRating = 4.0 } = args;
+
+    // Short-circuit to Brightdata when gosom is known unreachable (Render env).
+    // Avoids a 6-min timeout on every Scout call when the local Docker scraper
+    // isn't accessible. Brightdata returns the same shape via its own Tool.
+    if (!gosomReachable()) {
+      console.log(`  🗺️  [gosomGMaps] Local-only BASE on prod → routing to Brightdata`);
+      return brightDataScrape.fn({ query, maxResults, minReviews, minRating });
+    }
+
     console.log(`  🗺️  [gosomGMaps] Scraping: "${query}" (max ${maxResults})`);
 
     try {
@@ -184,9 +205,17 @@ export const scrapeGoogleMaps = new Tool({
         results: qualified,
       });
     } catch (err) {
-      console.error(`  ❌ [gosomGMaps] ${err.message}`);
-      // Agent MUST NOT fabricate leads when scraper fails (see Scout prompt).
-      return JSON.stringify({ error: err.message, query, results: [] });
+      console.error(`  ❌ [gosomGMaps] ${err.message} — falling back to Brightdata`);
+      // Network-class errors (ECONNREFUSED/ETIMEDOUT/fetch failed) usually mean
+      // the local Docker container isn't reachable from this host. Brightdata
+      // SERP API is the existing-cost-center fallback (token already in env).
+      try {
+        return await brightDataScrape.fn({ query, maxResults, minReviews, minRating });
+      } catch (bdErr) {
+        console.error(`  ❌ [Brightdata fallback] ${bdErr.message}`);
+        // Agent MUST NOT fabricate leads when scraper fails (see Scout prompt).
+        return JSON.stringify({ error: err.message, fallback_error: bdErr.message, query, results: [] });
+      }
     }
   },
 });
