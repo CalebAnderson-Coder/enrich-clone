@@ -14,6 +14,9 @@ import { logOutreachEvent, LEARNING_ENABLED } from './outreachEvents.js';
 import dotenv from 'dotenv';
 dotenv.config();
 
+import panelFieldsJson from '../lib/ghl_panel_fields.json' with { type: 'json' };
+const PANEL_FIELDS = panelFieldsJson.fields; // { emprika__website_url: {id, dataType, name}, ... }
+
 // ── Pixel injection (learning-loop open tracking) ───────────
 // Returns html with a transparent 1x1 <img> embedded before </body>.
 // Only active when LEARNING_ENABLED=true AND PIXEL_BASE_URL is set.
@@ -68,6 +71,114 @@ export function normalizeUSPhone(raw) {
   // un `+1` delante: mejor crear el contacto sin teléfono (visible como
   // problema) que con un teléfono basura que Meta/Twilio luego rebota.
   return '';
+}
+
+// ── Empírika Panel: build custom fields array ─────────────────
+// Returns array of { id, key, field_value } for GHL contacts API.
+// Empty strings and zero-equivalent numerics are skipped to keep
+// the GHL panel clean (no blank fields shown to Caleb).
+export function buildEmpirikaCustomFields(prospect, ced) {
+  const candidates = [
+    { key: 'emprika__website_url',        value: prospect?.website || '' },
+    { key: 'emprika__google_maps_url',    value: prospect?.google_maps_url || '' },
+    { key: 'emprika__facebook_url',       value: prospect?.facebook_url || '' },
+    { key: 'emprika__instagram_url',      value: prospect?.instagram_url || '' },
+    { key: 'emprika__industry',           value: prospect?.industry || '' },
+    { key: 'emprika__metro_area',         value: prospect?.metro_area || '' },
+    { key: 'emprika__review_count',       value: Number(prospect?.review_count) || 0 },
+    { key: 'emprika__rating',             value: Number(prospect?.rating) || 0 },
+    { key: 'emprika__qualification_score',value: Number(prospect?.qualification_score) || 0 },
+    { key: 'emprika__lead_tier',          value: prospect?.lead_tier || '' },
+    { key: 'emprika__genoma',             value: (ced?.radiography_technical || '').slice(0, 2000) },
+    { key: 'emprika__attack_angle',       value: (ced?.attack_angle || '').slice(0, 2000) },
+    {
+      key:   'emprika__last_email_sent_at',
+      value: ced?.email_sent_at ? new Date(ced.email_sent_at).toISOString() : '',
+    },
+    { key: 'emprika__outreach_path',      value: 'email' },
+  ];
+
+  const result = [];
+  for (const { key, value } of candidates) {
+    // Skip empties (string '' or numeric 0) — keeps panel clean
+    if (value === '' || value === 0) continue;
+    const fieldDef = PANEL_FIELDS[key];
+    if (!fieldDef) continue; // field missing from JSON map — skip safely
+    result.push({ id: fieldDef.id, key, field_value: value });
+  }
+  return result;
+}
+
+// ── Empírika Panel: drop idempotent note ──────────────────────
+// Stamps [empirika-genoma:v1] note on a GHL contact exactly once.
+// If the note already exists the function returns { skipped: true }.
+// Non-throwing: callers should catch/log any rejection.
+export async function dropEmpirikaNote(contactId, prospect, ced, ghlKey) {
+  const baseUrl = 'https://services.leadconnectorhq.com';
+  const headers = {
+    'Authorization': `Bearer ${ghlKey}`,
+    'Version':       '2021-07-28',
+    'Content-Type':  'application/json',
+  };
+
+  // 1. GET existing notes
+  const notesRes = await fetch(`${baseUrl}/contacts/${contactId}/notes`, { headers });
+  if (notesRes.ok) {
+    const notesBody = await notesRes.json().catch(() => ({}));
+    const notes = notesBody?.notes || notesBody?.data || [];
+    if (notes.some(n => typeof n.body === 'string' && n.body.startsWith('[empirika-genoma:v1]'))) {
+      return { skipped: true };
+    }
+  }
+
+  // 2. Build note text (IR1: todo en español)
+  const score    = prospect?.qualification_score ?? '';
+  const tier     = prospect?.lead_tier || '';
+  const metro    = prospect?.metro_area || '';
+  const industry = prospect?.industry || '';
+  const genoma   = ced?.radiography_technical
+    ? (ced.radiography_technical.length > 300
+        ? ced.radiography_technical.slice(0, 300) + '...'
+        : ced.radiography_technical)
+    : 'Sin enriquecimiento todavía.';
+  const angle    = ced?.attack_angle
+    ? (ced.attack_angle.length > 200
+        ? ced.attack_angle.slice(0, 200) + '...'
+        : ced.attack_angle)
+    : 'Sin enriquecimiento todavía.';
+
+  const website  = prospect?.website       || '—';
+  const gmapsUrl = prospect?.google_maps_url || '—';
+  const fbUrl    = prospect?.facebook_url   || '—';
+  const igUrl    = prospect?.instagram_url  || '—';
+  const generado = new Date().toISOString();
+
+  const noteText = `[empirika-genoma:v1] · score ${score} · ${tier} · ${metro} · ${industry}
+─────────────────────────────────────────────
+Genoma: ${genoma}
+
+Ángulo de ataque: ${angle}
+
+Links:
+🌐 ${website}
+🗺️ ${gmapsUrl}
+📘 ${fbUrl}
+📷 ${igUrl}
+
+Generado: ${generado}`;
+
+  // 3. POST note
+  const postRes = await fetch(`${baseUrl}/contacts/${contactId}/notes`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({ body: noteText, userId: undefined }),
+  });
+  if (!postRes.ok) {
+    const errBody = await postRes.text().catch(() => '');
+    throw new Error(`GHL note POST ${postRes.status}: ${errBody.slice(0, 200)}`);
+  }
+  const postBody = await postRes.json().catch(() => ({}));
+  return { created: true, noteId: postBody?.id || postBody?.note?.id || null };
 }
 
 // ── GoHighLevel Sync ──────────────────────────────────────────
@@ -307,7 +418,7 @@ export async function pushDraftPhoneToGHL(prospect, { callScript = null, whatsap
 // contact + opportunity in COLD LEADS / stage NUEVO so the stage auto-
 // migration (NUEVO → CONTACTADO) works for email leads too.
 // Returns { contactId, opportunityId, duplicate } or { error }.
-export async function pushEmailPathToGHL(prospect) {
+export async function pushEmailPathToGHL(prospect, ced = null) {
   const ghlKey     = process.env.EMPIRIKA_GHL_KEY || process.env.GHL_API_KEY;
   const locationId = process.env.EMPIRIKA_GHL_LOCATION_ID || process.env.GHL_LOCATION_ID;
   const pipelineId = process.env.GHL_PIPELINE_COLD_LEADS_ID || 'PbSBohJh1m1L08INwMzv';
@@ -329,11 +440,7 @@ export async function pushEmailPathToGHL(prospect) {
     website:     prospect?.website || '',
     city:        prospect?.metro_area || '',
     companyName,
-    customFields: [
-      { key: 'score',         field_value: prospect?.qualification_score ?? '' },
-      { key: 'categoria',     field_value: prospect?.industry || '' },
-      { key: 'outreach_path', field_value: 'email' },
-    ],
+    customFields: buildEmpirikaCustomFields(prospect, ced),
   };
 
   try {
@@ -359,6 +466,11 @@ export async function pushEmailPathToGHL(prospect) {
       }
     }
     if (!contactId) return { error: 'no_contact_id' };
+
+    // Drop Empírika genoma note (idempotent — skips if already present)
+    dropEmpirikaNote(contactId, prospect, ced, ghlKey).catch(noteErr => {
+      logger.warn('GHL empirika note drop failed (non-blocking)', { contactId, error: noteErr.message });
+    });
 
     const oppPayload = {
       pipelineId,
@@ -476,7 +588,7 @@ export async function handlePostSendActions(to, { client } = {}) {
         let opportunityId = magnetData.ghl_opportunity_id;
 
         if (!opportunityId) {
-          const push = await pushEmailPathToGHL(lead);
+          const push = await pushEmailPathToGHL(lead, camp);
           if (push.opportunityId) {
             opportunityId                    = push.opportunityId;
             magnetData.ghl_contact_id        = push.contactId;

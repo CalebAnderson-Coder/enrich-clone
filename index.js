@@ -27,7 +27,7 @@ import { supabase as supabaseClient } from './lib/supabase.js';
 import { fetchPage } from './tools/webResearch.js';
 import { processIdleMagnets } from './lead_magnet_worker.js';
 import { startTranscriptionWorker } from './workers/transcription_worker.js';
-import { dispatchPendingOutreach, dispatchApprovedMultichannel } from './outreach_dispatcher.js';
+import { dispatchPendingOutreach, dispatchApprovedMultichannel, dispatchApprovedEmail } from './outreach_dispatcher.js';
 import { runEmailEnrichment } from './workers/email_enrichment_worker.js';
 import { startManagerDaemon, start as startAutonomyDaemon } from './agents/manager-daemon.js';
 import { runPipelineForBrand, runEnrichForLead } from './workers/pipelineRunner.js';
@@ -1862,6 +1862,16 @@ setInterval(async () => {
 setInterval(async () => {
   try { await dispatchApprovedMultichannel(); }
   catch (e) { console.error('Interval error (multichannel):', e.message); }
+}, 10 * 60_000);
+
+// APPROVED email-path sender — every 10 minutes. Closes the autonomous
+// loop: PENDING → DRAFT (rendered by 15min cron above) → APPROVED (auto
+// after 2h timeout) → SENT (here). Without this, APPROVED email rows
+// piled up indefinitely waiting for human dashboard clicks.
+setInterval(async () => {
+  if (process.env.AUTONOMY_ENABLED !== 'true') return;
+  try { await dispatchApprovedEmail(); }
+  catch (e) { console.error('Interval error (approved-email):', e.message); }
 }, 10 * 60_000);
 
 // Email enrichment — kickoff inmediato + cada 6 horas

@@ -117,6 +117,15 @@ export const saveLead = new Tool({
       }
     }
 
+    // El LLM Scout alucina maps.app.goo.gl/<random> que devuelve 404. Detectamos el
+    // patrón sintético (short link sin venir de un scrape real) y lo reemplazamos
+    // con un search URL determinístico que SIEMPRE resuelve.
+    if (args.google_maps_url && /(?:maps\.app\.goo\.gl|\/\/goo\.gl\/maps)/i.test(args.google_maps_url)) {
+      const loc = args.metro_area || '';
+      const q = encodeURIComponent(`${args.business_name} ${loc}`.trim());
+      args.google_maps_url = `https://www.google.com/maps/search/?api=1&query=${q}`;
+    }
+
     // ── Reroute: Platform URLs don't belong in `website` ─────
     // Yelp/Facebook/Instagram/YellowPages/etc are NOT websites — move to
     // the right field and null `website` so GATE + dedup operate cleanly.

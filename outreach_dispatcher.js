@@ -16,7 +16,7 @@ import { outreachDraftSchema, outreachSequenceSchema, normalizeOutreachOutput } 
 import { sanitizeLeadData } from './lib/sanitize.js';
 import { logger } from './lib/logger.js';
 import { withRetry } from './lib/resilience.js';
-import { pushDraftPhoneToGHL } from './tools/email.js';
+import { pushDraftPhoneToGHL, sendEmail as sendEmailTool } from './tools/email.js';
 import { assertSendAllowed, GuardrailBlocked } from './lib/guardrails.js';
 import { recordAgentEvent } from './lib/agentEventsSink.js';
 import { logOutreachEvent } from './tools/outreachEvents.js';
@@ -598,6 +598,114 @@ Reglas: subject 30-60 chars, preview_text 40-90 chars, body min 80 chars, todo e
   }
 
   logger.info('Dispatch summary', { rendered: stats.rendered, skipped: stats.skipped, errors: stats.errors });
+  return stats;
+}
+
+// ═════════════════════════════════════════════════════════════
+// Email APPROVED dispatcher (Sprint 6)
+//
+// Processes APPROVED rows that have an email address AND a
+// pre-rendered email_draft_html. The 46 SENT historical rows
+// were sent manually via dashboard or archived scripts — there
+// was no autonomous send loop until this function existed.
+//
+// Picks up where autoApprovePastDueDrafts() leaves off:
+//   PENDING → DRAFT (rendered) → APPROVED (auto) → SENT (here)
+// Once sent, handlePostSendActions inside tools/email.js
+// flips outreach_status to SENT, populates GHL custom fields,
+// drops the genoma note, and moves the opportunity NUEVO→CONTACTADO.
+// ═════════════════════════════════════════════════════════════
+
+export async function dispatchApprovedEmail(opts = {}) {
+  const db = opts.client || supabase;
+  if (!db) return { skipped: 'no_supabase', processed: 0 };
+
+  const brandId = opts.brandId || process.env.BRAND_ID || null;
+  const stats = { processed: 0, sent: 0, skipped: 0, errors: 0 };
+
+  // Pull APPROVED rows joined with leads. Filter in JS (cleaner than
+  // PostgREST nested filtering for the email_draft_html JSONB key).
+  let query = db
+    .from('campaign_enriched_data')
+    .select(`
+      id, brand_id, prospect_id, outreach_status, lead_magnets_data,
+      leads!inner (id, business_name, email_address, brand_id)
+    `)
+    .eq('outreach_status', 'APPROVED')
+    .limit(BATCH_LIMIT);
+  if (brandId) query = query.eq('brand_id', brandId);
+
+  const { data: rows, error } = await query;
+  if (error) {
+    logger.warn('dispatchApprovedEmail query error', { error: error.message });
+    return { error: error.message, processed: 0 };
+  }
+  if (!rows?.length) return stats;
+
+  // Eligible = has email AND has rendered HTML draft.
+  const eligible = rows.filter((r) => {
+    const hasEmail = !!r.leads?.email_address;
+    const md = r.lead_magnets_data || {};
+    return hasEmail && md.email_draft_html && md.email_draft_subject;
+  });
+
+  for (const row of eligible) {
+    const lead = row.leads;
+    const md   = row.lead_magnets_data || {};
+    const rowBrandId = row.brand_id || lead.brand_id;
+
+    // Per-brand guardrails: stop on first breach so caps hold.
+    try {
+      await assertSendAllowed({ brandId: rowBrandId });
+    } catch (err) {
+      if (err instanceof GuardrailBlocked) {
+        logger.warn('Guardrail breached — halting email APPROVED batch', { reason: err.reason });
+        break;
+      }
+      throw err;
+    }
+
+    try {
+      const sendRes = JSON.parse(await sendEmailTool.fn({
+        to:        lead.email_address,
+        subject:   md.email_draft_subject,
+        html_body: md.email_draft_html,
+      }));
+
+      if (sendRes?.status === 'sent' || sendRes?.status === 'mock_sent') {
+        // handlePostSendActions inside sendMail flipped outreach_status to
+        // SENT + GHL stage CONTACTADO + populated fields + dropped note.
+        // Stamp email_sent_at + email_resend_id explicitly (post-actions
+        // path doesn't always set these on the SMTP transport).
+        await db
+          .from('campaign_enriched_data')
+          .update({
+            email_sent_at:   new Date().toISOString(),
+            email_resend_id: sendRes.email_id || null,
+          })
+          .eq('id', row.id);
+
+        stats.sent++;
+        logger.info('email APPROVED → SENT', {
+          business: lead.business_name, to: lead.email_address, transport: sendRes.transport,
+        });
+      } else {
+        stats.errors++;
+        logger.warn('email APPROVED send failed', { business: lead.business_name, result: sendRes });
+      }
+    } catch (err) {
+      stats.errors++;
+      logger.warn('dispatchApprovedEmail send threw', {
+        business: lead.business_name, error: err.message,
+      });
+    }
+
+    stats.processed++;
+    // Throttle 500ms between sends to honor Gmail rate limits.
+    await new Promise((r) => setTimeout(r, 500));
+  }
+
+  if (stats.processed > 0) logger.info('dispatchApprovedEmail summary', stats);
   return stats;
 }
 

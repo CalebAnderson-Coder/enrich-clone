@@ -1,0 +1,76 @@
+{
+  "generated_at": "2026-04-25T10:34:17.227Z",
+  "location_id": "uQPxZOmT4zVlMHfOGRw2",
+  "fields": {
+    "emprika__website_url": {
+      "id": "neh3G0JBd5UaOWLyQYA3",
+      "dataType": "TEXT",
+      "name": "Empírika · Website URL"
+    },
+    "emprika__google_maps_url": {
+      "id": "zPb1eJKYKNgD1lEzxDmj",
+      "dataType": "TEXT",
+      "name": "Empírika · Google Maps URL"
+    },
+    "emprika__facebook_url": {
+      "id": "KnKcNQahb1bQFFQH0sOx",
+      "dataType": "TEXT",
+      "name": "Empírika · Facebook URL"
+    },
+    "emprika__instagram_url": {
+      "id": "Xt47l5bZCQtsf07bvKdp",
+      "dataType": "TEXT",
+      "name": "Empírika · Instagram URL"
+    },
+    "emprika__industry": {
+      "id": "TqhHd8Maw2yl8XYIfE1B",
+      "dataType": "TEXT",
+      "name": "Empírika · Industry"
+    },
+    "emprika__metro_area": {
+      "id": "w1sVLwhWz93g3o0uaayf",
+      "dataType": "TEXT",
+      "name": "Empírika · Metro Area"
+    },
+    "emprika__review_count": {
+      "id": "4hAdq8oNql0HFrH2w4UL",
+      "dataType": "NUMERICAL",
+      "name": "Empírika · Review Count"
+    },
+    "emprika__rating": {
+      "id": "zJtVXWNt811yXB2ICwht",
+      "dataType": "NUMERICAL",
+      "name": "Empírika · Rating"
+    },
+    "emprika__qualification_score": {
+      "id": "7nW0JxQu3znItIf3Fa18",
+      "dataType": "NUMERICAL",
+      "name": "Empírika · Qualification Score"
+    },
+    "emprika__lead_tier": {
+      "id": "BWvERFcMIl3r4zjfy5nx",
+      "dataType": "TEXT",
+      "name": "Empírika · Lead Tier"
+    },
+    "emprika__genoma": {
+      "id": "SogPz63X4KdbVhLI5Xl1",
+      "dataType": "LARGE_TEXT",
+      "name": "Empírika · Genoma"
+    },
+    "emprika__attack_angle": {
+      "id": "0vUcnA7uKOCqkwwrmjsC",
+      "dataType": "LARGE_TEXT",
+      "name": "Empírika · Attack Angle"
+    },
+    "emprika__last_email_sent_at": {
+      "id": "AW7TLCVkM13iq3f5ym61",
+      "dataType": "DATE",
+      "name": "Empírika · Last Email Sent At"
+    },
+    "emprika__outreach_path": {
+      "id": "WhXrbUkaBIocKL3vFV5R",
+      "dataType": "TEXT",
+      "name": "Empírika · Outreach Path"
+    }
+  }
+}
