@@ -67,9 +67,13 @@ async function getUnenrichedLeads(metroFilter) {
 // Considera "débil" cualquiera de: outreach_copy NULL, length<50, o que
 // match alguno de los placeholder tokens conocidos.
 async function getWeakEnrichments() {
+  // Order created_at DESC: priorizamos enrichments más recientes primero.
+  // Sin esto el script procesaba históricos viejos antes que los del batch
+  // que acaba de correr — a 2 min/lead se gastan 80+ min en cola innecesaria.
   const { data, error } = await supabase
     .from('campaign_enriched_data')
-    .select('id, prospect_id, outreach_copy, attack_angle, radiography_technical, leads:prospect_id(id, business_name, metro_area, industry, website, phone, rating, review_count)');
+    .select('id, prospect_id, outreach_copy, attack_angle, radiography_technical, leads:prospect_id(id, business_name, metro_area, industry, website, phone, rating, review_count)')
+    .order('created_at', { ascending: false });
   if (error) throw error;
   const WEAK_TOKENS = ['pendiente de revisión', 'sin copy', 'sin ángulo', 'sin radiografía', 'subject: ...', 'asunto: ...'];
   const isWeak = (s) => {
