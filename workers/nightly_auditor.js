@@ -355,7 +355,7 @@ export async function runNightlyAudit({ brandId, client } = {}) {
       .select('lead_magnets_data')
       .eq('brand_id', brandId)
       .not('lead_magnets_data->>wa_message_id', 'is', null)
-      .gte('updated_at', since);
+      .gte('created_at', since);
     if (error) throw error;
     const total = (rows || []).length;
     if (total === 0) {
@@ -426,7 +426,7 @@ export async function runNightlyAudit({ brandId, client } = {}) {
       .select('lead_magnets_data')
       .eq('brand_id', brandId)
       .not('lead_magnets_data->>wa_sent_at', 'is', null)
-      .gte('updated_at', sinceISO(24 * 14));
+      .gte('created_at', sinceISO(24 * 14));
     if (waErr) throw waErr;
     const waCount = (waRows || []).filter(r => {
       const ts = r.lead_magnets_data?.wa_sent_at;
@@ -463,7 +463,7 @@ export async function runNightlyAudit({ brandId, client } = {}) {
       .select('id, lead_magnets_data')
       .eq('brand_id', brandId)
       .not('lead_magnets_data->>wa_sent_at', 'is', null)
-      .gte('updated_at', sinceISO(24 * 7));
+      .gte('created_at', sinceISO(24 * 7));
     if (error) throw error;
     const window24 = Date.now() - 24 * 3600_000;
     const recent = (rows || []).filter(r => {
