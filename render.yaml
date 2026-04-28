@@ -17,6 +17,14 @@ services:
       - key: GROQ_API_KEY
         sync: false
 
+      # NVIDIA_API_KEY: cliente OpenAI-compat para integrate.api.nvidia.com.
+      # Required como primary o fallback en lib/AgentRuntime.js. Si falta y
+      # PRIMARY_LLM=gemini, el sistema queda SIN fallback y los agentes con
+      # iteraciones intensivas (Helena) topan cuota Gemini sin recovery.
+      # Incidente 2026-04-25→28: la key se perdió del runtime, pipeline congelado.
+      - key: NVIDIA_API_KEY
+        sync: false
+
       # PRIMARY_LLM: switch primario/fallback en lib/AgentRuntime.js (commit 21ab4a6).
       # Default = "" (NVIDIA primary, Gemini fallback). Set to "gemini" cuando NVIDIA
       # esté topado en cuota — Gemini se vuelve primario y NVIDIA queda como fallback.
