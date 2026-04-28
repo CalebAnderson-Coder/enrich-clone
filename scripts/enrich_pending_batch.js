@@ -66,6 +66,8 @@ async function getUnenrichedLeads(metroFilter) {
 async function enrichLead(lead, index, total) {
   const enrichPrompt = `Inicia el Macro-Flujo 2 (El Francotirador - Enriquecimiento y Ventas) para este negocio REAL:
 
+RESTRICCIÓN DE EJECUCIÓN (verifier audit 2026-04-28): Tu tarea en este run es SOLO generar análisis y copy (radiography_technical, attack_angle, outreach_copy). NO llames sendEmail, sendBatchEmails, ni requestApproval. NO envíes emails reales. NO dispares ninguna herramienta de outreach. Solo devolvé el JSON con los tres campos al final. La aprobación humana y el envío los maneja un proceso posterior.
+
 DATOS DEL LEAD:
 - Nombre: ${lead.business_name}
 - Ciudad: ${lead.metro_area || 'Orlando, FL'}
