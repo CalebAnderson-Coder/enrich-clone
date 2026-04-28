@@ -1,4 +1,18 @@
-// scripts/enrich_pending_batch.js — Enrich all Orlando leads missing campaign_enriched_data
+// scripts/enrich_pending_batch.js — Enrich all PENDING leads missing campaign_enriched_data
+//
+// Usage:
+//   node scripts/enrich_pending_batch.js [batch_size] [metro]
+//     batch_size  = max leads to process (default 10)
+//     metro       = optional metro filter substring (default: all PENDING)
+//
+//   Examples:
+//     node scripts/enrich_pending_batch.js 25         # all PENDING, top 25
+//     node scripts/enrich_pending_batch.js 5 Orlando  # Orlando only, top 5
+//
+// 2026-04-28: arreglado para (1) NO restringir a Orlando hardcoded (los 22
+// PENDING actuales están repartidos en Orlando/Miami/Tampa/Houston) y (2)
+// pasar apiKey NVIDIA al AgentRuntime para que tenga fallback efectivo cuando
+// Gemini topa cuota (incidente 04-25→28).
 import { AgentRuntime } from '../lib/AgentRuntime.js';
 import { manager } from '../agents/manager.js';
 import { scout } from '../agents/scout.js';
@@ -11,9 +25,12 @@ import { supabase, saveCampaignData } from '../supabaseUtils.js';
 import dotenv from 'dotenv';
 dotenv.config();
 
+// Pass apiKey (NVIDIA) so AgentRuntime can use NVIDIA as fallback when
+// Gemini 429s. Without this, Helena topa cuota y se cae sin recovery.
+// PRIMARY_LLM env decide cuál es primary; default 'nvidia'.
 const runtime = new AgentRuntime({
-  geminiApiKey: process.env.GEMINI_API_KEY,
-  model: 'gemini-2.0-flash',
+  apiKey: process.env.NVIDIA_API_KEY,
+  model: 'meta/llama-3.1-70b-instruct',
 });
 
 runtime.registerAgent(manager);
@@ -24,15 +41,20 @@ runtime.registerAgent(sam);
 runtime.registerAgent(kai);
 runtime.registerAgent(carlos);
 
-async function getUnenrichedLeads() {
-  // Get all Orlando leads
-  const { data: leads } = await supabase
+async function getUnenrichedLeads(metroFilter) {
+  // Default scope: every lead with outreach_status='PENDING' (waiting for enrich).
+  // Optional metroFilter narrows it (substring match, case-insensitive).
+  let query = supabase
     .from('leads')
     .select('*')
-    .eq('metro_area', 'Orlando, FL')
+    .eq('outreach_status', 'PENDING')
     .order('created_at', { ascending: false });
+  if (metroFilter) {
+    query = query.ilike('metro_area', `%${metroFilter}%`);
+  }
+  const { data: leads } = await query;
 
-  // Get all existing enrichment records
+  // Skip leads that already have a campaign_enriched_data row.
   const { data: enriched } = await supabase
     .from('campaign_enriched_data')
     .select('prospect_id');
@@ -116,16 +138,17 @@ INSTRUCCIONES:
 }
 
 async function main() {
-  const unenriched = await getUnenrichedLeads();
-  console.log(`\n🎯 Found ${unenriched.length} leads without enrichment in Orlando, FL.`);
-  
+  const BATCH_SIZE   = parseInt(process.argv[2] || '10');
+  const METRO_FILTER = process.argv[3] || null;
+  const unenriched   = await getUnenrichedLeads(METRO_FILTER);
+  const scopeLabel   = METRO_FILTER ? `metro="${METRO_FILTER}"` : 'all PENDING';
+  console.log(`\n🎯 Found ${unenriched.length} leads pending enrichment (${scopeLabel}).`);
+
   if (unenriched.length === 0) {
     console.log('✅ Todos los leads ya están enriquecidos!');
     return;
   }
 
-  // Process in batches of 5 for safety
-  const BATCH_SIZE = parseInt(process.argv[2] || '10');
   const batch = unenriched.slice(0, BATCH_SIZE);
   console.log(`📦 Processing batch of ${batch.length} leads (of ${unenriched.length} total)\n`);
 
