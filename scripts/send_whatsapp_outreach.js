@@ -28,15 +28,20 @@ const TEMPLATE_NAME = 'cold_leads_welcome';
 
 // Raw template body — must match the GHL-approved template byte-for-byte.
 // Merge fields stay as literals; GHL/Meta resolves them via `placeholders`.
+// 2026-04-28: copy actualizado por cliente Empírika (José Sánchez). El saludo
+// va en negrita WhatsApp (*…*) y se eliminó la firma final "Empirika Group".
+// IMPORTANTE: para que el lead reciba este formato hay que actualizar también
+// el template "cold_leads_welcome" en Meta/GHL Business Manager — Meta envía
+// la versión registrada, no este string. Este código alimenta solo el render
+// preview (--dry) y el stamp wa_last_body que consume el auditor 10b.
 const TEMPLATE_RAW_BODY =
-  '¡Hola, equipo de {{contact.name}}! ¿Cómo están?\n\n' +
+  '*¡Hola, equipo de {{contact.name}}! ¿Cómo están?*\n' +
   'Les habla José Sánchez de Empirika Group. Los contacto porque a mi equipo le ' +
   'llamó la atención su trabajo en {{contact.city}}. Por eso, nos tomamos la ' +
   'libertad de diseñar una propuesta visual de cómo luciría su página web 100% ' +
   'personalizada, enfocada a convertir leads en potenciales clientes.🚀\n\n' +
   'La propuesta la tienen disponible en la bandeja de entrada de: {{contact.email}} \n\n' +
-  'Sabiendo esto, ¿les gustaría que agendemos una breve llamada para comentar los detalles?\n\n' +
-  'Empirika Group ';
+  'Sabiendo esto, ¿les gustaría que agendemos una breve llamada para comentar los detalles?';
 
 const args = new Set(process.argv.slice(2));
 const DRY     = args.has('--dry');
