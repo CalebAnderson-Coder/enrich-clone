@@ -70,7 +70,7 @@ function extractIgHandle(url) {
   return m ? m[1].replace(/^@/, '') : null;
 }
 
-async function findContactByQuery(query) {
+async function findContactByQuery(query, exactField = null) {
   if (!query) return null;
   const url = new URL(`${GHL_BASE}/contacts/`);
   url.searchParams.set('locationId', LOCATION_ID);
@@ -82,17 +82,24 @@ async function findContactByQuery(query) {
     throw new Error(`contact search ${res.status}: ${t.slice(0, 150)}`);
   }
   const body = await res.json();
-  return body?.contacts?.[0] || null;
+  const list = body?.contacts || [];
+  // Verifier audit 2026-04-28: cuando el caller pide exactField, exigir
+  // match exacto (case-insensitive) en esa propiedad. Sin esto el primer
+  // resultado del fuzzy search puede ser un contacto distinto del lead.
+  if (!exactField) return list[0] || null;
+  return list.find(c => (c?.[exactField] || '').toLowerCase() === query.toLowerCase()) || null;
 }
 
 // Try several keys to find the GHL contact that matches this lead.
+// email y phone se exigen exactos; handle y business_name aceptan first-match
+// porque el fuzzy search es la única vía cuando no hay identificador único.
 async function resolveContact({ email, phone, instagramHandle, businessName }) {
   if (email) {
-    const c = await findContactByQuery(email);
+    const c = await findContactByQuery(email, 'email');
     if (c?.id) return { contact: c, matched_by: 'email' };
   }
   if (phone) {
-    const c = await findContactByQuery(phone);
+    const c = await findContactByQuery(phone, 'phone');
     if (c?.id) return { contact: c, matched_by: 'phone' };
   }
   if (instagramHandle) {
@@ -128,12 +135,15 @@ async function sendInstagramDM(contactId, message) {
 }
 
 async function fetchLeads() {
-  // Candidatos: cualquier lead con instagram_url poblado y aún sin ig_sent_at.
-  // Recogemos también campaign_enriched_data para stampar el resultado.
+  // Candidatos: leads con instagram_url poblado, ya en estado SENT, y aún
+  // sin ig_sent_at. Verifier audit 2026-04-28: filtrar por outreach_status='SENT'
+  // igual que el script hermano send_whatsapp_outreach.js. Sin este filtro,
+  // --all procesaría leads PENDING/DISQUALIFIED.
   const { data, error } = await SUPA
     .from('campaign_enriched_data')
     .select('id, prospect_id, lead_magnets_data, leads!inner(id, business_name, email_address, phone, metro_area, instagram_url)')
-    .eq('brand_id', BRAND_ID);
+    .eq('brand_id', BRAND_ID)
+    .eq('outreach_status', 'SENT');
   if (error) throw error;
 
   const seen = new Set();
