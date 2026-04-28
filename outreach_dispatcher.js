@@ -518,23 +518,35 @@ Reglas: subject 30-60 chars, preview_text 40-90 chars, body min 80 chars, todo e
         // Stamp auto_approve_at so the autonomy gate can pick this up
         // after the timeout window. Only relevant when AUTONOMY_ENABLED
         // is true; with the flag off the column is harmless.
-        const timeoutMs = Number(process.env.AUTO_APPROVE_TIMEOUT_MS || 7200000);
+        //
+        // MAGNET_INSTANT_SEND=true: skip the DRAFT → human-review window
+        // entirely. Pre-approve the magnet so the autonomous dispatcher
+        // (f93d144) sends it on the next cycle. Required by client (Empírika
+        // José Sánchez 2026-04-27): "automatizar el envío del lead magnet
+        // al lead sin aprobación del gestor".
+        const instantSend = String(process.env.MAGNET_INSTANT_SEND || '').toLowerCase() === 'true';
+        const timeoutMs = instantSend ? 0 : Number(process.env.AUTO_APPROVE_TIMEOUT_MS || 7200000);
         const autoAt = new Date(Date.now() + timeoutMs).toISOString();
+        const stampedStatus = instantSend ? 'APPROVED' : 'DRAFT';
+        if (instantSend) magnetData.approval_status = 'APPROVED';
 
         await supabase
           .from('campaign_enriched_data')
           .update({
-            outreach_status: 'DRAFT',
+            outreach_status: stampedStatus,
             lead_magnets_data: magnetData,
             auto_approve_at: autoAt,
           })
           .eq('id', record.id);
         await supabase
           .from('leads')
-          .update({ outreach_status: 'DRAFT' })
+          .update({ outreach_status: stampedStatus })
           .eq('id', lead.id);
 
-        logger.info('Draft saved — ready for approval', { business: lead.business_name });
+        logger.info(instantSend ? 'Draft auto-approved (MAGNET_INSTANT_SEND)' : 'Draft saved — ready for approval', {
+          business: lead.business_name,
+          mode: instantSend ? 'instant_send' : 'human_review',
+        });
       } else {
         // Phone/social path — no email to render, queue for manual outreach
         magnetData.approval_status = 'DRAFT_PHONE';

@@ -16,6 +16,12 @@ services:
         sync: false
       - key: GROQ_API_KEY
         sync: false
+
+      # PRIMARY_LLM: switch primario/fallback en lib/AgentRuntime.js (commit 21ab4a6).
+      # Default = "" (NVIDIA primary, Gemini fallback). Set to "gemini" cuando NVIDIA
+      # esté topado en cuota — Gemini se vuelve primario y NVIDIA queda como fallback.
+      - key: PRIMARY_LLM
+        sync: false
       - key: FIRECRAWL_API_KEY
         sync: false
       - key: BRIGHTDATA_API_TOKEN
@@ -74,6 +80,11 @@ services:
         value: "false"
       - key: AUTO_APPROVE_TIMEOUT_MS
         value: "7200000"
+      # MAGNET_INSTANT_SEND: cuando "true", el lead-magnet salta el DRAFT y queda
+      # APPROVED inmediatamente. El dispatcher autónomo (f93d144) lo enviará en su
+      # próximo ciclo, sin esperar revisión humana. Pedido cliente Empírika 04-27.
+      - key: MAGNET_INSTANT_SEND
+        value: "false"
       - key: MAX_SENDS_PER_HOUR
         value: "30"
       - key: MAX_LEADS_PER_DAY_PER_BRAND
@@ -142,6 +153,25 @@ services:
         sync: false
       - key: SUPABASE_SERVICE_ROLE_KEY
         sync: false
+
+  # ── Morning briefing: Layer 2 v5 daily ritual ────────────────
+  # Runs daily at 13:00 UTC (9 ET / 8 CDMX). Reads autonomy_audits y
+  # produce JSON dispatch plan + ledger row en autonomy_briefings.
+  # Plan: .omc/plans/autonomy-3layer-v2.md §B.4 + v5 W0/W1.
+  - type: cron
+    name: empirika-morning-briefing
+    env: node
+    region: ohio
+    schedule: "0 13 * * *"
+    buildCommand: npm install --include=dev
+    startCommand: node scripts/morning_briefing.js --with-dispatch
+    envVars:
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        sync: false
+      - key: BRAND_ID
+        value: "eca1d833-77e3-4690-8cf1-2a44db20dcf8"
 
   # ── Lyra: Autonomous B2B Content Engine ──────────────────────
   # Runs Mon-Fri at 12:00 UTC (8:00 AM ET)
