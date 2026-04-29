@@ -127,13 +127,38 @@ Schema obligatorio (sustituí los <texto real ...> por contenido real, NO copies
 
     // Parser robusto: 4 estrategias en cascada antes de caer al placeholder.
     // Detecta también el modo "el agente copió el placeholder del schema" y lo trata como inválido.
+    // 2026-04-29: code-reviewer audit detectó que la versión previa pasaba [Nombre del propietario],
+    // "Estimado [", "Pendiente de revisión.", "No se encontró información suficiente" como válidos.
+    // Patch: lista expandida + 2 regex (BRACKET_PLACEHOLDER, GENERIC_SALUTATION) + hard floor 100 chars.
     const PLACEHOLDER_TOKENS = [
-      'Subject: ...', 'Asunto: ...',
-      'Ángulo de ventas en 1 párrafo', 'Evaluación técnica en 1-2 párrafos',
-      '<texto real', 'Sin Radiografía', 'Sin Ángulo', 'Sin Copy',
+      'subject: ...', 'asunto: ...', 'body: ...', 'cuerpo: ...',
+      'ángulo de ventas en 1 párrafo', 'evaluación técnica',
+      '<texto real', 'sin radiografía', 'sin ángulo', 'sin copy',
+      'pendiente de revisión', 'pendiente de revision',
+      'no se encontró información suficiente',
+      'no se encontro informacion suficiente',
+      'no se puede generar',
     ];
-    const looksLikePlaceholder = (s) =>
-      typeof s === 'string' && PLACEHOLDER_TOKENS.some(t => s.toLowerCase().includes(t.toLowerCase()));
+    const BRACKET_PLACEHOLDER = /\[(nombre|empresa|ciudad|propietario|cliente|negocio|owner|company)[^\]]*\]/i;
+    const GENERIC_SALUTATION  = /\bestimad[oa]s?\s*\[/i;
+
+    const looksLikePlaceholder = (s) => {
+      if (typeof s !== 'string') return true;
+      const lower = s.toLowerCase().trim();
+      if (lower.length < 100) return true;                       // hard floor
+      if (PLACEHOLDER_TOKENS.some(t => lower.includes(t))) return true;
+      if (BRACKET_PLACEHOLDER.test(s)) return true;
+      if (GENERIC_SALUTATION.test(s)) return true;
+      return false;
+    };
+
+    // outreach_copy debe contener subject + body markers reales con cuerpo sustantivo
+    const looksLikeRealCopy = (s) =>
+      typeof s === 'string' &&
+      s.length >= 120 &&
+      /asunto\s*:/i.test(s) &&
+      /cuerpo\s*:/i.test(s) &&
+      !looksLikePlaceholder(s);
 
     const tryParse = (raw) => {
       if (!raw) return null;
@@ -188,20 +213,30 @@ Schema obligatorio (sustituí los <texto real ...> por contenido real, NO copies
       };
     }
 
-    // Preferí el campo del enrichData si tiene contenido sustantivo (>50 chars).
-    // El fallback "Sin X" solo se usa si el campo viene null o muy corto — esto
-    // preserva el response crudo guardado en attack_angle cuando JSON falla.
-    const pickField = (val, fallback) => {
-      if (val && typeof val === 'string' && val.trim().length >= 50) return val;
-      if (val && typeof val === 'string' && val.trim().length > 0) return val; // > 0 mejor que el placeholder
+    // pickField con validador estricto. Si val no pasa el validator, devuelve fallback.
+    // Code-reviewer audit 04-29: la versión previa con length>=50 || length>0 era una
+    // farsa — cualquier string no vacío pasaba. Ahora outreach_copy exige looksLikeRealCopy.
+    const pickField = (val, fallback, validator = (v) => !looksLikePlaceholder(v)) => {
+      if (val && validator(val)) return val;
       return fallback;
     };
+
+    // Si CUALQUIER field crítico falla el validator, marcamos el row como NEEDS_REWRITE
+    // en vez de ENRICHED. El dispatcher solo procesa ENRICHED — esto es defense-in-depth.
+    const validRadiography = !looksLikePlaceholder(enrichData.radiography_technical);
+    const validAttack      = !looksLikePlaceholder(enrichData.attack_angle);
+    const validOutreach    = looksLikeRealCopy(enrichData.outreach_copy);
+    const allValid         = validRadiography && validAttack && validOutreach;
+
     const payload = {
-      radiography_technical: pickField(enrichData.radiography_technical, "Sin Radiografía."),
-      attack_angle:          pickField(enrichData.attack_angle,          "Sin Ángulo."),
-      outreach_copy:         pickField(enrichData.outreach_copy,         "Sin Copy."),
-      status: 'ENRICHED',
+      radiography_technical: pickField(enrichData.radiography_technical, null),
+      attack_angle:          pickField(enrichData.attack_angle,          null),
+      outreach_copy:         pickField(enrichData.outreach_copy,         null, looksLikeRealCopy),
+      status: allValid ? 'ENRICHED' : 'NEEDS_REWRITE',
     };
+    if (!allValid) {
+      console.log(`  ⚠️ ${lead.business_name} → NEEDS_REWRITE (radio:${validRadiography} attack:${validAttack} outreach:${validOutreach})`);
+    }
 
     if (mode === 'update' && lead._ced_id) {
       // Retry mode: UPDATE row existente en lugar de INSERT.
