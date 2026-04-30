@@ -108,8 +108,16 @@ INSTRUCCIONES:
 1. Usa tus herramientas de búsqueda web para investigar la presencia online REAL de esta empresa.
 2. Haz una radiografía técnica de su presencia digital (website, SEO, social, publicidad).
 3. Define el ángulo de ataque ("attack angle") para el mercado hispano.
-4. Genera el email copy (subject + body) en Spanglish auténtico que Angela usaría.
+4. Genera el email copy (subject + body) en español autentico que Angela usaría.
 5. Devuelve la respuesta SIEMPRE como bloque JSON entre triple backticks. Las keys del JSON son literalmente: radiography_technical, attack_angle, outreach_copy. Para outreach_copy, escribir el cuerpo del email en español, formato "Asunto: <texto real> | Cuerpo: <texto real del email>". NO devolver placeholders genéricos como "Subject: ..." o "Ángulo de ventas en 1 párrafo" — esos son descriptivos del schema, no datos. Si no encontrás suficiente información para un campo, escribilo igual con un fallback honesto (ej. "No se encontró información suficiente sobre presencia digital, propuesta basada en industria/zona").
+
+REGLA DE COPY LIMPIO (CRÍTICA):
+- El email VA a salir tal cual lo escribas. NO dejes meta-instrucciones, condicionales ni razonamiento dentro del cuerpo.
+- PROHIBIDO usar corchetes [...] dentro del outreach_copy. Nunca escribas "[Nombre del contacto, si lo encuentras en LinkedIn...]" o "[Equipo de X, si no encuentras nombre]". Decide tú la forma final del saludo y firma.
+- Si no sabés el nombre del contacto, usa directamente "Equipo de ${lead.business_name}" o "Hola," — NO escribas instrucciones condicionales sobre cómo elegir el saludo.
+- PROHIBIDO firmas con [Tu Nombre], [Empírika], [Empresa]. Firma cerrada: "Angela M. — Empírika Digital".
+- PROHIBIDO frases "si lo encuentras", "si es posible", "si no, usa", "[opcional]" dentro del cuerpo.
+- El outreach_copy debe ser texto enviable tal cual. Si lo lees y suena a borrador con notas para el editor, está mal — re-escribilo limpio.
 
 Schema obligatorio (sustituí los <texto real ...> por contenido real, NO copies estos placeholders):
 \`\`\`json
