@@ -30,6 +30,7 @@ import { createClient } from '@supabase/supabase-js';
 import nodemailer from 'nodemailer';
 import { renderMagnetEmail } from '../lib/emailRenderer.js';
 import { logOutreachEvent } from '../tools/outreachEvents.js';
+import { discoverEmail } from '../lib/emailVerifier.js';
 import { randomUUID } from 'crypto';
 import dns from 'dns/promises';
 
@@ -387,6 +388,9 @@ async function processOne(target, idx) {
       has_attachment: true,
       manual_send: true,
       script: 'send_sourced_hvac_2026-05-06',
+      email_verified: true,
+      email_source: target.email_source,
+      email_alternates: target.email_alternates,
       ghl_contact_id: ghlContactId,
       ghl_opportunity_id: ghlOpptyId,
       ghl_pipeline_id: PIPELINE_ID,
@@ -432,25 +436,34 @@ async function processOne(target, idx) {
     if (d) knownDomains.add(d);
   }
 
-  // Build send list
+  // Build send list — verify each candidate's email by scraping their site
   const sendList = [];
+  console.log(`\nVerificando emails (scraping de cada website)…\n`);
   for (const c of candidates) {
     const dom = domainOf(c.website);
     if (!dom) continue;
     if (SKIP_DOMAINS.includes(dom)) continue;
     if (knownDomains.has(dom)) {
-      console.log(`  · skip ${c.name} — domain already in DB (${dom})`);
+      console.log(`  · skip ${c.name} — ya está en DB (${dom})`);
       continue;
     }
-    const email = `info@${dom}`;
-    if (knownEmails.has(email)) continue;
-
-    // MX check — drop domains with no mail server
     const hasMx = await hasMxRecord(dom);
     if (!hasMx) {
-      console.log(`  · skip ${c.name} — no MX for ${dom}`);
+      console.log(`  · skip ${c.name} — sin MX para ${dom}`);
       continue;
     }
+
+    process.stdout.write(`  · ${c.name.padEnd(45)} `);
+    const result = await discoverEmail(c.website);
+    if (!result) {
+      console.log(`✗ sin email publicado en sitio`);
+      continue;
+    }
+    if (knownEmails.has(result.email)) {
+      console.log(`✗ ya en DB: ${result.email}`);
+      continue;
+    }
+    console.log(`✓ ${result.email}  (de ${result.source.replace(/^https?:\/\//, '').slice(0, 40)})`);
 
     sendList.push({
       business_name: c.name,
@@ -462,7 +475,9 @@ async function processOne(target, idx) {
       review_count: c.reviewCount,
       rating: c.rating,
       qualification_score: c.qualification_score,
-      email_address: email,
+      email_address: result.email,
+      email_source: result.source,
+      email_alternates: result.allFound.filter(e => e !== result.email),
     });
     if (sendList.length >= LIMIT) break;
   }

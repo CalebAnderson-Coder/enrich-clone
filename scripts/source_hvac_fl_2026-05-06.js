@@ -42,10 +42,7 @@ function looksLatinoOwned(name, address) {
 }
 
 const METROS = [
-  { name: 'Hialeah, FL',      query: 'HVAC contractor Hialeah FL' },
-  { name: 'Doral, FL',        query: 'HVAC contractor Doral FL' },
-  { name: 'Kissimmee, FL',    query: 'HVAC contractor Kissimmee FL' },
-  { name: 'Miami Beach, FL',  query: 'HVAC contractor Miami Beach FL' },
+  { name: 'Homestead, FL',  query: 'HVAC contractor Homestead FL' },
 ];
 
 async function runApify(query, maxResults = 25) {
