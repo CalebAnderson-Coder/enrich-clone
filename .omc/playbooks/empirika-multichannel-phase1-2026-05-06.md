@@ -16,7 +16,7 @@ Este playbook crea **dos workflows en GoHighLevel** que la API no nos deja crear
 2. Nombra el workflow exactamente: `03-FU IG MANUAL DAY 5`. Folder: `Empírika`.
 3. **Trigger** (clic en `+ Add New Workflow Trigger`):
    - Tipo: **Pipeline Stage Changed**
-   - Pipeline: `COLD LEADS | GOOGLE MY BUSINESS`
+   - Pipeline: `COLD LEADS | GOOGLE MY BUSINESS` (id `PbSBohJh1m1L08INwMzv`)
    - Stage: `NUEVO`
    - Filtros (botón `Add filters`):
      - `Tag` *does not contain* `replied-via-ig`
@@ -102,7 +102,7 @@ Este playbook crea **dos workflows en GoHighLevel** que la API no nos deja crear
    - `+ Add Action → Find/Create Contact`
    - Source: `Instagram Comment`
    - Tag: `ig-organic-inbound`
-   - Pipeline: `COLD LEADS | GOOGLE MY BUSINESS` · Stage: `INTERESADO`
+   - Pipeline: `COLD LEADS | GOOGLE MY BUSINESS` (id `PbSBohJh1m1L08INwMzv`) · Stage: `INTERESADO`
 6. **Acción 3 — Internal Notification** al equipo (in-app):
    - Subject: `Nuevo inbound IG: @{{trigger.commenter_username}}`
 7. **Settings:** Allow Re-Entry: OFF · Stop on response: ON.
