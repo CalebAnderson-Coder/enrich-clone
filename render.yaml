@@ -16,6 +16,20 @@ services:
         sync: false
       - key: GROQ_API_KEY
         sync: false
+
+      # NVIDIA_API_KEY: cliente OpenAI-compat para integrate.api.nvidia.com.
+      # Required como primary o fallback en lib/AgentRuntime.js. Si falta y
+      # PRIMARY_LLM=gemini, el sistema queda SIN fallback y los agentes con
+      # iteraciones intensivas (Helena) topan cuota Gemini sin recovery.
+      # Incidente 2026-04-25→28: la key se perdió del runtime, pipeline congelado.
+      - key: NVIDIA_API_KEY
+        sync: false
+
+      # PRIMARY_LLM: switch primario/fallback en lib/AgentRuntime.js (commit 21ab4a6).
+      # Default = "" (NVIDIA primary, Gemini fallback). Set to "gemini" cuando NVIDIA
+      # esté topado en cuota — Gemini se vuelve primario y NVIDIA queda como fallback.
+      - key: PRIMARY_LLM
+        sync: false
       - key: FIRECRAWL_API_KEY
         sync: false
       - key: BRIGHTDATA_API_TOKEN
@@ -74,6 +88,11 @@ services:
         value: "false"
       - key: AUTO_APPROVE_TIMEOUT_MS
         value: "7200000"
+      # MAGNET_INSTANT_SEND: cuando "true", el lead-magnet salta el DRAFT y queda
+      # APPROVED inmediatamente. El dispatcher autónomo (f93d144) lo enviará en su
+      # próximo ciclo, sin esperar revisión humana. Pedido cliente Empírika 04-27.
+      - key: MAGNET_INSTANT_SEND
+        value: "false"
       - key: MAX_SENDS_PER_HOUR
         value: "30"
       - key: MAX_LEADS_PER_DAY_PER_BRAND
@@ -142,6 +161,66 @@ services:
         sync: false
       - key: SUPABASE_SERVICE_ROLE_KEY
         sync: false
+
+  # ── Morning briefing: Layer 2 v5 daily ritual ────────────────
+  # Runs daily at 13:00 UTC (9 ET / 8 CDMX). Reads autonomy_audits y
+  # produce JSON dispatch plan + ledger row en autonomy_briefings.
+  # Plan: .omc/plans/autonomy-3layer-v2.md §B.4 + v5 W0/W1.
+  - type: cron
+    name: empirika-morning-briefing
+    env: node
+    region: ohio
+    schedule: "0 13 * * *"
+    buildCommand: npm install --include=dev
+    startCommand: node scripts/morning_briefing.js --with-dispatch
+    envVars:
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        sync: false
+      - key: BRAND_ID
+        value: "eca1d833-77e3-4690-8cf1-2a44db20dcf8"
+
+  # ── Follow-up 48h: deterministic email bump ──────────────────
+  # Runs hourly. Sends a Spanish-only soft-bump to every lead that
+  # was first-contacted by email ≥48h ago and hasn't replied,
+  # bounced, unsubscribed, or already received a follow-up.
+  # No LLM dependency — survives Gemini/NVIDIA outages.
+  # Logs outreach_events (followup_sent), syncs GHL note + tag.
+  - type: cron
+    name: empirika-followup-48h
+    env: node
+    region: ohio
+    schedule: "0 * * * *"
+    buildCommand: npm install --include=dev
+    startCommand: node scripts/followup_48h.js
+    envVars:
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        sync: false
+      - key: SMTP_USER
+        sync: false
+      - key: SMTP_PASS
+        sync: false
+      - key: SMTP_FROM_NAME
+        sync: false
+      - key: SMTP_HOST
+        value: smtp.gmail.com
+      - key: SMTP_PORT
+        value: "587"
+      - key: EMPIRIKA_GHL_KEY
+        sync: false
+      - key: EMPIRIKA_GHL_LOCATION_ID
+        value: "uQPxZOmT4zVlMHfOGRw2"
+      - key: BRAND_ID
+        value: "eca1d833-77e3-4690-8cf1-2a44db20dcf8"
+      - key: FOLLOWUP_HOURS
+        value: "48"
+      - key: FU_MAX_AGE_DAYS
+        value: "14"
+      - key: FU_MAX_PER_HOUR
+        value: "30"
 
   # ── Lyra: Autonomous B2B Content Engine ──────────────────────
   # Runs Mon-Fri at 12:00 UTC (8:00 AM ET)
