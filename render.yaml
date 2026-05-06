@@ -181,6 +181,48 @@ services:
       - key: BRAND_ID
         value: "eca1d833-77e3-4690-8cf1-2a44db20dcf8"
 
+  # ── Follow-up 48h: deterministic email bump ──────────────────
+  # Runs hourly. Sends a Spanish-only soft-bump to every lead that
+  # was first-contacted by email ≥48h ago and hasn't replied,
+  # bounced, unsubscribed, or already received a follow-up.
+  # 14-day age ceiling prevents spamming stale contacts.
+  # No LLM dependency — survives Gemini/NVIDIA outages.
+  # Logs outreach_events (followup_sent), syncs GHL note + tag.
+  - type: cron
+    name: empirika-followup-48h
+    env: node
+    region: ohio
+    schedule: "0 * * * *"
+    buildCommand: npm install --include=dev
+    startCommand: node scripts/followup_48h.js
+    envVars:
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        sync: false
+      - key: SMTP_USER
+        sync: false
+      - key: SMTP_PASS
+        sync: false
+      - key: SMTP_FROM_NAME
+        sync: false
+      - key: SMTP_HOST
+        value: smtp.gmail.com
+      - key: SMTP_PORT
+        value: "587"
+      - key: EMPIRIKA_GHL_KEY
+        sync: false
+      - key: EMPIRIKA_GHL_LOCATION_ID
+        value: "uQPxZOmT4zVlMHfOGRw2"
+      - key: BRAND_ID
+        value: "eca1d833-77e3-4690-8cf1-2a44db20dcf8"
+      - key: FOLLOWUP_HOURS
+        value: "48"
+      - key: FU_MAX_AGE_DAYS
+        value: "14"
+      - key: FU_MAX_PER_HOUR
+        value: "30"
+
   # ── Lyra: Autonomous B2B Content Engine ──────────────────────
   # Runs Mon-Fri at 12:00 UTC (8:00 AM ET)
   # Pipeline: BrightData Research → Gemini Draft → Buffer → LinkedIn
