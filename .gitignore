@@ -56,3 +56,7 @@ scraped_*.html
 scraped_*.md
 # Local dev scripts (service_role usage, never commit)
 _mint_magic.mjs
+
+# Apify sourcing snapshots (raw + filtered JSON dumps from scripts/source_*.js).
+# Generated data — kept locally for review, never committed.
+.omc/research/
