@@ -25,10 +25,18 @@ import { sendSMS } from './scripts/twilio.js';
 dotenv.config();
 
 // ── Agentic Copilot Init ──────────────────────────────────────
+// NVIDIA primary, Gemini fallback (same wiring as index.js / pipelineRunner /
+// estratega_deep_weekly). Previously this file hardcoded Gemini, which meant
+// every Angela + Verifier call from the autonomous email dispatcher rode on
+// Gemini alone — when Gemini hit 429 (e.g. 2026-04-25→28, 2026-05-06), the
+// whole outbound pipeline froze because there was no fallback to NVIDIA even
+// though NVIDIA_API_KEY was present in Render. Wiring through AgentRuntime's
+// standard NVIDIA-default constructor restores the dual-provider circuit
+// breakers + automatic fallback that lib/AgentRuntime.js already implements.
 const runtime = new AgentRuntime({
-  apiKey: process.env.GEMINI_API_KEY,
-  model: 'gemini-2.0-flash',
-  baseURL: 'https://generativelanguage.googleapis.com/v1beta/openai/',
+  apiKey: process.env.NVIDIA_API_KEY,
+  model: 'meta/llama-3.1-70b-instruct',
+  baseURL: 'https://integrate.api.nvidia.com/v1',
 });
 runtime.registerAgent(angela);
 runtime.registerAgent(verifier);
