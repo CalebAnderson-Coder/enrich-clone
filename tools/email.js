@@ -600,17 +600,14 @@ export async function handlePostSendActions(to, { client } = {}) {
           }
         }
 
-        if (opportunityId && !magnetData.ghl_moved_to_contactado_at) {
-          const stageContactado = process.env.GHL_STAGE_CONTACTADO_ID || 'c1d2e758-5235-4469-b0b5-95d4fb06cdc4';
-          const mv = await moveOpportunityToStage(opportunityId, stageContactado);
-          if (mv.ok) {
-            magnetData.ghl_stage                   = 'CONTACTADO';
-            magnetData.ghl_moved_to_contactado_at  = new Date().toISOString();
-            logger.info('GHL stage NUEVO→CONTACTADO', { opportunityId, business: lead.business_name });
-          } else {
-            magnetData.ghl_stage_move_error = mv.error;
-            logger.warn('GHL stage move failed', { opportunityId, error: mv.error });
-          }
+        // Per Empírika client (José Sánchez) 2026-05-06: cold-email sends
+        // must REMAIN in stage NUEVO. CONTACTADO is reserved for 1:1
+        // personal contact (reply received, phone call, DM exchange). The
+        // previous auto-advance to CONTACTADO has been removed — the stage
+        // stays NUEVO and only moves when a human-to-human signal fires
+        // (e.g. via a webhook on inbound reply detection).
+        if (opportunityId) {
+          magnetData.ghl_stage = 'NUEVO';
         }
 
         await db

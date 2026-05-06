@@ -8,7 +8,8 @@
 //   2. Render HVAC template + rotating screenshot, send via SMTP
 //   3. Mark outreach_status='SENT' + dates
 //   4. Create GHL contact (with phone, address, website)
-//   5. Create GHL opportunity in COLD LEADS pipeline → stage CONTACTADO
+//   5. Create GHL opportunity in COLD LEADS pipeline → stage NUEVO
+//      (CONTACTADO is reserved for 1:1 personal contact per client request)
 //   6. Add tags: empirika-cold-email, manual-send-<date>, canal-email,
 //      hvac-fl, tier-hot, score-XX, <metro-slug>
 //   7. Drop a [empirika-perfil:v1] note with full lead data
@@ -51,7 +52,10 @@ const SKIP_DOMAINS = skipArg ? skipArg.split('=')[1].split(',') : [];
 // ── Constants ────────────────────────────────────────────────
 const BRAND_ID = 'eca1d833-77e3-4690-8cf1-2a44db20dcf8';
 const PIPELINE_ID = 'PbSBohJh1m1L08INwMzv';
-const STAGE_CONTACTADO = 'c1d2e758-5235-4469-b0b5-95d4fb06cdc4';
+// Cold-email sends land in NUEVO, not CONTACTADO. Per Empírika client (José
+// Sánchez) 2026-05-06: stage CONTACTADO is reserved for 1:1 personal contact
+// (reply received, phone call, DM exchange). Mass cold email = NUEVO.
+const STAGE_NUEVO = '8e718ffe-25b0-40d6-9d43-86bd0a96c5d1';
 const NICHE_FOLDER = '10. Aire acondicionado (HVAC)';
 const SCREENSHOT_FILES = [
   'screencapture-st-ourhtmldemo-new-Aircare-2026-03-30-17_38_21.png',
@@ -175,7 +179,7 @@ async function ghlCreateOpportunity(contactId, name) {
     headers: GHL_HEADERS,
     body: JSON.stringify({
       pipelineId: PIPELINE_ID,
-      pipelineStageId: STAGE_CONTACTADO,
+      pipelineStageId: STAGE_NUEVO,
       contactId,
       name,
       status: 'open',
@@ -223,7 +227,7 @@ function buildPerfilNote(lead, sentInfo) {
 • Google Maps: ${lead.google_maps_url || '—'}
 
 🎯 ESTADO OUTREACH
-• Stage: CONTACTADO (canal email)
+• Stage: NUEVO (cold email — pendiente de contacto 1:1)
 • Primer contacto: ${dt} UTC
 • Próximo follow-up automático: 48h después
 • Source: Apify Google Maps · 2026-05-06 (sourcing run Hialeah/Doral/Kissimmee/Miami Beach)
@@ -394,8 +398,8 @@ async function processOne(target, idx) {
       ghl_contact_id: ghlContactId,
       ghl_opportunity_id: ghlOpptyId,
       ghl_pipeline_id: PIPELINE_ID,
-      ghl_stage_id: STAGE_CONTACTADO,
-      ghl_stage_name: 'CONTACTADO',
+      ghl_stage_id: STAGE_NUEVO,
+      ghl_stage_name: 'NUEVO',
     },
     messageId: info.messageId,
   });
