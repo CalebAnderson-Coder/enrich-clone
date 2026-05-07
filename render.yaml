@@ -196,16 +196,33 @@ services:
     buildCommand: npm install --include=dev
     startCommand: node scripts/followup_48h.js
     envVars:
+      # Inherit secrets from web service (avoids manual per-cron env setup
+      # that was leaving this cron in Failed-build state since 2026-05-06).
       - key: SUPABASE_URL
-        sync: false
+        fromService:
+          type: web
+          name: agency-fleet-runtime
+          envVarKey: SUPABASE_URL
       - key: SUPABASE_SERVICE_ROLE_KEY
-        sync: false
+        fromService:
+          type: web
+          name: agency-fleet-runtime
+          envVarKey: SUPABASE_SERVICE_ROLE_KEY
       - key: SMTP_USER
-        sync: false
+        fromService:
+          type: web
+          name: agency-fleet-runtime
+          envVarKey: SMTP_USER
       - key: SMTP_PASS
-        sync: false
+        fromService:
+          type: web
+          name: agency-fleet-runtime
+          envVarKey: SMTP_PASS
       - key: SMTP_FROM_NAME
-        sync: false
+        fromService:
+          type: web
+          name: agency-fleet-runtime
+          envVarKey: SMTP_FROM_NAME
       - key: SMTP_HOST
         value: smtp.gmail.com
       - key: SMTP_PORT
@@ -238,18 +255,38 @@ services:
     buildCommand: npm install --include=dev
     startCommand: node workers/helena_autonomous.js
     envVars:
+      # Inherit secrets from the web service that already has them populated.
+      # Avoids needing to set the same secret manually on every new worker.
       - key: SUPABASE_URL
-        sync: false
+        fromService:
+          type: web
+          name: agency-fleet-runtime
+          envVarKey: SUPABASE_URL
       - key: SUPABASE_SERVICE_ROLE_KEY
-        sync: false
+        fromService:
+          type: web
+          name: agency-fleet-runtime
+          envVarKey: SUPABASE_SERVICE_ROLE_KEY
       - key: SUPABASE_SERVICE_KEY
-        sync: false
+        fromService:
+          type: web
+          name: agency-fleet-runtime
+          envVarKey: SUPABASE_SERVICE_KEY
       - key: NVIDIA_API_KEY
-        sync: false
+        fromService:
+          type: web
+          name: agency-fleet-runtime
+          envVarKey: NVIDIA_API_KEY
       - key: GEMINI_API_KEY
-        sync: false
+        fromService:
+          type: web
+          name: agency-fleet-runtime
+          envVarKey: GEMINI_API_KEY
       - key: PRIMARY_LLM
-        sync: false
+        fromService:
+          type: web
+          name: agency-fleet-runtime
+          envVarKey: PRIMARY_LLM
       - key: BRAND_ID
         value: "eca1d833-77e3-4690-8cf1-2a44db20dcf8"
       - key: HELENA_SLEEP_MS
@@ -275,18 +312,37 @@ services:
     buildCommand: npm install --include=dev
     startCommand: node workers/manager_autonomous.js
     envVars:
+      # Inherit secrets from the web service (avoids manual per-worker setup).
       - key: SUPABASE_URL
-        sync: false
+        fromService:
+          type: web
+          name: agency-fleet-runtime
+          envVarKey: SUPABASE_URL
       - key: SUPABASE_SERVICE_ROLE_KEY
-        sync: false
+        fromService:
+          type: web
+          name: agency-fleet-runtime
+          envVarKey: SUPABASE_SERVICE_ROLE_KEY
       - key: SUPABASE_SERVICE_KEY
-        sync: false
+        fromService:
+          type: web
+          name: agency-fleet-runtime
+          envVarKey: SUPABASE_SERVICE_KEY
       - key: NVIDIA_API_KEY
-        sync: false
+        fromService:
+          type: web
+          name: agency-fleet-runtime
+          envVarKey: NVIDIA_API_KEY
       - key: GEMINI_API_KEY
-        sync: false
+        fromService:
+          type: web
+          name: agency-fleet-runtime
+          envVarKey: GEMINI_API_KEY
       - key: PRIMARY_LLM
-        sync: false
+        fromService:
+          type: web
+          name: agency-fleet-runtime
+          envVarKey: PRIMARY_LLM
       - key: BRAND_ID
         value: "eca1d833-77e3-4690-8cf1-2a44db20dcf8"
       - key: MANAGER_SLEEP_MS
