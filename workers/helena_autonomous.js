@@ -168,30 +168,23 @@ async function processIncomingMessage(msg, messenger, runtime, log) {
 async function runAutonomousAuditCycle(supabase, messenger, log) {
   log.info('Helena: running autonomous audit cycle');
 
-  // ── Guard: verify last_audit_at column exists ────────────────
-  const { data: colCheck, error: colErr } = await supabase
-    .from('information_schema.columns')
-    .select('column_name')
-    .eq('table_schema', 'public')
-    .eq('table_name', 'brands')
-    .eq('column_name', 'last_audit_at')
-    .maybeSingle();
-
-  if (colErr || !colCheck) {
-    log.warn('Helena: brands.last_audit_at column not found — skipping audit scan', {
-      err: colErr?.message,
-    });
-    return { foundPattern: false, detail: { reason: 'no_last_audit_at_column' } };
-  }
-
   // ── Query brands due for audit ───────────────────────────────
+  // Migration 018 added last_audit_at to brands. If for any reason the column
+  // is missing in this DB, Postgres returns code '42703' (undefined column)
+  // and we degrade gracefully.
   const { data: candidates, error: queryErr } = await supabase
     .from('brands')
-    .select('brand_id, business_name, last_audit_at')
+    .select('id, name, last_audit_at')
     .or('last_audit_at.is.null,last_audit_at.lt.' + new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString())
     .limit(3);
 
   if (queryErr) {
+    if (queryErr.code === '42703') {
+      log.warn('Helena: brands.last_audit_at column missing — apply migration 018', {
+        err: queryErr.message,
+      });
+      return { foundPattern: false, detail: { reason: 'no_last_audit_at_column' } };
+    }
     log.warn('Helena: brands query failed in autonomous cycle', { err: queryErr.message });
     return { foundPattern: false, detail: { reason: 'query_error', err: queryErr.message } };
   }
@@ -214,19 +207,19 @@ async function runAutonomousAuditCycle(supabase, messenger, log) {
         to: 'manager',
         payload: {
           type: 'seo_audit_proposal',
-          brand_id: brand.brand_id,
-          business_name: brand.business_name,
+          brand_id: brand.id,
+          name: brand.name,
           days_since_audit: daysSinceAudit,
         },
       });
       log.info('Helena: seo_audit_proposal sent to manager', {
-        brand_id: brand.brand_id,
-        business_name: brand.business_name,
+        brand_id: brand.id,
+        name: brand.name,
         days_since_audit: daysSinceAudit,
       });
     } catch (sendErr) {
       log.warn('Helena: failed to send seo_audit_proposal to manager', {
-        brand_id: brand.brand_id,
+        brand_id: brand.id,
         err: sendErr.message,
       });
     }
