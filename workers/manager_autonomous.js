@@ -107,21 +107,26 @@ async function processIncomingMessage(msg, messenger, runtime, log) {
     }
 
     // Derive website from brand profile — query brands table directly
-    let websiteUrl = null;
-    try {
-      const supabase = buildSupabase();
-      const { data: brand, error: brandErr } = await supabase
-        .from('brands')
-        .select('website')
-        .eq('id', brand_id)
-        .maybeSingle();
-      if (!brandErr && brand?.website) {
-        websiteUrl = brand.website;
-      }
-    } catch (lookupErr) {
-      log.warn('Manager: failed to look up brand website, using placeholder', { err: lookupErr.message });
+    const supabase = buildSupabase();
+    const { data: brandRow, error: brandErr } = await supabase
+      .from('brands')
+      .select('website, name, brand_profile')
+      .eq('id', brand_id)
+      .maybeSingle();
+
+    if (brandErr || !brandRow?.website) {
+      log.warn('Manager: brand has no website on record, using placeholder', {
+        brand_id,
+        name: brandRow?.name,
+        err: brandErr?.message,
+      });
     }
-    websiteUrl = websiteUrl ?? `https://placeholder-${brand_id}.com`;
+
+    const websiteUrl = brandRow?.website
+      || brandRow?.brand_profile?.website   // jsonb fallback
+      || `https://placeholder-${brand_id}.com`;  // last resort
+
+    const brand_name = brandRow?.name ?? name ?? brand_id;
 
     // Approve: send seo_audit back to Helena
     try {
@@ -130,17 +135,18 @@ async function processIncomingMessage(msg, messenger, runtime, log) {
         payload: {
           type: 'seo_audit',
           brand_id,
+          brand_name,
           website_url: websiteUrl,
           depth: 'quick',
         },
       });
-      log.info('Manager: seo_audit dispatched to Helena', { brand_id, websiteUrl });
+      log.info('Manager: seo_audit dispatched to Helena', { brand_id, brand_name, websiteUrl });
     } catch (sendErr) {
       log.warn('Manager: failed to send seo_audit to Helena', { err: sendErr.message });
       throw sendErr;
     }
 
-    return { ok: true, decision: 'approved', queued_to: 'helena', website_url: websiteUrl };
+    return { ok: true, decision: 'approved', queued_to: 'helena', brand_name, website_url: websiteUrl };
   }
 
   // ── pattern_detected ────────────────────────────────────────
