@@ -80,7 +80,7 @@ async function shouldRunAutonomously(messenger, inboundCount) {
  * Supported types: seo_audit, blog_write, keyword_research, pause
  * Anything else throws → caller nacks the message.
  */
-async function processIncomingMessage(msg, messenger, runtime, log) {
+async function processIncomingMessage(msg, messenger, runtime, log, supabase) {
   const { type } = msg.payload ?? {};
 
   // ── Helper: set circuit breaker on rate-limit errors ────────
@@ -100,7 +100,44 @@ async function processIncomingMessage(msg, messenger, runtime, log) {
     try {
       const prompt = `Realiza un SEO audit técnico para el sitio web ${website_url}. Devuelve el JSON radiography_technical.`;
       const result = await runtime.run('Helena', prompt, { brand_id });
-      return { ok: true, type: 'seo_audit', result: result.response?.slice(0, 500) };
+
+      // Persist last_audit_at so the autonomous cycle doesn't re-detect this brand
+      const { error: updateErr } = await supabase
+        .from('brands')
+        .update({ last_audit_at: new Date().toISOString() })
+        .eq('id', brand_id);
+      if (updateErr) {
+        log.warn('Helena: failed to update brands.last_audit_at — audit will repeat next cycle', { err: updateErr.message });
+      }
+
+      // Save audit summary to agent_state so Helena can recall recent work
+      await messenger.setState(`last_seo_audit:${brand_id}`, {
+        audited_at: new Date().toISOString(),
+        website_url,
+        depth,
+        result_preview: (result.response || '').slice(0, 800),
+        iterations: result.iterations ?? null,
+      });
+
+      // Notify Manager that the audit is complete
+      await messenger.send({
+        to: 'manager',
+        payload: {
+          type: 'seo_audit_completed',
+          brand_id,
+          website_url,
+          depth,
+          result_preview: (result.response || '').slice(0, 400),
+        },
+      });
+
+      return {
+        ok: true,
+        type: 'seo_audit',
+        brand_id,
+        persisted: true,
+        result_preview: (result.response || '').slice(0, 500),
+      };
     } catch (err) {
       await handleRateLimitError(err);
       throw err;
@@ -294,7 +331,7 @@ async function run() {
       let processedCount = 0;
       for (const msg of msgs) {
         try {
-          const result = await processIncomingMessage(msg, messenger, runtime, log);
+          const result = await processIncomingMessage(msg, messenger, runtime, log, supabase);
           await messenger.ack(msg.id, { result });
           processedCount++;
         } catch (err) {
