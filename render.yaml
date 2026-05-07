@@ -223,6 +223,42 @@ services:
       - key: FU_MAX_PER_HOUR
         value: "30"
 
+  # ── Helena Autonomous Worker — Phase 2 ──
+  # Long-lived worker: SEO/Content specialist that processes seo_audit /
+  # blog_write / keyword_research messages from the agent_messages queue,
+  # plus runs a proactive scan every loop tick to find brands due for an
+  # audit (>7 days since last_audit_at) and notify Manager.
+  # NOT a cron — runs 24/7 with internal heartbeat + exponential backoff
+  # on Supabase outage. See workers/helena_autonomous.js.
+  - type: worker
+    name: empirika-helena-autonomous
+    env: node
+    region: ohio
+    plan: starter   # smallest paid tier; free tier doesn't support 24/7 workers
+    buildCommand: npm install --include=dev
+    startCommand: node workers/helena_autonomous.js
+    envVars:
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        sync: false
+      - key: SUPABASE_SERVICE_KEY
+        sync: false
+      - key: NVIDIA_API_KEY
+        sync: false
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: PRIMARY_LLM
+        sync: false
+      - key: BRAND_ID
+        value: "eca1d833-77e3-4690-8cf1-2a44db20dcf8"
+      - key: HELENA_SLEEP_MS
+        value: "20000"
+      - key: AGENT_MAX_ITERATIONS
+        value: "12"
+      - key: NODE_ENV
+        value: production
+
   # ── Lyra: Autonomous B2B Content Engine ──────────────────────
   # Runs Mon-Fri at 12:00 UTC (8:00 AM ET)
   # Pipeline: BrightData Research → Gemini Draft → Buffer → LinkedIn
