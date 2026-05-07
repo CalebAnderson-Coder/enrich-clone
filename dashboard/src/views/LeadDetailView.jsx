@@ -20,6 +20,7 @@ import React, { useEffect, useState } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import LinkCell from '../components/LinkCell';
 import { apiGet } from '../lib/apiClient';
+import LeadAgentTimeline from '../components/LeadTimeline/LeadAgentTimeline';
 
 const V2_ENABLED = import.meta.env.VITE_DASHBOARD_V2_ENABLED === 'true';
 
@@ -255,6 +256,9 @@ export default function LeadDetailView() {
           </a>
         </Section>
       )}
+
+      {/* Agent Story — full per-lead agent timeline */}
+      <LeadAgentTimeline leadId={id} />
     </div>
   );
 }
