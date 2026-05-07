@@ -165,6 +165,24 @@ async function processIncomingMessage(msg, messenger, runtime, log) {
     return { ok: true, recorded: true };
   }
 
+  // ── seo_audit_completed ─────────────────────────────────────
+  // Helena reports she finished an audit. Record it so Manager has
+  // a memory of completed work and can plan follow-ups.
+  if (type === 'seo_audit_completed') {
+    const { brand_id, website_url, depth, result_preview } = msg.payload;
+    const fromAgent = msg.from_agent ?? 'unknown';
+    log.info('Manager: handling seo_audit_completed', { brand_id, website_url, depth, preview_chars: result_preview?.length });
+    await messenger.setState(`last_seo_audit_received:${brand_id}`, {
+      from: fromAgent,
+      received_at: new Date().toISOString(),
+      website_url,
+      depth,
+      result_preview,
+    });
+    log.info('Manager: seo_audit_completed acknowledged', { brand_id, from: fromAgent });
+    return { ok: true, acknowledged: true, brand_id };
+  }
+
   // ── delegate_request ────────────────────────────────────────
   if (type === 'delegate_request') {
     const { payload } = msg;
