@@ -1,12 +1,13 @@
 // ============================================================
-// workers/helena_autonomous.js — Helena Autonomous Worker (Phase 1)
+// workers/helena_autonomous.js — Helena Autonomous Worker (Phase 2)
 //
 // Long-lived loop that drives Helena's audit agent. Handles
 // inbound message dispatch, autonomous cycle scheduling, circuit-
 // breaker + pause checks, and graceful shutdown.
 //
-// Phase 1 is a SCAFFOLD — runAutonomousAuditCycle() is stubbed.
-// Real audit logic (agents/helena.js) is wired in Phase 2.
+// Phase 2 wires agents/helena.js with real LLM calls via AgentRuntime.
+// Primary provider: NVIDIA NIM (LLaMA). Fallback: Gemini (AgentRuntime
+// handles this automatically). Same wiring as outreach_dispatcher.js.
 //
 // Run modes:
 //   node workers/helena_autonomous.js            # production loop
@@ -18,11 +19,13 @@ import os from 'os';
 import { randomUUID } from 'crypto';
 import { createClient } from '@supabase/supabase-js';
 import { AgentMessenger } from '../lib/AgentMessenger.js';
+import { AgentRuntime } from '../lib/AgentRuntime.js';
+import { helena } from '../agents/helena.js';
 import { logger } from '../lib/logger.js';
 
 // ── Config ───────────────────────────────────────────────────
 
-const VERSION = '1.0.0-scaffold';
+const VERSION = '2.0.0';
 const AGENT_NAME = 'helena';
 const BRAND_ID = process.env.BRAND_ID ?? 'eca1d833-77e3-4690-8cf1-2a44db20dcf8';
 const SLEEP_MS = Number(process.env.HELENA_SLEEP_MS ?? 20_000);
@@ -72,18 +75,67 @@ async function shouldRunAutonomously(messenger, inboundCount) {
 
 /**
  * Dispatches a single inbound message to the appropriate handler.
- * Returns a result summary string for ack payload.
+ * Returns a result object for ack payload.
+ *
+ * Supported types: seo_audit, blog_write, keyword_research, pause
+ * Anything else throws → caller nacks the message.
  */
-async function processIncomingMessage(msg, messenger, log) {
+async function processIncomingMessage(msg, messenger, runtime, log) {
   const { type } = msg.payload ?? {};
 
-  if (type === 'audit_lead') {
-    const { lead_id } = msg.payload;
-    // Phase 2 will call helena audit here
-    log.info('Helena: audit_lead stub (Phase 2 wires real logic)', { lead_id });
-    return { status: 'stub', lead_id };
+  // ── Helper: set circuit breaker on rate-limit errors ────────
+  async function handleRateLimitError(err) {
+    const msg = (err.message || '').toLowerCase();
+    if (msg.includes('429') || msg.includes('rate') || msg.includes('quota')) {
+      const until = new Date(Date.now() + 5 * 60_000).toISOString();
+      await messenger.setState('gemini_circuit_open_until', until);
+      log.warn('Helena: rate-limit detected, opening circuit breaker', { until });
+    }
   }
 
+  // ── seo_audit ────────────────────────────────────────────────
+  if (type === 'seo_audit') {
+    const { brand_id, website_url, depth } = msg.payload;
+    log.info('Helena: handling seo_audit', { brand_id, website_url, depth });
+    try {
+      const prompt = `Realiza un SEO audit técnico para el sitio web ${website_url}. Devuelve el JSON radiography_technical.`;
+      const result = await runtime.run('Helena', prompt, { brand_id });
+      return { ok: true, type: 'seo_audit', result: result.response?.slice(0, 500) };
+    } catch (err) {
+      await handleRateLimitError(err);
+      throw err;
+    }
+  }
+
+  // ── blog_write ───────────────────────────────────────────────
+  if (type === 'blog_write') {
+    const { brand_id, topic, target_kw, length_target } = msg.payload;
+    log.info('Helena: handling blog_write', { brand_id, topic, target_kw, length_target });
+    try {
+      const prompt = `Escribe un blog post optimizado para SEO sobre ${topic}, keyword principal ${target_kw}, ~${length_target} palabras.`;
+      const result = await runtime.run('Helena', prompt, { brand_id });
+      return { ok: true, type: 'blog_write', result: result.response?.slice(0, 500) };
+    } catch (err) {
+      await handleRateLimitError(err);
+      throw err;
+    }
+  }
+
+  // ── keyword_research ─────────────────────────────────────────
+  if (type === 'keyword_research') {
+    const { brand_id, niche, geo } = msg.payload;
+    log.info('Helena: handling keyword_research', { brand_id, niche, geo });
+    try {
+      const prompt = `Genera un mapa de keywords para ${niche} en ${geo}.`;
+      const result = await runtime.run('Helena', prompt, { brand_id });
+      return { ok: true, type: 'keyword_research', result: result.response?.slice(0, 500) };
+    } catch (err) {
+      await handleRateLimitError(err);
+      throw err;
+    }
+  }
+
+  // ── pause ────────────────────────────────────────────────────
   if (type === 'pause') {
     const { duration_ms } = msg.payload;
     await messenger.setState('paused_by_owner', true);
@@ -94,21 +146,98 @@ async function processIncomingMessage(msg, messenger, log) {
       }, duration_ms);
     }
     log.info('Helena: paused by owner', { duration_ms });
-    return { status: 'paused', duration_ms };
+    return { ok: true, type: 'pause', result: { duration_ms } };
   }
 
-  throw new Error(`unknown message type: ${type}`);
+  throw new Error(`unknown_message_type: ${type}`);
 }
 
 // ── runAutonomousAuditCycle ──────────────────────────────────
 
 /**
- * STUB — Phase 2 wires agents/helena.js here.
+ * Proactive coordination: scan Supabase for brands that need an SEO audit
+ * and notify the Manager agent instead of running audits unilaterally.
+ *
+ * Gracefully degrades if last_audit_at column doesn't exist yet.
+ *
+ * @param {import('@supabase/supabase-js').SupabaseClient} supabase
+ * @param {AgentMessenger} messenger
+ * @param {object} log
  * @returns {{ foundPattern: boolean, detail: any }}
  */
-async function runAutonomousAuditCycle(log) {
+async function runAutonomousAuditCycle(supabase, messenger, log) {
   log.info('Helena: running autonomous audit cycle');
-  return { foundPattern: false, detail: null };
+
+  // ── Guard: verify last_audit_at column exists ────────────────
+  const { data: colCheck, error: colErr } = await supabase
+    .from('information_schema.columns')
+    .select('column_name')
+    .eq('table_schema', 'public')
+    .eq('table_name', 'brands')
+    .eq('column_name', 'last_audit_at')
+    .maybeSingle();
+
+  if (colErr || !colCheck) {
+    log.warn('Helena: brands.last_audit_at column not found — skipping audit scan', {
+      err: colErr?.message,
+    });
+    return { foundPattern: false, detail: { reason: 'no_last_audit_at_column' } };
+  }
+
+  // ── Query brands due for audit ───────────────────────────────
+  const { data: candidates, error: queryErr } = await supabase
+    .from('brands')
+    .select('brand_id, business_name, last_audit_at')
+    .or('last_audit_at.is.null,last_audit_at.lt.' + new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString())
+    .limit(3);
+
+  if (queryErr) {
+    log.warn('Helena: brands query failed in autonomous cycle', { err: queryErr.message });
+    return { foundPattern: false, detail: { reason: 'query_error', err: queryErr.message } };
+  }
+
+  if (!candidates || candidates.length === 0) {
+    log.info('Helena: no brands due for audit');
+    await messenger.setState('last_proactive_scan_at', new Date().toISOString());
+    return { foundPattern: false, detail: { candidates: 0 } };
+  }
+
+  // ── Notify manager for each candidate ───────────────────────
+  for (const brand of candidates) {
+    const lastAuditAt = brand.last_audit_at ? new Date(brand.last_audit_at) : null;
+    const daysSinceAudit = lastAuditAt
+      ? Math.floor((Date.now() - lastAuditAt.getTime()) / (24 * 60 * 60 * 1000))
+      : null;
+
+    try {
+      await messenger.send({
+        to: 'manager',
+        payload: {
+          type: 'seo_audit_proposal',
+          brand_id: brand.brand_id,
+          business_name: brand.business_name,
+          days_since_audit: daysSinceAudit,
+        },
+      });
+      log.info('Helena: seo_audit_proposal sent to manager', {
+        brand_id: brand.brand_id,
+        business_name: brand.business_name,
+        days_since_audit: daysSinceAudit,
+      });
+    } catch (sendErr) {
+      log.warn('Helena: failed to send seo_audit_proposal to manager', {
+        brand_id: brand.brand_id,
+        err: sendErr.message,
+      });
+    }
+  }
+
+  await messenger.setState('last_proactive_scan_at', new Date().toISOString());
+
+  return {
+    foundPattern: candidates.length > 0,
+    detail: { candidates: candidates.length },
+  };
 }
 
 // ── Main loop ────────────────────────────────────────────────
@@ -125,6 +254,15 @@ async function run() {
 
   await messenger.register({ host });
   log.info('Helena registered', { processId, host });
+
+  // ── AgentRuntime init (NVIDIA primary, Gemini fallback) ───────
+  // Same wiring as outreach_dispatcher.js post-2026-05-06 NVIDIA fix.
+  const runtime = new AgentRuntime({
+    apiKey: process.env.NVIDIA_API_KEY,
+    model: 'meta/llama-3.1-70b-instruct',
+    baseURL: 'https://integrate.api.nvidia.com/v1',
+  });
+  runtime.registerAgent(helena);
 
   // ── Orphan reclamation at boot ─────────────────────────────
   try {
@@ -163,7 +301,7 @@ async function run() {
       let processedCount = 0;
       for (const msg of msgs) {
         try {
-          const result = await processIncomingMessage(msg, messenger, log);
+          const result = await processIncomingMessage(msg, messenger, runtime, log);
           await messenger.ack(msg.id, { result });
           processedCount++;
         } catch (err) {
@@ -180,7 +318,7 @@ async function run() {
       const runCycle = await shouldRunAutonomously(messenger, msgs.length);
       if (runCycle) {
         try {
-          const result = await runAutonomousAuditCycle(log);
+          const result = await runAutonomousAuditCycle(supabase, messenger, log);
           if (result?.foundPattern) {
             await messenger.send({ to: 'manager', payload: { type: 'pattern_detected', detail: result.detail } });
             log.info('Helena: pattern detected, notified manager', { detail: result.detail });
