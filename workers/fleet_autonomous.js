@@ -36,8 +36,10 @@ import 'dotenv/config';
 import os from 'os';
 import { randomUUID } from 'crypto';
 import { createClient } from '@supabase/supabase-js';
+import nodemailer from 'nodemailer';
 import { AgentMessenger } from '../lib/AgentMessenger.js';
 import { AgentRuntime } from '../lib/AgentRuntime.js';
+import { logOutreachEvent } from '../tools/outreachEvents.js';
 import { scout } from '../agents/scout.js';
 import { carlos } from '../agents/carlos.js';
 import { kai } from '../agents/kai.js';
@@ -56,6 +58,42 @@ const COOLDOWN_MS = 5 * 60 * 1000; // 5 minutes
 const SCOUT_PROACTIVE_COOLDOWN_MS = 2 * 60 * 60 * 1000; // 2 hours
 const SCOUT_GAP_THRESHOLD = 30;    // leads per industry+metro before considered full
 const SELF_CHECK = process.argv.includes('--self-check');
+
+// ── Outbound (Phase 7.1) — SMTP + GHL config for Angela ─────
+// Angela uses these on `verify_email_verdict` PASS to send the
+// real email and sync to GHL. Mirrors the proven shape from
+// scripts/send_sourced_hvac_2026-05-06.js. Missing creds = skip
+// gracefully so --self-check still works locally.
+
+const SMTP_FROM_NAME = process.env.SMTP_FROM_NAME || 'José Sánchez';
+const GHL_PIPELINE_ID = 'PbSBohJh1m1L08INwMzv';                   // COLD LEADS
+const GHL_STAGE_NUEVO = '8e718ffe-25b0-40d6-9d43-86bd0a96c5d1';   // NUEVO
+const GHL_LOCATION_ID = process.env.GHL_LOCATION_ID || 'uQPxZOmT4zVlMHfOGRw2';
+const GHL_BASE = 'https://services.leadconnectorhq.com';
+
+function buildSmtpTransport() {
+  const user = process.env.SMTP_USER;
+  const pass = process.env.SMTP_PASS;
+  if (!user || !pass) return null;
+  return nodemailer.createTransport({
+    host: process.env.SMTP_HOST || 'smtp.gmail.com',
+    port: parseInt(process.env.SMTP_PORT || '587', 10),
+    secure: false,
+    auth: { user, pass: pass.trim() },
+    tls: { rejectUnauthorized: false },
+  });
+}
+
+function ghlHeaders() {
+  const token = process.env.GHL_PRIVATE_TOKEN || process.env.EMPIRIKA_GHL_KEY;
+  if (!token) return null;
+  return {
+    Authorization: `Bearer ${token}`,
+    Version: '2021-07-28',
+    'Content-Type': 'application/json',
+    Accept: 'application/json',
+  };
+}
 
 // ── Agent fleet manifest ─────────────────────────────────────
 // Each entry: { agentModule, canonicalName, role }
@@ -782,7 +820,217 @@ async function processAngelaMessage(msg, messenger, runtime, log) {
         verified_at: new Date().toISOString(),
       });
       log.info('Angela: Verifier verdict PASS', { lead_id, overall });
-      return { ok: true, type: 'verify_email_verdict', verdict: 'pass', lead_id };
+
+      // ── Phase 7.1: real outbound send ────────────────────────
+      // 1) Pull draft from state
+      const draft = await messenger.getState(`last_draft:${lead_id}`);
+      if (!draft || !draft.subject || !draft.body) {
+        log.warn('Angela: PASS but no draft in state, cannot send', { lead_id });
+        await messenger.setState(`outbound_failed:${lead_id}`, {
+          step: 'load_draft', reason: 'no_draft_in_state', failed_at: new Date().toISOString(),
+        });
+        return { ok: true, type: 'verify_email_verdict', verdict: 'pass', sent: false, lead_id, reason: 'no_draft' };
+      }
+
+      // 2) Pull lead from supabase
+      const supabase = buildSupabase();
+      const { data: lead, error: leadErr } = await supabase
+        .from('leads')
+        .select('id, business_name, email_address, phone, metro_area, industry, website, instagram_url, facebook_url, qualification_score, lead_tier')
+        .eq('id', lead_id)
+        .maybeSingle();
+
+      if (leadErr || !lead) {
+        log.warn('Angela: failed to load lead for send', { lead_id, err: leadErr?.message });
+        await messenger.setState(`outbound_failed:${lead_id}`, {
+          step: 'load_lead', error: leadErr?.message || 'lead_not_found', failed_at: new Date().toISOString(),
+        });
+        try {
+          await messenger.send({ to: 'manager', payload: { type: 'outbound_failed', lead_id, step: 'load_lead', error: leadErr?.message || 'lead_not_found' } });
+        } catch (e) { log.warn('Angela: failed to notify Manager of outbound_failed', { err: e.message }); }
+        return { ok: true, type: 'verify_email_verdict', verdict: 'pass', sent: false, lead_id, reason: 'lead_not_found' };
+      }
+
+      // 3) No email → bail
+      if (!lead.email_address) {
+        log.info('Angela: lead has no email_address, cannot send', { lead_id });
+        await messenger.setState(`outbound_failed:${lead_id}`, {
+          step: 'check_email', reason: 'no_email_address', failed_at: new Date().toISOString(),
+        });
+        try {
+          await messenger.send({ to: 'manager', payload: { type: 'outbound_failed', lead_id, step: 'check_email', error: 'no_email_address' } });
+        } catch (e) { log.warn('Angela: failed to notify Manager', { err: e.message }); }
+        return { ok: true, type: 'verify_email_verdict', verdict: 'pass', sent: false, lead_id, reason: 'no_email_address' };
+      }
+
+      // 4) Build SMTP transport — graceful skip if not configured
+      const transporter = buildSmtpTransport();
+      if (!transporter) {
+        log.info(`Angela: SMTP not configured, skipping send for ${lead_id}`);
+        await messenger.setState(`outbound_skipped:${lead_id}`, {
+          reason: 'smtp_not_configured', skipped_at: new Date().toISOString(),
+        });
+        return { ok: true, type: 'verify_email_verdict', verdict: 'pass', sent: false, lead_id, reason: 'smtp_not_configured' };
+      }
+
+      const fromAddr = process.env.SMTP_USER;
+      let messageId = null;
+      let ghlContactId = null;
+      let ghlOpportunityId = null;
+
+      try {
+        // 5) Send via nodemailer
+        const info = await transporter.sendMail({
+          from: `"${SMTP_FROM_NAME}" <${fromAddr}>`,
+          to: [lead.email_address],
+          subject: draft.subject,
+          html: draft.body,
+        });
+        messageId = info.messageId;
+        log.info('Angela: SMTP sent', { lead_id, messageId });
+
+        // 6) UPDATE leads.outreach_status
+        const sentAt = new Date().toISOString();
+        const { error: updErr } = await supabase
+          .from('leads')
+          .update({
+            outreach_status: 'SENT',
+            last_contact_date: sentAt,
+            // first_contact_date only if null — supabase has no COALESCE in update,
+            // so we read-modify-write conditionally
+          })
+          .eq('id', lead_id);
+        if (updErr) {
+          log.warn('Angela: failed to update lead status', { lead_id, err: updErr.message });
+        }
+        // Set first_contact_date if null
+        const { data: leadCheck } = await supabase
+          .from('leads').select('first_contact_date').eq('id', lead_id).maybeSingle();
+        if (leadCheck && !leadCheck.first_contact_date) {
+          await supabase.from('leads').update({ first_contact_date: sentAt }).eq('id', lead_id);
+        }
+
+        // 7) GHL create contact (best-effort)
+        const headers = ghlHeaders();
+        if (headers) {
+          try {
+            const tags = ['empirika-cold-email', 'agent-angela'];
+            if (lead.lead_tier) tags.push(`tier-${String(lead.lead_tier).toLowerCase()}`);
+            if (typeof lead.qualification_score === 'number') tags.push(`score-${lead.qualification_score}`);
+
+            const contactRes = await fetch(`${GHL_BASE}/contacts/`, {
+              method: 'POST',
+              headers,
+              body: JSON.stringify({
+                locationId: GHL_LOCATION_ID,
+                firstName: lead.business_name,
+                companyName: lead.business_name,
+                email: lead.email_address,
+                phone: lead.phone || undefined,
+                website: lead.website || undefined,
+                source: 'Empírika autonomous-Angela',
+                tags,
+              }),
+            });
+            const contactJson = await contactRes.json().catch(() => ({}));
+            ghlContactId = contactJson?.contact?.id || contactJson?.id || null;
+
+            // 8) GHL create opportunity in COLD LEADS → NUEVO
+            if (ghlContactId) {
+              const opptyName = `${lead.business_name} — ${lead.industry || 'lead'}`;
+              const opptyRes = await fetch(`${GHL_BASE}/opportunities/`, {
+                method: 'POST',
+                headers,
+                body: JSON.stringify({
+                  pipelineId: GHL_PIPELINE_ID,
+                  pipelineStageId: GHL_STAGE_NUEVO,
+                  contactId: ghlContactId,
+                  name: opptyName,
+                  status: 'open',
+                  locationId: GHL_LOCATION_ID,
+                }),
+              });
+              const opptyJson = await opptyRes.json().catch(() => ({}));
+              ghlOpportunityId = opptyJson?.opportunity?.id || opptyJson?.id || null;
+              log.info('Angela: GHL synced', { lead_id, ghlContactId, ghlOpportunityId });
+            } else {
+              log.warn('Angela: GHL contact create returned no id', { lead_id, status: contactRes.status });
+            }
+          } catch (ghlErr) {
+            log.warn('Angela: GHL sync failed (continuing)', { lead_id, err: ghlErr.message });
+          }
+        } else {
+          log.info('Angela: GHL token not configured, skipping CRM sync', { lead_id });
+        }
+
+        // 9) Log outreach_event with full metadata
+        await logOutreachEvent({
+          leadId: lead_id,
+          brandId: BRAND_ID,
+          channel: 'email',
+          eventType: 'sent',
+          messageId,
+          metadata: {
+            from: fromAddr,
+            sender_name: SMTP_FROM_NAME,
+            agent: 'Angela',
+            script: 'fleet_angela',
+            has_attachment: false,
+            ghl_contact_id: ghlContactId,
+            ghl_opportunity_id: ghlOpportunityId,
+            ghl_pipeline_id: GHL_PIPELINE_ID,
+            ghl_stage_id: GHL_STAGE_NUEVO,
+            ghl_stage_name: 'NUEVO',
+          },
+        });
+
+        // 10) Persist success state + notify Manager
+        await messenger.setState(`outbound_sent:${lead_id}`, {
+          messageId,
+          ghlContactId,
+          ghlOpportunityId,
+          sent_at: sentAt,
+          to: lead.email_address,
+          business_name: lead.business_name,
+        });
+        try {
+          await messenger.send({
+            to: 'manager',
+            payload: {
+              type: 'outbound_completed',
+              lead_id,
+              business_name: lead.business_name,
+              email_address: lead.email_address,
+              message_id: messageId,
+              ghl_contact_id: ghlContactId,
+              ghl_opportunity_id: ghlOpportunityId,
+            },
+          });
+        } catch (e) {
+          log.warn('Angela: failed to notify Manager of outbound_completed', { err: e.message });
+        }
+
+        return { ok: true, sent: true, lead_id, message_id: messageId, ghl_contact_id: ghlContactId };
+      } catch (sendErr) {
+        log.warn('Angela: SMTP/GHL send failed', { lead_id, err: sendErr.message });
+        await messenger.setState(`outbound_failed:${lead_id}`, {
+          step: 'smtp_send', error: sendErr.message, failed_at: new Date().toISOString(),
+        });
+        // Best-effort failure event
+        try {
+          await logOutreachEvent({
+            leadId: lead_id,
+            brandId: BRAND_ID,
+            channel: 'email',
+            eventType: 'failed',
+            metadata: { agent: 'Angela', script: 'fleet_angela', error: sendErr.message, to: lead.email_address },
+          });
+        } catch (_) { /* swallow */ }
+        try {
+          await messenger.send({ to: 'manager', payload: { type: 'outbound_failed', lead_id, step: 'smtp_send', error: sendErr.message } });
+        } catch (e) { log.warn('Angela: failed to notify Manager', { err: e.message }); }
+        return { ok: true, type: 'verify_email_verdict', verdict: 'pass', sent: false, lead_id, reason: 'send_error', error: sendErr.message };
+      }
     }
 
     if (verdict === 'rewrite') {

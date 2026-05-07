@@ -289,11 +289,63 @@ async function runAutonomousCoordinationCycle(supabase, messenger, log) {
     }
   }
 
+  // ── Phase 7.1: trigger Angela for pending leads with email ──
+  // Pull a small batch of PENDING leads with an email, ordered by score,
+  // and ask Angela to write+verify+send. Anti-thrash: skip leads
+  // re-assigned in the last 2h.
+  let assignedToAngela = 0;
+  try {
+    const { data: pendingLeads, error: pendingErr } = await supabase
+      .from('leads')
+      .select('id, business_name, email_address, industry, metro_area, qualification_score, lead_tier')
+      .eq('brand_id', BRAND_ID)
+      .eq('outreach_status', 'PENDING')
+      .not('email_address', 'is', null)
+      .neq('email_address', '')
+      .order('qualification_score', { ascending: false, nullsFirst: false })
+      .limit(3);
+
+    if (pendingErr) {
+      log.warn('Manager: pending leads query failed', { err: pendingErr.message });
+    } else {
+      for (const lead of pendingLeads || []) {
+        const lastAssignedKey = `last_assigned:${lead.id}`;
+        const lastAssigned = await messenger.getState(lastAssignedKey);
+        if (lastAssigned && Date.now() - new Date(lastAssigned).getTime() < 2 * 60 * 60 * 1000) {
+          continue; // re-assigned <2h ago, skip
+        }
+        try {
+          await messenger.send({
+            to: 'Angela',
+            payload: {
+              type: 'write_outbound_email',
+              lead_id: lead.id,
+              lead_industry: lead.industry,
+              lead_city: lead.metro_area?.split(',')[0]?.trim(),
+              lead_business_name: lead.business_name,
+              send_after_verify: true,
+            },
+          });
+          await messenger.setState(lastAssignedKey, new Date().toISOString());
+          assignedToAngela++;
+          foundPattern = true;
+        } catch (sendErr) {
+          log.warn('Manager: failed to assign lead to Angela', { lead_id: lead.id, err: sendErr.message });
+        }
+      }
+      if (assignedToAngela > 0) {
+        log.info(`Manager: assigned ${assignedToAngela} pending leads to Angela for outbound`);
+      }
+    }
+  } catch (err) {
+    log.warn('Manager: pending-leads outbound dispatch failed', { err: err.message });
+  }
+
   await messenger.setState('last_coordination_scan_at', new Date().toISOString());
 
   return {
     foundPattern,
-    detail: { hot: counts.HOT, warm: counts.WARM },
+    detail: { hot: counts.HOT, warm: counts.WARM, assigned_to_angela: assignedToAngela },
   };
 }
 
