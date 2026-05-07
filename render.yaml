@@ -404,6 +404,58 @@ services:
       - key: NODE_ENV
         value: production
 
+  # ── Fleet Multiplexed Worker — Phase 5 ──────────────────────
+  # ONE Node process hosting 7 agents concurrently (scout, Carlos,
+  # Kai, Verifier, Angela, DaVinci, Estratega). Each agent gets its
+  # own AgentMessenger + heartbeat row. Scaffold only in Phase 5;
+  # real per-agent LLM logic ships in Phase 6.
+  # Cost: $7-14/mo vs $77/mo for 11 separate starter workers.
+  # See workers/fleet_autonomous.js.
+  - type: worker
+    name: empirika-fleet-autonomous
+    env: node
+    region: ohio
+    plan: starter
+    buildCommand: npm install --include=dev
+    startCommand: node workers/fleet_autonomous.js
+    envVars:
+      - key: SUPABASE_URL
+        fromService:
+          type: web
+          name: agency-fleet-runtime
+          envVarKey: SUPABASE_URL
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        fromService:
+          type: web
+          name: agency-fleet-runtime
+          envVarKey: SUPABASE_SERVICE_ROLE_KEY
+      - key: SUPABASE_SERVICE_KEY
+        fromService:
+          type: web
+          name: agency-fleet-runtime
+          envVarKey: SUPABASE_SERVICE_KEY
+      - key: NVIDIA_API_KEY
+        fromService:
+          type: web
+          name: agency-fleet-runtime
+          envVarKey: NVIDIA_API_KEY
+      - key: GEMINI_API_KEY
+        fromService:
+          type: web
+          name: agency-fleet-runtime
+          envVarKey: GEMINI_API_KEY
+      - key: PRIMARY_LLM
+        fromService:
+          type: web
+          name: agency-fleet-runtime
+          envVarKey: PRIMARY_LLM
+      - key: BRAND_ID
+        value: "eca1d833-77e3-4690-8cf1-2a44db20dcf8"
+      - key: FLEET_SLEEP_MS_PER_AGENT
+        value: "25000"
+      - key: NODE_ENV
+        value: production
+
   # ── Lyra: Autonomous B2B Content Engine ──────────────────────
   # Runs Mon-Fri at 12:00 UTC (8:00 AM ET)
   # Pipeline: BrightData Research → Gemini Draft → Buffer → LinkedIn
