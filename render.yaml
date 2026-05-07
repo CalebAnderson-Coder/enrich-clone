@@ -259,6 +259,41 @@ services:
       - key: NODE_ENV
         value: production
 
+  # ── Manager Autonomous Worker — Phase 3 ──
+  # Long-lived worker: Agency orchestrator. Processes seo_audit_proposal /
+  # pattern_detected / delegate_request messages from the agent_messages
+  # queue (currently from Helena, soon from Scout / Sam / others). Runs a
+  # proactive coordination cycle every loop tick to scan the leads pipeline
+  # and queue outreach batches for Sam when HOT/WARM leads accumulate.
+  # NOT a cron — runs 24/7 with internal heartbeat + exponential backoff
+  # on Supabase outage. See workers/manager_autonomous.js.
+  - type: worker
+    name: empirika-manager-autonomous
+    env: node
+    region: ohio
+    plan: starter   # smallest paid tier; free tier doesn't support 24/7 workers
+    buildCommand: npm install --include=dev
+    startCommand: node workers/manager_autonomous.js
+    envVars:
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        sync: false
+      - key: SUPABASE_SERVICE_KEY
+        sync: false
+      - key: NVIDIA_API_KEY
+        sync: false
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: PRIMARY_LLM
+        sync: false
+      - key: BRAND_ID
+        value: "eca1d833-77e3-4690-8cf1-2a44db20dcf8"
+      - key: MANAGER_SLEEP_MS
+        value: "20000"
+      - key: NODE_ENV
+        value: production
+
   # ── Lyra: Autonomous B2B Content Engine ──────────────────────
   # Runs Mon-Fri at 12:00 UTC (8:00 AM ET)
   # Pipeline: BrightData Research → Gemini Draft → Buffer → LinkedIn
