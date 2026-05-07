@@ -281,8 +281,8 @@ export default function LeadAgentTimeline({ leadId }) {
 
     async function fetchAll() {
       try {
-        // 4 parallel queries
-        const [leadRes, eventsRes, msgsRes, statesRes] = await Promise.all([
+        // 4 parallel queries — allSettled so one failure doesn't blank the timeline
+        const settled = await Promise.allSettled([
           // 1. Lead row
           supabaseAuth
             .from('leads')
@@ -322,10 +322,15 @@ export default function LeadAgentTimeline({ leadId }) {
 
         if (cancelled) return;
 
+        // Unwrap allSettled — one failed query just contributes empty data + an error message
+        const [leadRes, eventsRes, msgsRes, statesRes] = settled.map((s) =>
+          s.status === 'fulfilled' ? s.value : { data: null, error: s.reason }
+        );
+
         // Collect errors (non-fatal — show what we have)
         const errs = [leadRes, eventsRes, msgsRes, statesRes]
           .filter(r => r.error)
-          .map(r => r.error.message);
+          .map(r => (r.error?.message ?? String(r.error)));
 
         const merged = mergeSources({
           lead:          leadRes.data   ?? null,

@@ -135,6 +135,18 @@ export const AGENT_PROFILES = {
       { name: '—', desc: 'Sin tools externas. Recibe el draft + contexto y emite verifier_report JSON validado.' },
     ],
   },
+  estratega: {
+    summary: 'Analista estratégica. Cada 7 días resume las métricas del fleet, identifica el cuello de botella mayor y propone 3 acciones tácticas concretas.',
+    responsibilities: [
+      'Lee agent_events, outreach_events y autonomy_audits de los últimos 7 días.',
+      'Identifica patrones: agentes con más fallas, canales que rinden, nichos que convierten.',
+      'Genera weekly_review JSON con bottleneck + root_cause + 3 acciones tácticas para el próximo ciclo.',
+    ],
+    tools: [
+      { name: 'tactic_request', desc: 'On-demand: recibe topic + context y devuelve recomendación táctica.' },
+      { name: 'weekly_strategy_review', desc: 'Auto cada 7d. Persiste weekly_review:${ISO_week} en agent_state.' },
+    ],
+  },
 };
 
 export function getAgentProfile(id) {

@@ -77,6 +77,7 @@ export default function PipelineFlowView() {
         const eventRes = await supabaseAuth
           .from('outreach_events')
           .select('id, lead_id, event_type, created_at')
+          .eq('brand_id', BRAND_ID)
           .gte('created_at', since)
           .limit(5000);
         if (eventRes.error) throw eventRes.error;
