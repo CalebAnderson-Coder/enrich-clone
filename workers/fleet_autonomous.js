@@ -668,6 +668,26 @@ async function runVerifierAutonomousCycle(messenger, log) {
 // ── Angela real-brain handler (Phase 6.4) ───────────────────
 
 /**
+ * Normalize LLM draft response to { subject, body }.
+ * Gemini sometimes wraps in email_sequence, sequence, drafts, emails, or a bare array.
+ */
+function normalizeDraft(raw) {
+  if (!raw) return null;
+  if (raw.subject && raw.body) return { subject: raw.subject, body: raw.body };
+  const candidates =
+    (Array.isArray(raw) && raw)
+    || raw.email_sequence
+    || raw.sequence
+    || raw.drafts
+    || raw.emails;
+  if (Array.isArray(candidates) && candidates.length > 0) {
+    const first = candidates[0];
+    if (first?.subject && first?.body) return { subject: first.subject, body: first.body };
+  }
+  return null;
+}
+
+/**
  * Handles a single inbound message addressed to Angela.
  * Supported types: write_outbound_email, verify_email_verdict, pause
  * Anything else throws → caller nacks.
@@ -720,7 +740,8 @@ async function processAngelaMessage(msg, messenger, runtime, log) {
       `Escribe un email outbound frío en español para ${lead_business_name}, ` +
       `industria ${lead_industry}, ciudad ${lead_city}. ` +
       `Tono cálido latino, un solo CTA con tiempo concreto, 120-180 palabras. ` +
-      `Devuelve JSON: { subject, body }.`;
+      `Devuelve JSON: { subject, body }. ` +
+      `RESPONDE EXCLUSIVAMENTE con un JSON al nivel raíz: {"subject":"...","body":"..."}. NO uses 'email_sequence', NO uses array, NO uses markdown, NO uses prosa explicativa antes ni después del JSON.`;
 
     let result;
     try {
@@ -743,21 +764,23 @@ async function processAngelaMessage(msg, messenger, runtime, log) {
     }
 
     const raw = result.response || '';
-    let draft;
+    let parsed;
     try {
-      draft = JSON.parse(raw);
+      parsed = JSON.parse(raw);
     } catch (_) {
       const match = raw.match(/\{[\s\S]*\}/);
       if (match) {
-        try { draft = JSON.parse(match[0]); }
+        try { parsed = JSON.parse(match[0]); }
         catch (e2) { throw new Error(`Angela JSON parse failed: ${e2.message}. Raw: ${raw.slice(0, 300)}`); }
       } else {
         throw new Error(`Angela returned non-JSON response. Raw: ${raw.slice(0, 300)}`);
       }
     }
 
-    if (!draft.subject || !draft.body) {
-      throw new Error(`Angela draft missing subject or body. Got: ${JSON.stringify(draft).slice(0, 200)}`);
+    const draft = normalizeDraft(parsed);
+    if (draft === null) {
+      log.warn('Angela: LLM draft response shape unrecognized', { shape: JSON.stringify(parsed).slice(0, 200) });
+      throw new Error('Angela: LLM draft response shape unrecognized');
     }
 
     await messenger.setState(`last_draft:${lead_id}`, {
@@ -1067,17 +1090,23 @@ async function processAngelaMessage(msg, messenger, runtime, log) {
       }
 
       const rawRewrite = rewriteResult.response || '';
-      let newDraft;
+      let parsedRewrite;
       try {
-        newDraft = JSON.parse(rawRewrite);
+        parsedRewrite = JSON.parse(rawRewrite);
       } catch (_) {
         const m = rawRewrite.match(/\{[\s\S]*\}/);
         if (m) {
-          try { newDraft = JSON.parse(m[0]); }
+          try { parsedRewrite = JSON.parse(m[0]); }
           catch (e2) { throw new Error(`Angela rewrite JSON parse failed: ${e2.message}`); }
         } else {
           throw new Error(`Angela rewrite returned non-JSON. Raw: ${rawRewrite.slice(0, 300)}`);
         }
+      }
+
+      const newDraft = normalizeDraft(parsedRewrite);
+      if (newDraft === null) {
+        log.warn('Angela: rewrite LLM response shape unrecognized', { shape: JSON.stringify(parsedRewrite).slice(0, 200) });
+        throw new Error('Angela: rewrite LLM draft response shape unrecognized');
       }
 
       await messenger.setState(`last_draft:${lead_id}`, {
