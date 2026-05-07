@@ -350,6 +350,60 @@ services:
       - key: NODE_ENV
         value: production
 
+  # ── Sam Autonomous Worker — Phase 5 ──
+  # Long-lived worker: Paid Media Strategist. Processes outreach_batch_proposal /
+  # outreach_batch_execute messages from the agent_messages queue (currently from
+  # Manager). Runs a proactive queue-pressure scan every loop tick and notifies
+  # Manager if >5 messages are backed up. Phase 5 v1: acknowledges proposals with
+  # planned_send_at; real send flow TBD. NOT a cron — runs 24/7 with internal
+  # heartbeat + exponential backoff on Supabase outage.
+  # See workers/sam_autonomous.js.
+  - type: worker
+    name: empirika-sam-autonomous
+    env: node
+    region: ohio
+    plan: starter   # smallest paid tier; free tier doesn't support 24/7 workers
+    buildCommand: npm install --include=dev
+    startCommand: node workers/sam_autonomous.js
+    envVars:
+      # Inherit secrets from the web service (avoids manual per-worker setup).
+      - key: SUPABASE_URL
+        fromService:
+          type: web
+          name: agency-fleet-runtime
+          envVarKey: SUPABASE_URL
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        fromService:
+          type: web
+          name: agency-fleet-runtime
+          envVarKey: SUPABASE_SERVICE_ROLE_KEY
+      - key: SUPABASE_SERVICE_KEY
+        fromService:
+          type: web
+          name: agency-fleet-runtime
+          envVarKey: SUPABASE_SERVICE_KEY
+      - key: NVIDIA_API_KEY
+        fromService:
+          type: web
+          name: agency-fleet-runtime
+          envVarKey: NVIDIA_API_KEY
+      - key: GEMINI_API_KEY
+        fromService:
+          type: web
+          name: agency-fleet-runtime
+          envVarKey: GEMINI_API_KEY
+      - key: PRIMARY_LLM
+        fromService:
+          type: web
+          name: agency-fleet-runtime
+          envVarKey: PRIMARY_LLM
+      - key: BRAND_ID
+        value: "eca1d833-77e3-4690-8cf1-2a44db20dcf8"
+      - key: SAM_SLEEP_MS
+        value: "20000"
+      - key: NODE_ENV
+        value: production
+
   # ── Lyra: Autonomous B2B Content Engine ──────────────────────
   # Runs Mon-Fri at 12:00 UTC (8:00 AM ET)
   # Pipeline: BrightData Research → Gemini Draft → Buffer → LinkedIn
