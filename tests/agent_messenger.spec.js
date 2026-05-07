@@ -471,6 +471,82 @@ await test('setState() throws AgentMessengerError when Supabase returns an error
   assert(threw, 'must throw AgentMessengerError on DB error');
 });
 
+// ── Test 17 — reclaimOrphans marks stale processes + reclaims messages ──
+await test('reclaimOrphans returns { crashedProcesses, reclaimedMessages } and only marks rows older than the threshold', async () => {
+  // Simulate 2 crashed sibling process IDs returned by the first UPDATE
+  const crashedProcessIds = ['proc-dead-1', 'proc-dead-2'];
+  let processesUpdatePayload = null;
+  let messagesUpdatePayload  = null;
+  let messagesInFilter       = null;
+
+  const db = {
+    from(table) {
+      const chain = {};
+
+      // chainable no-op filters
+      ['select', 'eq', 'is', 'order', 'limit'].forEach((m) => { chain[m] = () => chain; });
+
+      chain.lt   = () => chain;
+      chain.neq  = () => chain;
+      chain.in   = (col, val) => { messagesInFilter = val; return chain; };
+
+      chain.update = (row) => {
+        if (table === 'agent_processes') processesUpdatePayload = row;
+        if (table === 'agent_messages')  messagesUpdatePayload  = row;
+        return chain;
+      };
+
+      chain.select = (cols) => {
+        // terminal: return result depending on table
+        if (table === 'agent_processes') {
+          // Return the 2 crashed rows
+          return Promise.resolve({
+            data:  crashedProcessIds.map((id) => ({ process_id: id })),
+            error: null,
+          });
+        }
+        if (table === 'agent_messages') {
+          // Return 3 reclaimed message stubs
+          return Promise.resolve({
+            data:  [{ id: 101 }, { id: 102 }, { id: 103 }],
+            error: null,
+          });
+        }
+        return Promise.resolve({ data: [], error: null });
+      };
+
+      // Fallback then() for makeDb compat (not relied on here)
+      chain.then = (onFulfilled) =>
+        Promise.resolve({ data: [], error: null }).then(onFulfilled);
+
+      return chain;
+    },
+  };
+
+  const m = new AgentMessenger({ supabase: db, ...BASE_OPTS });
+  const result = await m.reclaimOrphans({ staleAfterMs: 120_000 });
+
+  assert(typeof result === 'object',                          'must return an object');
+  assert(result.crashedProcesses === 2,                       `expected crashedProcesses=2, got ${result.crashedProcesses}`);
+  assert(result.reclaimedMessages === 3,                      `expected reclaimedMessages=3, got ${result.reclaimedMessages}`);
+
+  // Verify the processes update set status='crashed'
+  assert(processesUpdatePayload?.status === 'crashed',        'processes update must set status=crashed');
+
+  // Verify the messages update resets to pending and nullifies claim fields
+  assert(messagesUpdatePayload?.status    === 'pending',      'messages update must set status=pending');
+  assert(messagesUpdatePayload?.claimed_by === null,          'messages update must null claimed_by');
+  assert(messagesUpdatePayload?.claimed_at === null,          'messages update must null claimed_at');
+  assert(messagesUpdatePayload?.error === 'reclaimed_from_crashed_worker',
+    'messages update must set error=reclaimed_from_crashed_worker');
+
+  // Verify the IN filter used the crashed process IDs
+  assert(Array.isArray(messagesInFilter),                     'IN filter must be an array');
+  assert(messagesInFilter.length === 2,                       'IN filter must contain 2 ids');
+  assert(messagesInFilter.includes('proc-dead-1'),            'IN filter must include proc-dead-1');
+  assert(messagesInFilter.includes('proc-dead-2'),            'IN filter must include proc-dead-2');
+});
+
 // ─────────────────────────────────────────────────────────────
 console.log('\n══════════════════════════════════════════════');
 console.log('  RESULTS');

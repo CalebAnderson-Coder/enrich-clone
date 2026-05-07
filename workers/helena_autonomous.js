@@ -126,6 +126,14 @@ async function run() {
   await messenger.register({ host });
   log.info('Helena registered', { processId, host });
 
+  // ── Orphan reclamation at boot ─────────────────────────────
+  try {
+    const reclaimed = await messenger.reclaimOrphans();
+    log.info('Helena: orphan reclamation complete', reclaimed);
+  } catch (reclaimErr) {
+    log.warn('Helena: reclaimOrphans failed at boot (continuing)', { err: reclaimErr.message });
+  }
+
   // ── Graceful shutdown ──────────────────────────────────────
   let shutdownRequested = false;
   async function shutdown(signal) {
@@ -140,50 +148,67 @@ async function run() {
 
   // ── Loop ───────────────────────────────────────────────────
   let iterations = 0;
+  let consecutiveFailures = 0;
   do {
     iterations++;
     log.debug('Helena: loop tick', { iteration: iterations });
 
-    // Heartbeat every iteration
-    try { await messenger.heartbeat(); } catch (e) { log.warn('heartbeat failed', e); }
+    try {
+      // Heartbeat every iteration
+      await messenger.heartbeat();
 
-    // Drain inbound queue
-    let msgs = [];
-    try { msgs = await messenger.recv({ limit: 5 }); } catch (e) { log.warn('recv failed', e); }
+      // Drain inbound queue
+      const msgs = await messenger.recv({ limit: 5 });
 
-    let processedCount = 0;
-    for (const msg of msgs) {
-      try {
-        const result = await processIncomingMessage(msg, messenger, log);
-        await messenger.ack(msg.id, { result });
-        processedCount++;
-      } catch (err) {
-        log.error('Helena: message processing failed', { msgId: msg.id, err: err.message });
-        try { await messenger.nack(msg.id, err.message); } catch (ne) { log.warn('nack failed', ne); }
-      }
-    }
-
-    if (processedCount > 0) {
-      log.info('Helena: processed inbound messages', { count: processedCount });
-    }
-
-    // Autonomous cycle
-    const runCycle = await shouldRunAutonomously(messenger, msgs.length);
-    if (runCycle) {
-      try {
-        const result = await runAutonomousAuditCycle(log);
-        if (result?.foundPattern) {
-          await messenger.send({ to: 'manager', payload: { type: 'pattern_detected', detail: result.detail } });
-          log.info('Helena: pattern detected, notified manager', { detail: result.detail });
+      let processedCount = 0;
+      for (const msg of msgs) {
+        try {
+          const result = await processIncomingMessage(msg, messenger, log);
+          await messenger.ack(msg.id, { result });
+          processedCount++;
+        } catch (err) {
+          log.error('Helena: message processing failed', { msgId: msg.id, err: err.message });
+          try { await messenger.nack(msg.id, err.message); } catch (ne) { log.warn('nack failed', ne); }
         }
-        await messenger.setState('last_run_at', new Date().toISOString());
-      } catch (err) {
-        log.error('Helena: autonomous cycle failed', err);
       }
-    } else if (msgs.length === 0) {
-      log.debug('Helena: skipped autonomous cycle', {
-        reason: msgs.length > 0 ? 'had_inbound' : 'cooldown_or_paused',
+
+      if (processedCount > 0) {
+        log.info('Helena: processed inbound messages', { count: processedCount });
+      }
+
+      // Autonomous cycle
+      const runCycle = await shouldRunAutonomously(messenger, msgs.length);
+      if (runCycle) {
+        try {
+          const result = await runAutonomousAuditCycle(log);
+          if (result?.foundPattern) {
+            await messenger.send({ to: 'manager', payload: { type: 'pattern_detected', detail: result.detail } });
+            log.info('Helena: pattern detected, notified manager', { detail: result.detail });
+          }
+          await messenger.setState('last_run_at', new Date().toISOString());
+        } catch (err) {
+          log.error('Helena: autonomous cycle failed', err);
+        }
+      } else if (msgs.length === 0) {
+        log.debug('Helena: skipped autonomous cycle', {
+          reason: msgs.length > 0 ? 'had_inbound' : 'cooldown_or_paused',
+        });
+      }
+
+      // Successful iteration — reset backoff counter
+      consecutiveFailures = 0;
+    } catch (loopErr) {
+      consecutiveFailures++;
+      const backoffMs = Math.min(60_000, SLEEP_MS * 2 ** consecutiveFailures);
+      log.error('Helena: loop iteration failed, backing off', {
+        err: loopErr.message,
+        consecutiveFailures,
+        backoffMs,
       });
+
+      if (SELF_CHECK) break;
+      await sleep(backoffMs);
+      continue;
     }
 
     if (SELF_CHECK) break; // --self-check exits after 1 iteration
