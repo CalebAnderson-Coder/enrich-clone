@@ -49,7 +49,7 @@ import { logger } from '../lib/logger.js';
 
 // ── Config ───────────────────────────────────────────────────
 
-const VERSION = '6.6.0';
+const VERSION = '6.8.0';
 const BRAND_ID = process.env.BRAND_ID ?? 'eca1d833-77e3-4690-8cf1-2a44db20dcf8';
 const SLEEP_MS = Number(process.env.FLEET_SLEEP_MS_PER_AGENT ?? 25_000);
 const COOLDOWN_MS = 5 * 60 * 1000; // 5 minutes
@@ -314,36 +314,70 @@ async function runScoutSourcingCycle(supabase, runtime, messenger, log, override
     leadsFound = [];
   }
 
+  // ── A2: dedup — fetch existing business_name+metro_area for brand to avoid duplicates ──
+  let existingSet = new Set();
+  try {
+    const { data: existingLeads, error: existErr } = await supabase
+      .from('leads')
+      .select('business_name, metro_area')
+      .eq('brand_id', BRAND_ID)
+      .eq('metro_area', metro_area);
+    if (existErr) {
+      log.warn('scout: dedup query failed, proceeding without dedup guard', { err: existErr.message });
+    } else {
+      for (const row of (existingLeads || [])) {
+        if (row.business_name) {
+          existingSet.add(`${(row.business_name || '').toLowerCase()}|||${(row.metro_area || '').toLowerCase()}`);
+        }
+      }
+    }
+  } catch (dedupEx) {
+    log.warn('scout: dedup exception (continuing)', { err: dedupEx.message });
+  }
+
   let countInserted = 0;
   for (const lead of leadsFound) {
     if (!lead || typeof lead !== 'object') continue;
+    const bName = lead.business_name || lead.name || null;
+    const bMetro = lead.metro_area || metro_area;
+    // Skip if already exists (dedup guard)
+    const dedupKey = `${(bName || '').toLowerCase()}|||${(bMetro || '').toLowerCase()}`;
+    if (bName && existingSet.has(dedupKey)) {
+      log.debug('scout: dedup skip — lead already exists', { business_name: bName, metro_area: bMetro });
+      continue;
+    }
     try {
-      const { error: insertErr } = await supabase.from('leads').insert({
-        brand_id:        BRAND_ID,
-        business_name:   lead.business_name || lead.name || null,
-        industry:        lead.industry       || industry,
-        metro_area:      lead.metro_area     || metro_area,
-        phone:           lead.phone          || null,
-        website:         lead.website        || null,
-        email:           lead.email          || null,
-        rating:          lead.rating         || null,
-        review_count:    lead.review_count   || lead.reviewCount || null,
-        google_maps_url: lead.google_maps_url || lead.googleMapsUrl || null,
-        tier:            lead.tier           || null,
-        score:           lead.score          || null,
-        status:          'new',
-        source:          'scout_autonomous',
-      });
+      const { error: insertErr } = await supabase.from('leads').upsert(
+        {
+          brand_id:            BRAND_ID,
+          business_name:       bName,
+          industry:            lead.industry            || industry,
+          metro_area:          bMetro,
+          phone:               lead.phone               || null,
+          website:             lead.website             || null,
+          email:               lead.email               || null,
+          rating:              lead.rating              || null,
+          review_count:        lead.review_count        || lead.reviewCount || null,
+          google_maps_url:     lead.google_maps_url     || lead.googleMapsUrl || null,
+          lead_tier:           lead.tier                || lead.lead_tier || 'WARM',
+          qualification_score: lead.score               || lead.qualification_score || null,
+          outreach_status:     'PENDING',
+          scraped_by:          'scout_autonomous',
+        },
+        { onConflict: 'business_name,metro_area,brand_id', ignoreDuplicates: true }
+      );
       if (insertErr) {
-        log.warn('scout: lead insert error (skipping)', {
+        log.warn('scout: lead upsert error (skipping)', {
           err:  insertErr.message,
-          name: lead?.business_name || lead?.name,
+          name: bName,
         });
       } else {
         countInserted++;
+        // Add to set so subsequent leads in same batch are also deduped
+        existingSet.add(dedupKey);
       }
     } catch (insertEx) {
-      log.warn('scout: lead insert exception (skipping)', { err: insertEx.message });
+      log.warn('scout: lead upsert exception (skipping)', { err: insertEx.message });
     }
   }
 
@@ -529,6 +563,9 @@ async function processVerifierMessage(msg, messenger, runtime, log) {
     // Validate required fields
     if (!verdict.scores || !verdict.verdict || verdict.overall === undefined) {
       throw new Error(`Verifier verdict missing required fields. Got: ${JSON.stringify(verdict).slice(0, 200)}`);
+    }
+    if (typeof verdict.scores !== 'object' || Array.isArray(verdict.scores)) {
+      throw new Error(`Verifier verdict.scores has wrong shape: ${typeof verdict.scores}`);
     }
 
     const { scores, overall, verdict: verdictVal, issues = [], rewrite_hint = '' } = verdict;
@@ -1342,6 +1379,373 @@ async function runEstrategaAutonomousCycle(supabase, runtime, messenger, log) {
   await messenger.setState('last_run_at', new Date().toISOString());
 }
 
+// ── Kai real-brain handler (Phase 6.7) ──────────────────────
+
+/**
+ * Handles a single inbound message addressed to Kai.
+ * Supported types: social_post_request, weekly_content_calendar, pause
+ * Anything else throws → caller nacks.
+ */
+async function processKaiMessage(msg, messenger, runtime, log) {
+  const payload = msg.payload ?? {};
+  const { type } = payload;
+
+  log.info('Kai: message_received', { msgId: msg.id, type });
+
+  await messenger.setState('last_inbound', {
+    type,
+    msg_id:      msg.id,
+    received_at: new Date().toISOString(),
+  });
+
+  // ── pause ────────────────────────────────────────────────────
+  if (type === 'pause') {
+    const { duration_ms } = payload;
+    await messenger.setState('paused_by_owner', true);
+    if (duration_ms > 0) {
+      setTimeout(async () => {
+        await messenger.setState('paused_by_owner', false);
+        log.info('Kai: pause expired, resuming');
+      }, duration_ms);
+    }
+    log.info('Kai: paused by owner', { duration_ms });
+    return { ok: true, type: 'pause', agent: 'Kai', result: { duration_ms } };
+  }
+
+  // ── social_post_request ──────────────────────────────────────
+  if (type === 'social_post_request') {
+    const { topic, platform, tone = 'auténtico y cálido' } = payload;
+
+    if (!topic) throw new Error('missing_topic');
+    if (!platform) throw new Error('missing_platform');
+
+    const prompt =
+      `Diseña un post de ${platform} sobre "${topic}" para Empírika ` +
+      `(consultora de crecimiento digital, audiencia LATAM). ` +
+      `Tono: ${tone}. ` +
+      `Devuelve JSON: { caption, hashtags, cta, platform_specific_tips }.`;
+
+    let result;
+    try {
+      result = await runtime.run('Kai', prompt, { brand_id: BRAND_ID });
+    } catch (err) {
+      const errMsg = (err.message || '').toLowerCase();
+      if (errMsg.includes('429') || errMsg.includes('rate') || errMsg.includes('quota')) {
+        const until = new Date(Date.now() + 5 * 60_000).toISOString();
+        await messenger.setState('gemini_circuit_open_until', until);
+        log.warn('Kai: rate-limit detected, opening circuit breaker', { until });
+      }
+      throw err;
+    }
+
+    if (result.quotaExhausted || (result.response || '').includes('QUOTA_EXHAUSTED')) {
+      const until = new Date(Date.now() + 5 * 60_000).toISOString();
+      await messenger.setState('gemini_circuit_open_until', until);
+      log.warn('Kai: quota exhausted, opening circuit breaker', { until });
+      throw new Error('Kai LLM quota exhausted');
+    }
+
+    const raw = result.response || '';
+    let post;
+    try {
+      post = JSON.parse(raw);
+    } catch (_) {
+      const match = raw.match(/\{[\s\S]*\}/);
+      if (match) {
+        try { post = JSON.parse(match[0]); }
+        catch (e2) { throw new Error(`Kai JSON parse failed: ${e2.message}. Raw: ${raw.slice(0, 300)}`); }
+      } else {
+        throw new Error(`Kai returned non-JSON. Raw: ${raw.slice(0, 300)}`);
+      }
+    }
+
+    const isoDate = new Date().toISOString().slice(0, 10);
+    await messenger.setState(`last_post:${platform}:${isoDate}`, {
+      topic,
+      platform,
+      ...post,
+      generated_at: new Date().toISOString(),
+    });
+
+    log.info('Kai: social post generated', { platform, topic });
+
+    const replyTo = msg.from_agent;
+    if (replyTo) {
+      try {
+        await messenger.send({
+          to: replyTo,
+          payload: {
+            type:     'social_post_ready',
+            platform,
+            topic,
+            caption:  post.caption,
+            hashtags: post.hashtags,
+            cta:      post.cta,
+          },
+        });
+      } catch (sendErr) {
+        log.warn('Kai: failed to send social_post_ready reply', { err: sendErr.message });
+      }
+    }
+
+    return { ok: true, type: 'social_post_request', platform, topic };
+  }
+
+  // ── weekly_content_calendar ──────────────────────────────────
+  if (type === 'weekly_content_calendar') {
+    const { themes = [] } = payload;
+
+    const prompt =
+      `Crea un calendario de contenido de 7 días para Empírika (consultoría crecimiento digital, LATAM). ` +
+      `Temas a cubrir: ${themes.length > 0 ? themes.join(', ') : 'crecimiento de negocios latinos, casos de éxito, tips digitales'}. ` +
+      `Un post por día, plataformas mixtas (instagram, facebook, linkedin, tiktok). ` +
+      `Devuelve JSON: { week_start, days: [{ date, platform, caption, hashtags, cta }] }.`;
+
+    let result;
+    try {
+      result = await runtime.run('Kai', prompt, { brand_id: BRAND_ID });
+    } catch (err) {
+      const errMsg = (err.message || '').toLowerCase();
+      if (errMsg.includes('429') || errMsg.includes('rate') || errMsg.includes('quota')) {
+        const until = new Date(Date.now() + 5 * 60_000).toISOString();
+        await messenger.setState('gemini_circuit_open_until', until);
+        log.warn('Kai: rate-limit on weekly_content_calendar, opening circuit breaker', { until });
+      }
+      throw err;
+    }
+
+    if (result.quotaExhausted || (result.response || '').includes('QUOTA_EXHAUSTED')) {
+      const until = new Date(Date.now() + 5 * 60_000).toISOString();
+      await messenger.setState('gemini_circuit_open_until', until);
+      throw new Error('Kai LLM quota exhausted');
+    }
+
+    const raw = result.response || '';
+    let calendar;
+    try {
+      calendar = JSON.parse(raw);
+    } catch (_) {
+      const match = raw.match(/\{[\s\S]*\}/);
+      if (match) {
+        try { calendar = JSON.parse(match[0]); }
+        catch (e2) { throw new Error(`Kai calendar JSON parse failed: ${e2.message}. Raw: ${raw.slice(0, 300)}`); }
+      } else {
+        throw new Error(`Kai weekly_content_calendar returned non-JSON. Raw: ${raw.slice(0, 300)}`);
+      }
+    }
+
+    const isoWeekKey = `last_calendar:${new Date().toISOString().slice(0, 10)}`;
+    await messenger.setState(isoWeekKey, {
+      ...calendar,
+      themes,
+      generated_at: new Date().toISOString(),
+    });
+
+    log.info('Kai: weekly content calendar generated', { themes });
+
+    const replyTo = msg.from_agent;
+    if (replyTo) {
+      try {
+        await messenger.send({
+          to: replyTo,
+          payload: {
+            type:     'weekly_content_calendar_ready',
+            calendar,
+          },
+        });
+      } catch (sendErr) {
+        log.warn('Kai: failed to send weekly_content_calendar_ready reply', { err: sendErr.message });
+      }
+    }
+
+    return { ok: true, type: 'weekly_content_calendar' };
+  }
+
+  // ── unknown_message_type ─────────────────────────────────────
+  throw new Error(`unknown_message_type: ${type}`);
+}
+
+/**
+ * Kai autonomous cycle — reactive only. Logs idle + stamps last_run_at.
+ */
+async function runKaiAutonomousCycle(messenger, log) {
+  log.info('Kai: idle, awaiting social_post_request or weekly_content_calendar messages');
+  await messenger.setState('last_run_at', new Date().toISOString());
+}
+
+// ── DaVinci real-brain handler (Phase 6.8) ──────────────────
+
+/**
+ * Handles a single inbound message addressed to DaVinci.
+ * Supported types: generate_visual, pause
+ * Anything else throws → caller nacks.
+ */
+async function processDaVinciMessage(msg, messenger, runtime, log) {
+  const payload = msg.payload ?? {};
+  const { type } = payload;
+
+  log.info('DaVinci: message_received', { msgId: msg.id, type });
+
+  await messenger.setState('last_inbound', {
+    type,
+    msg_id:      msg.id,
+    received_at: new Date().toISOString(),
+  });
+
+  // ── pause ────────────────────────────────────────────────────
+  if (type === 'pause') {
+    const { duration_ms } = payload;
+    await messenger.setState('paused_by_owner', true);
+    if (duration_ms > 0) {
+      setTimeout(async () => {
+        await messenger.setState('paused_by_owner', false);
+        log.info('DaVinci: pause expired, resuming');
+      }, duration_ms);
+    }
+    log.info('DaVinci: paused by owner', { duration_ms });
+    return { ok: true, type: 'pause', agent: 'DaVinci', result: { duration_ms } };
+  }
+
+  // ── generate_visual ──────────────────────────────────────────
+  if (type === 'generate_visual') {
+    const {
+      brand_id = BRAND_ID,
+      kind,
+      prompt_seed,
+      style_notes = '',
+    } = payload;
+
+    if (!kind) throw new Error('missing_kind');
+    if (!prompt_seed) throw new Error('missing_prompt_seed');
+
+    const kindLabels = {
+      email_hero:    'hero image for a cold outreach email',
+      instagram_post: 'Instagram square post (1080x1080)',
+      fb_ad:         'Facebook Ad mockup',
+      web_banner:    'website hero banner',
+    };
+    const kindLabel = kindLabels[kind] || kind;
+
+    const prompt =
+      `Genera un ${kindLabel} para Empírika (consultoría digital LATAM). ` +
+      `Concepto: ${prompt_seed}. ` +
+      `${style_notes ? `Notas de estilo: ${style_notes}.` : ''} ` +
+      `Usa generate_gemini_imagen_visual con un prompt detallado (mín 100 palabras). ` +
+      `Devuelve JSON: { visual_asset_url, magnet_type, decision_reasoning }.`;
+
+    const timestamp = new Date().toISOString();
+    let result;
+    try {
+      result = await runtime.run('DaVinci', prompt, { brand_id });
+    } catch (err) {
+      const errMsg = (err.message || '').toLowerCase();
+      if (errMsg.includes('429') || errMsg.includes('rate') || errMsg.includes('quota')) {
+        const until = new Date(Date.now() + 5 * 60_000).toISOString();
+        await messenger.setState('gemini_circuit_open_until', until);
+        log.warn('DaVinci: rate-limit detected, opening circuit breaker', { until });
+      }
+      // Image gen failure — reply with failure message, don't rethrow (non-crashing)
+      log.warn('DaVinci: generate_visual runtime failed', { kind, err: err.message });
+      const replyTo = msg.from_agent;
+      if (replyTo) {
+        try {
+          await messenger.send({
+            to: replyTo,
+            payload: {
+              type:         'visual_generation_failed',
+              kind,
+              reason:       err.message,
+            },
+          });
+        } catch (sendErr) {
+          log.warn('DaVinci: failed to send visual_generation_failed', { err: sendErr.message });
+        }
+      }
+      return { ok: false, type: 'generate_visual', kind, failed: true, reason: err.message };
+    }
+
+    if (result.quotaExhausted || (result.response || '').includes('QUOTA_EXHAUSTED')) {
+      const until = new Date(Date.now() + 5 * 60_000).toISOString();
+      await messenger.setState('gemini_circuit_open_until', until);
+      log.warn('DaVinci: quota exhausted, opening circuit breaker', { until });
+      const replyTo = msg.from_agent;
+      if (replyTo) {
+        try {
+          await messenger.send({
+            to: replyTo,
+            payload: { type: 'visual_generation_failed', kind, reason: 'quota_exhausted' },
+          });
+        } catch (sendErr) {
+          log.warn('DaVinci: failed to send quota_exhausted reply', { err: sendErr.message });
+        }
+      }
+      return { ok: false, type: 'generate_visual', kind, failed: true, reason: 'quota_exhausted' };
+    }
+
+    // Parse URL/path from LLM response
+    const raw = result.response || '';
+    let visualResult;
+    try {
+      visualResult = JSON.parse(raw);
+    } catch (_) {
+      const match = raw.match(/\{[\s\S]*\}/);
+      if (match) {
+        try { visualResult = JSON.parse(match[0]); }
+        catch (e2) {
+          log.warn('DaVinci: JSON parse failed, using raw as url fallback', { err: e2.message });
+          visualResult = { visual_asset_url: null };
+        }
+      } else {
+        visualResult = { visual_asset_url: null };
+      }
+    }
+
+    const url = visualResult?.visual_asset_url ?? null;
+
+    // Persist last_visual state
+    const stateKey = `last_visual:${kind}:${timestamp}`;
+    await messenger.setState(stateKey, {
+      kind,
+      url,
+      brand_id,
+      prompt_seed,
+      generated_at: timestamp,
+    });
+
+    log.info('DaVinci: visual generated', { kind, url });
+
+    const replyTo = msg.from_agent;
+    if (replyTo) {
+      try {
+        await messenger.send({
+          to: replyTo,
+          payload: {
+            type:         'visual_generated',
+            kind,
+            url,
+            generated_at: timestamp,
+          },
+        });
+      } catch (sendErr) {
+        log.warn('DaVinci: failed to send visual_generated reply', { err: sendErr.message });
+      }
+    }
+
+    return { ok: true, type: 'generate_visual', kind, url };
+  }
+
+  // ── unknown_message_type ─────────────────────────────────────
+  throw new Error(`unknown_message_type: ${type}`);
+}
+
+/**
+ * DaVinci autonomous cycle — reactive only. Logs idle + stamps last_run_at.
+ */
+async function runDaVinciAutonomousCycle(messenger, log) {
+  log.info('DaVinci: idle, awaiting generate_visual messages');
+  await messenger.setState('last_run_at', new Date().toISOString());
+}
+
 // ── Per-agent boot + loop ────────────────────────────────────
 
 /**
@@ -1417,6 +1821,10 @@ async function bootAgent(entry, supabase, runtime, host) {
             result = await processCarlosMessage(msg, messenger, runtime, log);
           } else if (canonicalName === 'Estratega') {
             result = await processEstrategaMessage(msg, messenger, runtime, supabase, log);
+          } else if (canonicalName === 'Kai') {
+            result = await processKaiMessage(msg, messenger, runtime, log);
+          } else if (canonicalName === 'DaVinci') {
+            result = await processDaVinciMessage(msg, messenger, runtime, log);
           } else {
             result = await processIncomingMessage(msg, messenger, canonicalName, log);
           }
@@ -1451,6 +1859,10 @@ async function bootAgent(entry, supabase, runtime, host) {
             await runCarlosAutonomousCycle(messenger, log);
           } else if (canonicalName === 'Estratega') {
             await runEstrategaAutonomousCycle(supabase, runtime, messenger, log);
+          } else if (canonicalName === 'Kai') {
+            await runKaiAutonomousCycle(messenger, log);
+          } else if (canonicalName === 'DaVinci') {
+            await runDaVinciAutonomousCycle(messenger, log);
           } else {
             await runScaffoldAutonomousCycle(messenger, canonicalName, log);
           }

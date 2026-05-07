@@ -78,7 +78,7 @@ async function shouldRunAutonomously(messenger, inboundCount) {
  * Dispatches a single inbound message to the appropriate handler.
  * Returns a result object for ack payload.
  *
- * Supported types: outreach_batch_proposal, paid_ads_request, outreach_batch_execute, pause
+ * Supported types: outreach_batch_proposal, paid_ads_request, pause
  * Anything else throws → caller nacks the message.
  */
 async function processIncomingMessage(msg, messenger, runtime, log, supabase) {
@@ -246,24 +246,6 @@ async function processIncomingMessage(msg, messenger, runtime, log, supabase) {
     }
   }
 
-  // ── outreach_batch_execute ───────────────────────────────────
-  // LLM-driven campaign design (future flow from Manager).
-  if (type === 'outreach_batch_execute') {
-    const { tier, count } = msg.payload;
-    log.info('Sam: handling outreach_batch_execute via LLM', { tier, count });
-
-    try {
-      const result = await runtime.run(
-        'Sam',
-        `Diseña una secuencia outreach para tier ${tier}, ${count} leads. Devuelve el JSON campaign_strategy.`
-      );
-      return { ok: true, type: 'outreach_batch_execute', result: result.response?.slice(0, 500) };
-    } catch (err) {
-      await handleRateLimitError(err);
-      throw err;
-    }
-  }
-
   // ── pause ────────────────────────────────────────────────────
   if (type === 'pause') {
     const { duration_ms } = msg.payload;
@@ -321,15 +303,37 @@ async function runAutonomousCycle(supabase, messenger, log) {
     }
   }
 
+  // ── Anti-thrash guard ────────────────────────────────────────
+  // Band definitions: <10 = 'thin', 10-49 = 'healthy', 50-99 = 'saturated', 100+ = 'overflow'
+  function getPipelineBand(count) {
+    if (count < 10)  return 'thin';
+    if (count < 50)  return 'healthy';
+    if (count < 100) return 'saturated';
+    return 'overflow';
+  }
+
+  const currentBand = getPipelineBand(hot_count);
+  const prevScan = await messenger.getState('last_pipeline_scan');
+  const oneHourMs = 60 * 60_000;
+  const prevBand = prevScan ? getPipelineBand(prevScan.hot_count ?? 0) : null;
+  const prevScannedAt = prevScan?.scanned_at ? new Date(prevScan.scanned_at).getTime() : 0;
+  const withinOneHour = (Date.now() - prevScannedAt) < oneHourMs;
+
+  // Always update state with fresh counts
   await messenger.setState('last_pipeline_scan', {
     hot_count,
     warm_count,
     scanned_at: new Date().toISOString(),
   });
 
-  log.info('Sam: pipeline scan complete', { hot_count, warm_count });
+  log.info('Sam: pipeline scan complete', { hot_count, warm_count, band: currentBand });
 
   if (hot_count > 50) {
+    // Skip if same band within last hour (anti-thrash)
+    if (prevBand === currentBand && withinOneHour) {
+      log.info(`Sam: pipeline still in ${currentBand} band, no new proposal`, { hot_count, prevBand });
+      return { foundPattern: false, detail: { hot_count, warm_count, action: 'anti_thrash_skip', band: currentBand } };
+    }
     log.info('Sam: pipeline saturated — proposing budget increase', { hot_count });
     try {
       await messenger.send({
