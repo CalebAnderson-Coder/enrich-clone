@@ -157,10 +157,17 @@ services:
     buildCommand: npm install --include=dev
     startCommand: node scripts/validate_lead_domains.js --apply
     envVars:
+      # Inherit secrets from web service to avoid manual per-cron env setup
       - key: SUPABASE_URL
-        sync: false
+        fromService:
+          type: web
+          name: agency-fleet-runtime
+          envVarKey: SUPABASE_URL
       - key: SUPABASE_SERVICE_ROLE_KEY
-        sync: false
+        fromService:
+          type: web
+          name: agency-fleet-runtime
+          envVarKey: SUPABASE_SERVICE_ROLE_KEY
 
   # ── Morning briefing: Layer 2 v5 daily ritual ────────────────
   # Runs daily at 13:00 UTC (9 ET / 8 CDMX). Reads autonomy_audits y
@@ -174,10 +181,17 @@ services:
     buildCommand: npm install --include=dev
     startCommand: node scripts/morning_briefing.js --with-dispatch
     envVars:
+      # Inherit secrets from web service to avoid manual per-cron env setup
       - key: SUPABASE_URL
-        sync: false
+        fromService:
+          type: web
+          name: agency-fleet-runtime
+          envVarKey: SUPABASE_URL
       - key: SUPABASE_SERVICE_ROLE_KEY
-        sync: false
+        fromService:
+          type: web
+          name: agency-fleet-runtime
+          envVarKey: SUPABASE_SERVICE_ROLE_KEY
       - key: BRAND_ID
         value: "eca1d833-77e3-4690-8cf1-2a44db20dcf8"
 
