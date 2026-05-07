@@ -1,5 +1,5 @@
 // ============================================================
-// workers/fleet_autonomous.js — Fleet Multiplexed Worker (Phase 6.3)
+// workers/fleet_autonomous.js — Fleet Multiplexed Worker (Phase 6.6)
 //
 // ONE long-lived Node process that hosts 7 Empírika agents
 // concurrently inside a single Render starter worker ($7-14/mo
@@ -23,6 +23,9 @@
 // Phase 6.2 = Scout real brain: proactive gap-detection sourcing
 // with gosom→apify-signal fallback.
 // Phase 6.3 = Verifier real brain: LLM-driven outbound email QA.
+// Phase 6.4 = Angela real brain: outbound email drafting + rewrite loop.
+// Phase 6.5 = Carlos real brain: lead qualification + closing advice.
+// Phase 6.6 = Estratega real brain: weekly strategy review + tactic requests.
 //
 // Run modes:
 //   node workers/fleet_autonomous.js            # production loop
@@ -46,7 +49,7 @@ import { logger } from '../lib/logger.js';
 
 // ── Config ───────────────────────────────────────────────────
 
-const VERSION = '6.3.0';
+const VERSION = '6.6.0';
 const BRAND_ID = process.env.BRAND_ID ?? 'eca1d833-77e3-4690-8cf1-2a44db20dcf8';
 const SLEEP_MS = Number(process.env.FLEET_SLEEP_MS_PER_AGENT ?? 25_000);
 const COOLDOWN_MS = 5 * 60 * 1000; // 5 minutes
@@ -587,6 +590,758 @@ async function runVerifierAutonomousCycle(messenger, log) {
   await messenger.setState('last_run_at', new Date().toISOString());
 }
 
+// ── Angela real-brain handler (Phase 6.4) ───────────────────
+
+/**
+ * Handles a single inbound message addressed to Angela.
+ * Supported types: write_outbound_email, verify_email_verdict, pause
+ * Anything else throws → caller nacks.
+ *
+ * @param {object} msg
+ * @param {AgentMessenger} messenger
+ * @param {AgentRuntime} runtime
+ * @param {object} log
+ * @returns {Promise<object>}
+ */
+async function processAngelaMessage(msg, messenger, runtime, log) {
+  const payload = msg.payload ?? {};
+  const { type } = payload;
+
+  log.info('Angela: message_received', { msgId: msg.id, type });
+
+  await messenger.setState('last_inbound', {
+    type,
+    msg_id:      msg.id,
+    received_at: new Date().toISOString(),
+  });
+
+  // ── pause ────────────────────────────────────────────────────
+  if (type === 'pause') {
+    const { duration_ms } = payload;
+    await messenger.setState('paused_by_owner', true);
+    if (duration_ms > 0) {
+      setTimeout(async () => {
+        await messenger.setState('paused_by_owner', false);
+        log.info('Angela: pause expired, resuming');
+      }, duration_ms);
+    }
+    log.info('Angela: paused by owner', { duration_ms });
+    return { ok: true, type: 'pause', agent: 'Angela', result: { duration_ms } };
+  }
+
+  // ── write_outbound_email ─────────────────────────────────────
+  if (type === 'write_outbound_email') {
+    const {
+      lead_id,
+      lead_industry,
+      lead_city,
+      lead_business_name,
+      send_after_verify = false,
+    } = payload;
+
+    if (!lead_id) throw new Error('missing_lead_id');
+
+    const prompt =
+      `Escribe un email outbound frío en español para ${lead_business_name}, ` +
+      `industria ${lead_industry}, ciudad ${lead_city}. ` +
+      `Tono cálido latino, un solo CTA con tiempo concreto, 120-180 palabras. ` +
+      `Devuelve JSON: { subject, body }.`;
+
+    let result;
+    try {
+      result = await runtime.run('Angela', prompt, { brand_id: BRAND_ID });
+    } catch (err) {
+      const errMsg = (err.message || '').toLowerCase();
+      if (errMsg.includes('429') || errMsg.includes('rate') || errMsg.includes('quota')) {
+        const until = new Date(Date.now() + 5 * 60_000).toISOString();
+        await messenger.setState('gemini_circuit_open_until', until);
+        log.warn('Angela: rate-limit detected, opening circuit breaker', { until });
+      }
+      throw err;
+    }
+
+    if (result.quotaExhausted || (result.response || '').includes('QUOTA_EXHAUSTED')) {
+      const until = new Date(Date.now() + 5 * 60_000).toISOString();
+      await messenger.setState('gemini_circuit_open_until', until);
+      log.warn('Angela: quota exhausted in response, opening circuit breaker', { until });
+      throw new Error('Angela LLM quota exhausted');
+    }
+
+    const raw = result.response || '';
+    let draft;
+    try {
+      draft = JSON.parse(raw);
+    } catch (_) {
+      const match = raw.match(/\{[\s\S]*\}/);
+      if (match) {
+        try { draft = JSON.parse(match[0]); }
+        catch (e2) { throw new Error(`Angela JSON parse failed: ${e2.message}. Raw: ${raw.slice(0, 300)}`); }
+      } else {
+        throw new Error(`Angela returned non-JSON response. Raw: ${raw.slice(0, 300)}`);
+      }
+    }
+
+    if (!draft.subject || !draft.body) {
+      throw new Error(`Angela draft missing subject or body. Got: ${JSON.stringify(draft).slice(0, 200)}`);
+    }
+
+    await messenger.setState(`last_draft:${lead_id}`, {
+      subject:     draft.subject,
+      body:        draft.body,
+      lead_id,
+      drafted_at:  new Date().toISOString(),
+    });
+
+    let sentToVerifier = false;
+    if (send_after_verify) {
+      try {
+        await messenger.send({
+          to: 'Verifier',
+          payload: {
+            type:              'verify_email_draft',
+            draft_text:        draft.body,
+            lead_id,
+            lead_industry,
+            lead_city,
+            source_message_id: msg.id,
+            sender:            'Angela',
+          },
+        });
+        sentToVerifier = true;
+        log.info('Angela: draft sent to Verifier', { lead_id });
+      } catch (sendErr) {
+        log.warn('Angela: failed to send draft to Verifier', { err: sendErr.message });
+      }
+    }
+
+    log.info('Angela: draft written', { lead_id, subject: draft.subject });
+
+    return {
+      ok:               true,
+      type:             'draft_written',
+      lead_id,
+      subject:          draft.subject,
+      body_preview:     draft.body.slice(0, 120),
+      sent_to_verifier: sentToVerifier,
+    };
+  }
+
+  // ── verify_email_verdict (reply from Verifier) ───────────────
+  if (type === 'verify_email_verdict') {
+    const {
+      scores,
+      overall,
+      verdict,
+      issues = [],
+      rewrite_hint = '',
+      lead_id,
+      source_message_id,
+    } = payload;
+
+    if (verdict === 'pass') {
+      await messenger.setState(`last_verdict_pass:${lead_id}`, {
+        scores,
+        overall,
+        verified_at: new Date().toISOString(),
+      });
+      log.info('Angela: Verifier verdict PASS', { lead_id, overall });
+      return { ok: true, type: 'verify_email_verdict', verdict: 'pass', lead_id };
+    }
+
+    if (verdict === 'rewrite') {
+      // Enforce max 1 rewrite per lead to avoid infinite loops
+      const rewrites = (await messenger.getState(`rewrite_count:${lead_id}`)) ?? 0;
+      if (rewrites >= 1) {
+        log.warn('Angela: max rewrites reached for lead, skipping', { lead_id });
+        return { ok: true, type: 'verify_email_verdict', verdict: 'rewrite_limit_reached', lead_id };
+      }
+
+      const prevDraft = await messenger.getState(`last_draft:${lead_id}`);
+      if (!prevDraft) {
+        log.warn('Angela: no prior draft found for rewrite', { lead_id });
+        return { ok: true, type: 'verify_email_verdict', verdict: 'no_prior_draft', lead_id };
+      }
+
+      const rewritePrompt =
+        `Reescribe este email outbound. Draft original:\n\n${prevDraft.body}\n\n` +
+        `Feedback del Verifier: ${rewrite_hint}\n\n` +
+        `Problemas detectados: ${issues.join('; ')}\n\n` +
+        `Devuelve JSON: { subject, body }.`;
+
+      let rewriteResult;
+      try {
+        rewriteResult = await runtime.run('Angela', rewritePrompt, { brand_id: BRAND_ID });
+      } catch (err) {
+        const errMsg = (err.message || '').toLowerCase();
+        if (errMsg.includes('429') || errMsg.includes('rate') || errMsg.includes('quota')) {
+          const until = new Date(Date.now() + 5 * 60_000).toISOString();
+          await messenger.setState('gemini_circuit_open_until', until);
+          log.warn('Angela: rate-limit on rewrite, opening circuit breaker', { until });
+        }
+        throw err;
+      }
+
+      const rawRewrite = rewriteResult.response || '';
+      let newDraft;
+      try {
+        newDraft = JSON.parse(rawRewrite);
+      } catch (_) {
+        const m = rawRewrite.match(/\{[\s\S]*\}/);
+        if (m) {
+          try { newDraft = JSON.parse(m[0]); }
+          catch (e2) { throw new Error(`Angela rewrite JSON parse failed: ${e2.message}`); }
+        } else {
+          throw new Error(`Angela rewrite returned non-JSON. Raw: ${rawRewrite.slice(0, 300)}`);
+        }
+      }
+
+      await messenger.setState(`last_draft:${lead_id}`, {
+        subject:    newDraft.subject,
+        body:       newDraft.body,
+        lead_id,
+        drafted_at: new Date().toISOString(),
+        is_rewrite: true,
+      });
+      await messenger.setState(`rewrite_count:${lead_id}`, rewrites + 1);
+
+      // Re-submit to Verifier
+      try {
+        await messenger.send({
+          to: 'Verifier',
+          payload: {
+            type:              'verify_email_draft',
+            draft_text:        newDraft.body,
+            lead_id,
+            source_message_id: source_message_id ?? msg.id,
+            sender:            'Angela',
+          },
+        });
+        log.info('Angela: rewritten draft sent to Verifier', { lead_id });
+      } catch (sendErr) {
+        log.warn('Angela: failed to re-send rewrite to Verifier', { err: sendErr.message });
+      }
+
+      return { ok: true, type: 'verify_email_verdict', verdict: 'rewritten', lead_id };
+    }
+
+    log.warn('Angela: unknown verdict value', { verdict, lead_id });
+    return { ok: true, type: 'verify_email_verdict', verdict, lead_id };
+  }
+
+  // ── unknown_message_type ─────────────────────────────────────
+  throw new Error(`unknown_message_type: ${type}`);
+}
+
+/**
+ * Angela autonomous cycle — checks for pending outbound leads and logs count.
+ * Does NOT auto-write; Manager assigns via write_outbound_email messages.
+ */
+async function runAngelaAutonomousCycle(supabase, messenger, log) {
+  const { count, error } = await supabase
+    .from('leads')
+    .select('id', { count: 'exact', head: true })
+    .eq('brand_id', BRAND_ID)
+    .eq('outreach_status', 'PENDING')
+    .not('email_address', 'is', null);
+
+  if (error) {
+    log.warn('Angela: autonomous cycle query failed', { err: error.message });
+  } else if (count > 0) {
+    log.info(`Angela: ${count} leads ready for outbound, awaiting Manager assignment`);
+  } else {
+    log.info('Angela: no pending leads for outbound');
+  }
+
+  await messenger.setState('last_run_at', new Date().toISOString());
+}
+
+// ── Carlos real-brain handler (Phase 6.5) ───────────────────
+
+/**
+ * Handles a single inbound message addressed to Carlos Empirika.
+ * Supported types: qualify_lead, closing_advice, pause
+ * Anything else throws → caller nacks.
+ *
+ * @param {object} msg
+ * @param {AgentMessenger} messenger
+ * @param {AgentRuntime} runtime
+ * @param {object} log
+ * @returns {Promise<object>}
+ */
+async function processCarlosMessage(msg, messenger, runtime, log) {
+  const payload = msg.payload ?? {};
+  const { type } = payload;
+
+  log.info('Carlos Empirika: message_received', { msgId: msg.id, type });
+
+  await messenger.setState('last_inbound', {
+    type,
+    msg_id:      msg.id,
+    received_at: new Date().toISOString(),
+  });
+
+  // ── pause ────────────────────────────────────────────────────
+  if (type === 'pause') {
+    const { duration_ms } = payload;
+    await messenger.setState('paused_by_owner', true);
+    if (duration_ms > 0) {
+      setTimeout(async () => {
+        await messenger.setState('paused_by_owner', false);
+        log.info('Carlos Empirika: pause expired, resuming');
+      }, duration_ms);
+    }
+    log.info('Carlos Empirika: paused by owner', { duration_ms });
+    return { ok: true, type: 'pause', agent: 'Carlos Empirika', result: { duration_ms } };
+  }
+
+  // ── qualify_lead ─────────────────────────────────────────────
+  if (type === 'qualify_lead') {
+    const { lead_id, score, tier, industry, metro } = payload;
+
+    if (!lead_id) throw new Error('missing_lead_id');
+
+    const prompt =
+      `Califica este lead. Score Empírika=${score}/100, tier=${tier}, ` +
+      `industria=${industry}, metro=${metro}. ` +
+      `¿Vale la pena que el equipo lo trabaje? ` +
+      `Devuelve JSON: { decision: 'work_it' | 'park' | 'disqualify', reasoning, recommended_next_action }.`;
+
+    let result;
+    try {
+      result = await runtime.run('Carlos Empirika', prompt, { brand_id: BRAND_ID });
+    } catch (err) {
+      const errMsg = (err.message || '').toLowerCase();
+      if (errMsg.includes('429') || errMsg.includes('rate') || errMsg.includes('quota')) {
+        const until = new Date(Date.now() + 5 * 60_000).toISOString();
+        await messenger.setState('gemini_circuit_open_until', until);
+        log.warn('Carlos Empirika: rate-limit detected, opening circuit breaker', { until });
+      }
+      throw err;
+    }
+
+    if (result.quotaExhausted || (result.response || '').includes('QUOTA_EXHAUSTED')) {
+      const until = new Date(Date.now() + 5 * 60_000).toISOString();
+      await messenger.setState('gemini_circuit_open_until', until);
+      log.warn('Carlos Empirika: quota exhausted, opening circuit breaker', { until });
+      throw new Error('Carlos Empirika LLM quota exhausted');
+    }
+
+    const raw = result.response || '';
+    let qualification;
+    try {
+      qualification = JSON.parse(raw);
+    } catch (_) {
+      const match = raw.match(/\{[\s\S]*\}/);
+      if (match) {
+        try { qualification = JSON.parse(match[0]); }
+        catch (e2) { throw new Error(`Carlos JSON parse failed: ${e2.message}. Raw: ${raw.slice(0, 300)}`); }
+      } else {
+        throw new Error(`Carlos returned non-JSON. Raw: ${raw.slice(0, 300)}`);
+      }
+    }
+
+    await messenger.setState(`last_qualification:${lead_id}`, {
+      ...qualification,
+      lead_id,
+      qualified_at: new Date().toISOString(),
+    });
+
+    log.info('Carlos Empirika: lead qualified', { lead_id, decision: qualification.decision });
+
+    const replyTo = msg.from_agent;
+    if (replyTo) {
+      try {
+        await messenger.send({
+          to: replyTo,
+          payload: {
+            type:      'lead_qualification_result',
+            lead_id,
+            decision:  qualification.decision,
+            reasoning: qualification.reasoning,
+            recommended_next_action: qualification.recommended_next_action,
+          },
+        });
+      } catch (sendErr) {
+        log.warn('Carlos Empirika: failed to send qualification reply', { err: sendErr.message });
+      }
+    }
+
+    return { ok: true, type: 'qualify_lead', lead_id, decision: qualification.decision };
+  }
+
+  // ── closing_advice ───────────────────────────────────────────
+  if (type === 'closing_advice') {
+    const { lead_id, conversation_history } = payload;
+
+    if (!lead_id) throw new Error('missing_lead_id');
+
+    const prompt =
+      `Based on this lead conversation, what's my best closing move?\n\n` +
+      `Conversation history:\n${JSON.stringify(conversation_history, null, 2)}\n\n` +
+      `Devuelve JSON: { reasoning, next_message_bullets: ["bullet1", "bullet2", "bullet3"] }.`;
+
+    let result;
+    try {
+      result = await runtime.run('Carlos Empirika', prompt, { brand_id: BRAND_ID });
+    } catch (err) {
+      const errMsg = (err.message || '').toLowerCase();
+      if (errMsg.includes('429') || errMsg.includes('rate') || errMsg.includes('quota')) {
+        const until = new Date(Date.now() + 5 * 60_000).toISOString();
+        await messenger.setState('gemini_circuit_open_until', until);
+        log.warn('Carlos Empirika: rate-limit on closing_advice, opening circuit breaker', { until });
+      }
+      throw err;
+    }
+
+    if (result.quotaExhausted || (result.response || '').includes('QUOTA_EXHAUSTED')) {
+      const until = new Date(Date.now() + 5 * 60_000).toISOString();
+      await messenger.setState('gemini_circuit_open_until', until);
+      throw new Error('Carlos Empirika LLM quota exhausted');
+    }
+
+    const raw = result.response || '';
+    let advice;
+    try {
+      advice = JSON.parse(raw);
+    } catch (_) {
+      const match = raw.match(/\{[\s\S]*\}/);
+      if (match) {
+        try { advice = JSON.parse(match[0]); }
+        catch (e2) { throw new Error(`Carlos closing_advice JSON parse failed: ${e2.message}`); }
+      } else {
+        throw new Error(`Carlos closing_advice returned non-JSON. Raw: ${raw.slice(0, 300)}`);
+      }
+    }
+
+    await messenger.setState(`last_closing_advice:${lead_id}`, {
+      ...advice,
+      lead_id,
+      advised_at: new Date().toISOString(),
+    });
+
+    log.info('Carlos Empirika: closing advice generated', { lead_id });
+
+    const replyTo = msg.from_agent;
+    if (replyTo) {
+      try {
+        await messenger.send({
+          to: replyTo,
+          payload: {
+            type:                 'closing_advice_result',
+            lead_id,
+            reasoning:            advice.reasoning,
+            next_message_bullets: advice.next_message_bullets,
+          },
+        });
+      } catch (sendErr) {
+        log.warn('Carlos Empirika: failed to send closing_advice reply', { err: sendErr.message });
+      }
+    }
+
+    return { ok: true, type: 'closing_advice', lead_id };
+  }
+
+  // ── unknown_message_type ─────────────────────────────────────
+  throw new Error(`unknown_message_type: ${type}`);
+}
+
+/**
+ * Carlos autonomous cycle — reactive only, logs idle.
+ * Carlos activates when Manager forwards a deal worth strategizing.
+ */
+async function runCarlosAutonomousCycle(messenger, log) {
+  log.info('Carlos Empirika: idle, awaiting Manager assignments');
+  await messenger.setState('last_run_at', new Date().toISOString());
+}
+
+// ── Estratega real-brain handler (Phase 6.6) ─────────────────
+
+/**
+ * Pulls last 7 days of metrics from agent_events + outreach_events + autonomy_audits
+ * and runs a strategic LLM review cycle.
+ *
+ * @param {import('@supabase/supabase-js').SupabaseClient} supabase
+ * @param {AgentMessenger} messenger
+ * @param {AgentRuntime} runtime
+ * @param {object} log
+ * @param {string|null} [callerMsgId]
+ * @returns {Promise<object>} Review result
+ */
+async function runEstrategaWeeklyReview(supabase, messenger, runtime, log, callerMsgId = null) {
+  const since = new Date(Date.now() - 7 * 24 * 60 * 60_000).toISOString();
+
+  // Fetch agent_events grouped by agent
+  const { data: agentEvts } = await supabase
+    .from('agent_events')
+    .select('agent_name, event_type, created_at')
+    .gte('created_at', since);
+
+  const agentSummary = {};
+  for (const row of (agentEvts || [])) {
+    const key = row.agent_name || 'unknown';
+    if (!agentSummary[key]) agentSummary[key] = { successes: 0, failures: 0 };
+    if ((row.event_type || '').includes('fail') || (row.event_type || '').includes('error')) {
+      agentSummary[key].failures++;
+    } else {
+      agentSummary[key].successes++;
+    }
+  }
+
+  // Fetch outreach_events counts
+  const { data: outreachEvts } = await supabase
+    .from('outreach_events')
+    .select('event_type')
+    .gte('created_at', since);
+
+  const outreachSummary = { sent: 0, replied: 0, bounced: 0 };
+  for (const row of (outreachEvts || [])) {
+    const ev = (row.event_type || '').toLowerCase();
+    if (ev === 'sent')    outreachSummary.sent++;
+    if (ev === 'replied') outreachSummary.replied++;
+    if (ev === 'bounced') outreachSummary.bounced++;
+  }
+
+  // Fetch latest autonomy_audit
+  const { data: audits } = await supabase
+    .from('autonomy_audits')
+    .select('*')
+    .order('created_at', { ascending: false })
+    .limit(1);
+
+  const latestAudit = (audits && audits[0]) ? audits[0] : null;
+
+  const summaryJson = JSON.stringify({
+    agent_events:   agentSummary,
+    outreach_events: outreachSummary,
+    latest_audit:    latestAudit,
+  }, null, 2);
+
+  const prompt =
+    `Aquí están las métricas de la última semana: ${summaryJson}. ` +
+    `Identifica el mayor cuello de botella y propón 3 acciones tácticas concretas para próxima semana. ` +
+    `Devuelve JSON: { bottleneck, root_cause, actions: [...3] }.`;
+
+  let result;
+  try {
+    result = await runtime.run('Estratega', prompt, { brand_id: BRAND_ID });
+  } catch (err) {
+    const errMsg = (err.message || '').toLowerCase();
+    if (errMsg.includes('429') || errMsg.includes('rate') || errMsg.includes('quota')) {
+      const until = new Date(Date.now() + 5 * 60_000).toISOString();
+      await messenger.setState('gemini_circuit_open_until', until);
+      log.warn('Estratega: rate-limit detected, opening circuit breaker', { until });
+    }
+    throw err;
+  }
+
+  if (result.quotaExhausted || (result.response || '').includes('QUOTA_EXHAUSTED')) {
+    const until = new Date(Date.now() + 5 * 60_000).toISOString();
+    await messenger.setState('gemini_circuit_open_until', until);
+    throw new Error('Estratega LLM quota exhausted');
+  }
+
+  const raw = result.response || '';
+  let review;
+  try {
+    review = JSON.parse(raw);
+  } catch (_) {
+    const match = raw.match(/\{[\s\S]*\}/);
+    if (match) {
+      try { review = JSON.parse(match[0]); }
+      catch (e2) { throw new Error(`Estratega JSON parse failed: ${e2.message}. Raw: ${raw.slice(0, 300)}`); }
+    } else {
+      throw new Error(`Estratega returned non-JSON. Raw: ${raw.slice(0, 300)}`);
+    }
+  }
+
+  // Persist to weekly_review:<ISO week>
+  const now = new Date();
+  const isoWeek = `${now.getUTCFullYear()}-W${String(getISOWeek(now)).padStart(2, '0')}`;
+  await messenger.setState(`weekly_review:${isoWeek}`, {
+    ...review,
+    generated_at: now.toISOString(),
+  });
+  await messenger.setState('last_weekly_review_at', now.toISOString());
+  await messenger.setState('last_run_at', now.toISOString());
+
+  log.info('Estratega: weekly review complete', { isoWeek, bottleneck: review.bottleneck });
+
+  return { ok: true, review, isoWeek };
+}
+
+/** ISO week number helper (no external dep). */
+function getISOWeek(date) {
+  const d = new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()));
+  const dayNum = d.getUTCDay() || 7;
+  d.setUTCDate(d.getUTCDate() + 4 - dayNum);
+  const yearStart = new Date(Date.UTC(d.getUTCFullYear(), 0, 1));
+  return Math.ceil((((d - yearStart) / 86400000) + 1) / 7);
+}
+
+/**
+ * Handles a single inbound message addressed to Estratega.
+ * Supported types: weekly_strategy_review, tactic_request, pause
+ * Anything else throws → caller nacks.
+ *
+ * @param {object} msg
+ * @param {AgentMessenger} messenger
+ * @param {AgentRuntime} runtime
+ * @param {import('@supabase/supabase-js').SupabaseClient} supabase
+ * @param {object} log
+ * @returns {Promise<object>}
+ */
+async function processEstrategaMessage(msg, messenger, runtime, supabase, log) {
+  const payload = msg.payload ?? {};
+  const { type } = payload;
+
+  log.info('Estratega: message_received', { msgId: msg.id, type });
+
+  await messenger.setState('last_inbound', {
+    type,
+    msg_id:      msg.id,
+    received_at: new Date().toISOString(),
+  });
+
+  // ── pause ────────────────────────────────────────────────────
+  if (type === 'pause') {
+    const { duration_ms } = payload;
+    await messenger.setState('paused_by_owner', true);
+    if (duration_ms > 0) {
+      setTimeout(async () => {
+        await messenger.setState('paused_by_owner', false);
+        log.info('Estratega: pause expired, resuming');
+      }, duration_ms);
+    }
+    log.info('Estratega: paused by owner', { duration_ms });
+    return { ok: true, type: 'pause', agent: 'Estratega', result: { duration_ms } };
+  }
+
+  // ── weekly_strategy_review ───────────────────────────────────
+  if (type === 'weekly_strategy_review') {
+    const { ok, review, isoWeek } = await runEstrategaWeeklyReview(supabase, messenger, runtime, log, msg.id);
+
+    const replyTo = msg.from_agent;
+    if (replyTo) {
+      try {
+        await messenger.send({
+          to: replyTo,
+          payload: {
+            type:        'weekly_strategy_review_result',
+            isoWeek,
+            bottleneck:  review.bottleneck,
+            root_cause:  review.root_cause,
+            actions:     review.actions,
+          },
+        });
+      } catch (sendErr) {
+        log.warn('Estratega: failed to send weekly_strategy_review_result', { err: sendErr.message });
+      }
+    }
+
+    return { ok, isoWeek };
+  }
+
+  // ── tactic_request ───────────────────────────────────────────
+  if (type === 'tactic_request') {
+    const { topic, context } = payload;
+
+    if (!topic) throw new Error('missing_topic');
+
+    const prompt =
+      `Propón una recomendación táctica concreta sobre: ${topic}.\n\n` +
+      `Contexto adicional: ${context || 'ninguno'}.\n\n` +
+      `Devuelve JSON: { recommendation, rationale, priority: 'high'|'medium'|'low' }.`;
+
+    let result;
+    try {
+      result = await runtime.run('Estratega', prompt, { brand_id: BRAND_ID });
+    } catch (err) {
+      const errMsg = (err.message || '').toLowerCase();
+      if (errMsg.includes('429') || errMsg.includes('rate') || errMsg.includes('quota')) {
+        const until = new Date(Date.now() + 5 * 60_000).toISOString();
+        await messenger.setState('gemini_circuit_open_until', until);
+        log.warn('Estratega: rate-limit on tactic_request, opening circuit breaker', { until });
+      }
+      throw err;
+    }
+
+    if (result.quotaExhausted || (result.response || '').includes('QUOTA_EXHAUSTED')) {
+      const until = new Date(Date.now() + 5 * 60_000).toISOString();
+      await messenger.setState('gemini_circuit_open_until', until);
+      throw new Error('Estratega LLM quota exhausted');
+    }
+
+    const raw = result.response || '';
+    let tactic;
+    try {
+      tactic = JSON.parse(raw);
+    } catch (_) {
+      const match = raw.match(/\{[\s\S]*\}/);
+      if (match) {
+        try { tactic = JSON.parse(match[0]); }
+        catch (e2) { throw new Error(`Estratega tactic JSON parse failed: ${e2.message}`); }
+      } else {
+        throw new Error(`Estratega tactic_request returned non-JSON. Raw: ${raw.slice(0, 300)}`);
+      }
+    }
+
+    const stateKey = `last_tactic:${topic.slice(0, 40).replace(/\s+/g, '_')}`;
+    await messenger.setState(stateKey, {
+      ...tactic,
+      topic,
+      generated_at: new Date().toISOString(),
+    });
+
+    log.info('Estratega: tactic generated', { topic, priority: tactic.priority });
+
+    const replyTo = msg.from_agent;
+    if (replyTo) {
+      try {
+        await messenger.send({
+          to: replyTo,
+          payload: {
+            type:           'tactic_result',
+            topic,
+            recommendation: tactic.recommendation,
+            rationale:      tactic.rationale,
+            priority:       tactic.priority,
+          },
+        });
+      } catch (sendErr) {
+        log.warn('Estratega: failed to send tactic reply', { err: sendErr.message });
+      }
+    }
+
+    return { ok: true, type: 'tactic_request', topic, priority: tactic.priority };
+  }
+
+  // ── unknown_message_type ─────────────────────────────────────
+  throw new Error(`unknown_message_type: ${type}`);
+}
+
+/**
+ * Estratega autonomous cycle.
+ * If >=7 days since last weekly review, runs it inline.
+ * Otherwise no-op.
+ */
+async function runEstrategaAutonomousCycle(supabase, runtime, messenger, log) {
+  const lastReviewAt = await messenger.getState('last_weekly_review_at');
+  const sevenDaysMs = 7 * 24 * 60 * 60_000;
+
+  if (!lastReviewAt || Date.now() - new Date(lastReviewAt).getTime() >= sevenDaysMs) {
+    log.info('Estratega: 7d elapsed, running autonomous weekly review');
+    try {
+      await runEstrategaWeeklyReview(supabase, messenger, runtime, log, null);
+    } catch (err) {
+      log.error('Estratega: autonomous weekly review failed', { err: err.message });
+    }
+  } else {
+    log.info('Estratega: within weekly review window, no action needed');
+  }
+
+  await messenger.setState('last_run_at', new Date().toISOString());
+}
+
 // ── Per-agent boot + loop ────────────────────────────────────
 
 /**
@@ -656,6 +1411,12 @@ async function bootAgent(entry, supabase, runtime, host) {
             result = await processScoutMessage(msg, messenger, runtime, supabase, log);
           } else if (canonicalName === 'Verifier') {
             result = await processVerifierMessage(msg, messenger, runtime, log);
+          } else if (canonicalName === 'Angela') {
+            result = await processAngelaMessage(msg, messenger, runtime, log);
+          } else if (canonicalName === 'Carlos Empirika') {
+            result = await processCarlosMessage(msg, messenger, runtime, log);
+          } else if (canonicalName === 'Estratega') {
+            result = await processEstrategaMessage(msg, messenger, runtime, supabase, log);
           } else {
             result = await processIncomingMessage(msg, messenger, canonicalName, log);
           }
@@ -676,7 +1437,7 @@ async function bootAgent(entry, supabase, runtime, host) {
         log.info(`fleet: ${canonicalName} processed inbound messages`, { count: processedCount });
       }
 
-      // Autonomous cycle — route scout to real sourcing cycle; others use scaffold
+      // Autonomous cycle — route to per-agent real cycle or scaffold
       const runCycle = await shouldRunAutonomously(messenger, msgs.length);
       if (runCycle) {
         try {
@@ -684,6 +1445,12 @@ async function bootAgent(entry, supabase, runtime, host) {
             await runScoutSourcingCycle(supabase, runtime, messenger, log, null);
           } else if (canonicalName === 'Verifier') {
             await runVerifierAutonomousCycle(messenger, log);
+          } else if (canonicalName === 'Angela') {
+            await runAngelaAutonomousCycle(supabase, messenger, log);
+          } else if (canonicalName === 'Carlos Empirika') {
+            await runCarlosAutonomousCycle(messenger, log);
+          } else if (canonicalName === 'Estratega') {
+            await runEstrategaAutonomousCycle(supabase, runtime, messenger, log);
           } else {
             await runScaffoldAutonomousCycle(messenger, canonicalName, log);
           }
