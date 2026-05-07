@@ -122,6 +122,8 @@ async function processIncomingMessage(msg, messenger, runtime, log) {
           tier,
           count,
           planned_send_at,
+          stub: true,                     // Phase 5 v1: Sam ack-only, no real send yet
+          real_send_flow: 'phase_6',      // wires actual SMTP/WA/SMS dispatch in Phase 6
         },
       });
       log.info('Sam: batch_acknowledged sent to Manager', { tier, count, planned_send_at });

@@ -326,8 +326,16 @@ async function run() {
       rootLog.error(`fleet: FATAL — failed to boot ${entry.canonicalName}`, {
         err: bootErr.message,
       });
-      // In production: attempt deregister of already-booted agents, then exit.
-      // We don't swallow partial-boot silently.
+      // Deregister the agents that DID boot before this point so they don't
+      // accumulate as orphans in agent_processes.
+      for (const booted of agents) {
+        try {
+          await booted.messenger.deregister();
+          booted.log.warn(`fleet: ${booted.canonicalName} deregistered after partial-boot failure`);
+        } catch (e) {
+          booted.log.warn(`fleet: ${booted.canonicalName} deregister-on-rollback failed`, { err: e.message });
+        }
+      }
       throw bootErr;
     }
   }
@@ -382,15 +390,9 @@ async function run() {
     return;
   }
 
-  // ── Keep process alive — agent inner loops manage their own scheduling ──
-  // The recursive setTimeouts above keep the event loop alive.
-  // This explicit keepAlive is a safety net in case all loops finish prematurely.
-  const keepAlive = setInterval(() => {
-    rootLog.debug('fleet: keepAlive tick');
-  }, 60_000);
-
-  // Clean up keepAlive on shutdown
-  process.on('exit', () => clearInterval(keepAlive));
+  // The 7 recursive setTimeouts above keep the event loop alive on their own.
+  // No explicit keepAlive interval needed — if all loops stop scheduling, the
+  // process should exit, not be artificially kept alive.
 }
 
 // ── Entry point ──────────────────────────────────────────────
