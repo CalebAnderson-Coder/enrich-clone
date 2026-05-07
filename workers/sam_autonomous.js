@@ -1,14 +1,14 @@
 // ============================================================
-// workers/sam_autonomous.js — Sam Autonomous Worker (Phase 5)
+// workers/sam_autonomous.js — Sam Autonomous Worker (Phase 6.1)
 //
 // Long-lived loop that drives Sam's paid media agent. Handles
-// inbound message dispatch, autonomous queue-pressure scan,
+// inbound message dispatch, autonomous pipeline scan,
 // circuit-breaker + pause checks, and graceful shutdown.
 //
-// Phase 5 closes the Manager→Sam loop: Sam receives outreach_batch_proposal
-// messages from Manager, acknowledges them with a planned_send_at, and
-// saves state for the future send flow. No real emails are sent here —
-// the existing 48h-FU cron handles current batches.
+// Phase 6.1: Sam now does real work — LLM-driven paid ads strategy
+// via outreach_batch_proposal and paid_ads_request handlers.
+// Email outreach is handled by the FU48h cron; Sam complements it
+// with Google + Meta retargeting campaigns.
 //
 // Run modes:
 //   node workers/sam_autonomous.js            # production loop
@@ -26,7 +26,7 @@ import { logger } from '../lib/logger.js';
 
 // ── Config ───────────────────────────────────────────────────
 
-const VERSION = '5.0.0';
+const VERSION = '6.1.0';
 const AGENT_NAME = 'sam';
 const BRAND_ID = process.env.BRAND_ID ?? 'eca1d833-77e3-4690-8cf1-2a44db20dcf8';
 const SLEEP_MS = Number(process.env.SAM_SLEEP_MS ?? 20_000);
@@ -78,10 +78,10 @@ async function shouldRunAutonomously(messenger, inboundCount) {
  * Dispatches a single inbound message to the appropriate handler.
  * Returns a result object for ack payload.
  *
- * Supported types: outreach_batch_proposal, outreach_batch_execute, pause
+ * Supported types: outreach_batch_proposal, paid_ads_request, outreach_batch_execute, pause
  * Anything else throws → caller nacks the message.
  */
-async function processIncomingMessage(msg, messenger, runtime, log) {
+async function processIncomingMessage(msg, messenger, runtime, log, supabase) {
   const { type } = msg.payload ?? {};
 
   // ── Helper: set circuit breaker on rate-limit errors ────────
@@ -95,44 +95,155 @@ async function processIncomingMessage(msg, messenger, runtime, log) {
   }
 
   // ── outreach_batch_proposal ──────────────────────────────────
-  // Phase 5 v1: acknowledge but do NOT fire emails.
-  // The 48h-FU cron handles existing batches. This is a placeholder
-  // until Sam's real send flow is wired.
+  // Phase 6.1: LLM-driven paid ads strategy that COMPLEMENTS email outreach.
+  // Email FU48h cron handles existing send batches; Sam designs retargeting
+  // campaigns (Google + Meta) to accelerate HOT lead conversion.
   if (type === 'outreach_batch_proposal') {
     const { tier, count } = msg.payload;
-    log.info('Sam: handling outreach_batch_proposal', { tier, count, from: msg.from_agent });
-
-    const received_at = new Date().toISOString();
-    const planned_send_at = new Date(Date.now() + 24 * 60 * 60_000).toISOString();
-
-    // Save to durable state — no LLM call needed
-    await messenger.setState('last_batch_proposal', {
+    log.info('Sam: handling outreach_batch_proposal — designing paid ads strategy', {
       tier,
       count,
-      received_at,
       from: msg.from_agent,
     });
 
-    // Acknowledge back to Manager
     try {
-      await messenger.send({
-        to: 'manager',
-        payload: {
-          type: 'batch_acknowledged',
-          tier,
-          count,
-          planned_send_at,
-          stub: true,                     // Phase 5 v1: Sam ack-only, no real send yet
-          real_send_flow: 'phase_6',      // wires actual SMTP/WA/SMS dispatch in Phase 6
-        },
-      });
-      log.info('Sam: batch_acknowledged sent to Manager', { tier, count, planned_send_at });
-    } catch (sendErr) {
-      log.warn('Sam: failed to send batch_acknowledged to Manager', { err: sendErr.message });
-      // Non-fatal — we still ack the inbound message
-    }
+      // Pull brand profile for industry context
+      const { data: brandRows, error: brandErr } = await supabase
+        .from('brands')
+        .select('name, industry, brand_profile')
+        .eq('id', BRAND_ID)
+        .limit(1);
 
-    return { ok: true, acknowledged: true };
+      if (brandErr) {
+        log.warn('Sam: failed to fetch brand profile, using defaults', { err: brandErr.message });
+      }
+
+      const brand = brandRows?.[0] ?? { name: 'Empírika client', industry: 'service business', brand_profile: null };
+
+      const prompt =
+        `Tenemos ${count} leads HOT de la industria ${brand.industry} esperando follow-up. ` +
+        `Email outreach ya está corriendo (FU48h cron). ` +
+        `Diseña una campaña paid-ads (Google + Meta) de retargeting que COMPLEMENTE este outreach. ` +
+        `Presupuesto $500-1500/mo. ` +
+        `Devuelve JSON: { campaign_name, channels: [{platform, budget_monthly, ad_copy_es, audience}], ` +
+        `total_budget_monthly, est_cpa, est_leads_per_month, rationale }. ` +
+        `Idioma español, ROI-focused.`;
+
+      const result = await runtime.run('Sam', prompt, { brand_id: BRAND_ID });
+
+      // Persist strategy to agent_state
+      await messenger.setState(`paid_ads_strategy:${BRAND_ID}`, {
+        tier,
+        count,
+        strategy: result.response,
+        planned_at: new Date().toISOString(),
+      });
+
+      // Notify Manager that strategy is ready
+      try {
+        await messenger.send({
+          to: 'manager',
+          payload: {
+            type: 'paid_ads_strategy_ready',
+            brand_id: BRAND_ID,
+            tier,
+            count,
+            strategy_preview: (result.response || '').slice(0, 600),
+            full_strategy_state_key: `paid_ads_strategy:${BRAND_ID}`,
+          },
+        });
+        log.info('Sam: paid_ads_strategy_ready sent to Manager', { tier, count });
+      } catch (sendErr) {
+        log.warn('Sam: failed to send paid_ads_strategy_ready to Manager', { err: sendErr.message });
+        // Non-fatal — strategy is persisted; Manager can poll state
+      }
+
+      return {
+        ok: true,
+        type: 'outreach_batch_proposal',
+        brand_id: BRAND_ID,
+        persisted: true,
+        strategy_preview: (result.response || '').slice(0, 400),
+      };
+    } catch (err) {
+      await handleRateLimitError(err);
+      throw err;
+    }
+  }
+
+  // ── paid_ads_request ─────────────────────────────────────────
+  // Explicit paid ads request from Manager with channel/budget hints.
+  // Payload: { brand_id, channel ('google'|'meta'|'both'), budget_monthly, focus ('lead_gen'|'awareness'|'retargeting') }
+  if (type === 'paid_ads_request') {
+    const {
+      brand_id = BRAND_ID,
+      channel = 'both',
+      budget_monthly = 1000,
+      focus = 'retargeting',
+    } = msg.payload;
+    log.info('Sam: handling paid_ads_request', { brand_id, channel, budget_monthly, focus });
+
+    try {
+      // Pull brand profile
+      const { data: brandRows, error: brandErr } = await supabase
+        .from('brands')
+        .select('name, industry, brand_profile')
+        .eq('id', brand_id)
+        .limit(1);
+
+      if (brandErr) {
+        log.warn('Sam: failed to fetch brand profile for paid_ads_request', { err: brandErr.message });
+      }
+
+      const brand = brandRows?.[0] ?? { name: 'Empírika client', industry: 'service business', brand_profile: null };
+
+      const channelLabel = channel === 'both' ? 'Google + Meta' : channel === 'google' ? 'Google Ads' : 'Meta Ads';
+      const prompt =
+        `Diseña una campaña de paid ads en ${channelLabel} con enfoque en ${focus}. ` +
+        `Industria: ${brand.industry}. Presupuesto mensual: $${budget_monthly}. ` +
+        `Devuelve JSON: { campaign_name, channels: [{platform, budget_monthly, ad_copy_es, audience}], ` +
+        `total_budget_monthly, est_cpa, est_leads_per_month, rationale }. ` +
+        `Idioma español, ROI-focused.`;
+
+      const result = await runtime.run('Sam', prompt, { brand_id });
+
+      await messenger.setState(`paid_ads_strategy:${brand_id}`, {
+        channel,
+        budget_monthly,
+        focus,
+        strategy: result.response,
+        planned_at: new Date().toISOString(),
+      });
+
+      try {
+        await messenger.send({
+          to: 'manager',
+          payload: {
+            type: 'paid_ads_strategy_ready',
+            brand_id,
+            channel,
+            budget_monthly,
+            focus,
+            strategy_preview: (result.response || '').slice(0, 600),
+            full_strategy_state_key: `paid_ads_strategy:${brand_id}`,
+          },
+        });
+        log.info('Sam: paid_ads_strategy_ready sent (paid_ads_request)', { brand_id });
+      } catch (sendErr) {
+        log.warn('Sam: failed to send paid_ads_strategy_ready (paid_ads_request)', { err: sendErr.message });
+      }
+
+      return {
+        ok: true,
+        type: 'paid_ads_request',
+        brand_id,
+        persisted: true,
+        strategy_preview: (result.response || '').slice(0, 400),
+      };
+    } catch (err) {
+      await handleRateLimitError(err);
+      throw err;
+    }
   }
 
   // ── outreach_batch_execute ───────────────────────────────────
@@ -170,22 +281,93 @@ async function processIncomingMessage(msg, messenger, runtime, log) {
   throw new Error(`unknown_message_type: ${type}`);
 }
 
-// ── runAutonomousQueueScan ───────────────────────────────────
+// ── runAutonomousCycle ───────────────────────────────────────
 
 /**
- * Proactive scan: count pending messages addressed to Sam.
- * If >5 accumulate, warn and notify Manager about queue pressure.
- * Otherwise no-op.
+ * Proactive scan: inspect pipeline lead tiers and propose budget actions,
+ * plus the existing queue-pressure check.
+ *
+ * Pipeline rules:
+ *   - HOT > 50 → pipeline saturated → propose budget increase (retargeting can convert faster)
+ *   - HOT < 10 → pipeline starved  → suggest pausing paid spend (email FU sufficient for now)
+ *   - 10 ≤ HOT ≤ 50 → healthy, no action
+ *
+ * Queue pressure: if Sam's own pending queue > 5, notify Manager.
  *
  * @param {import('@supabase/supabase-js').SupabaseClient} supabase
  * @param {AgentMessenger} messenger
  * @param {object} log
  * @returns {{ foundPattern: boolean, detail: any }}
  */
-async function runAutonomousQueueScan(supabase, messenger, log) {
-  log.info('Sam: running autonomous queue scan');
+async function runAutonomousCycle(supabase, messenger, log) {
+  log.info('Sam: running autonomous cycle');
 
-  const { count, error: countErr } = await supabase
+  // ── Pipeline tier scan ───────────────────────────────────────
+  const { data: tierRows, error: tierErr } = await supabase
+    .from('leads')
+    .select('lead_tier')
+    .eq('brand_id', BRAND_ID)
+    .eq('outreach_status', 'SENT');
+
+  let hot_count = 0;
+  let warm_count = 0;
+
+  if (tierErr) {
+    log.warn('Sam: pipeline tier scan failed', { err: tierErr.message });
+  } else if (tierRows) {
+    for (const row of tierRows) {
+      if (row.lead_tier === 'HOT') hot_count++;
+      else if (row.lead_tier === 'WARM') warm_count++;
+    }
+  }
+
+  await messenger.setState('last_pipeline_scan', {
+    hot_count,
+    warm_count,
+    scanned_at: new Date().toISOString(),
+  });
+
+  log.info('Sam: pipeline scan complete', { hot_count, warm_count });
+
+  if (hot_count > 50) {
+    log.info('Sam: pipeline saturated — proposing budget increase', { hot_count });
+    try {
+      await messenger.send({
+        to: 'manager',
+        payload: {
+          type: 'budget_increase_proposed',
+          tier: 'HOT',
+          count: hot_count,
+          rationale: 'pipeline saturated, paid retargeting can convert faster than email-only follow-up',
+        },
+      });
+      log.info('Sam: budget_increase_proposed sent to Manager', { hot_count });
+    } catch (sendErr) {
+      log.warn('Sam: failed to send budget_increase_proposed', { err: sendErr.message });
+    }
+    return { foundPattern: true, detail: { hot_count, warm_count, action: 'budget_increase_proposed' } };
+  }
+
+  if (hot_count < 10) {
+    log.info('Sam: pipeline thin — suggesting budget pause', { hot_count });
+    try {
+      await messenger.send({
+        to: 'manager',
+        payload: {
+          type: 'budget_pause_suggested',
+          count: hot_count,
+          rationale: 'pipeline thin, email FU should suffice for now',
+        },
+      });
+      log.info('Sam: budget_pause_suggested sent to Manager', { hot_count });
+    } catch (sendErr) {
+      log.warn('Sam: failed to send budget_pause_suggested', { err: sendErr.message });
+    }
+    return { foundPattern: true, detail: { hot_count, warm_count, action: 'budget_pause_suggested' } };
+  }
+
+  // ── Queue-pressure check (existing guard) ────────────────────
+  const { count: pendingCount, error: countErr } = await supabase
     .from('agent_messages')
     .select('id', { count: 'exact', head: true })
     .eq('to_agent', AGENT_NAME)
@@ -193,28 +375,28 @@ async function runAutonomousQueueScan(supabase, messenger, log) {
     .eq('status', 'pending');
 
   if (countErr) {
-    log.warn('Sam: queue scan failed', { err: countErr.message });
-    return { foundPattern: false, detail: { reason: 'query_error', err: countErr.message } };
+    log.warn('Sam: queue pressure scan failed', { err: countErr.message });
+    return { foundPattern: false, detail: { hot_count, warm_count, reason: 'queue_count_error' } };
   }
 
-  const pendingCount = count ?? 0;
+  const queueDepth = pendingCount ?? 0;
 
-  if (pendingCount > 5) {
-    log.warn('Sam: Manager queue backing up', { pendingCount });
+  if (queueDepth > 5) {
+    log.warn('Sam: message queue backing up', { queueDepth });
     try {
       await messenger.send({
         to: 'manager',
-        payload: { type: 'queue_pressure', count: pendingCount },
+        payload: { type: 'queue_pressure', count: queueDepth },
       });
-      log.info('Sam: queue_pressure notification sent to Manager', { pendingCount });
+      log.info('Sam: queue_pressure notification sent to Manager', { queueDepth });
     } catch (sendErr) {
       log.warn('Sam: failed to send queue_pressure to Manager', { err: sendErr.message });
     }
-    return { foundPattern: true, detail: { pendingCount } };
+    return { foundPattern: true, detail: { hot_count, warm_count, queueDepth } };
   }
 
-  log.info('Sam: queue healthy', { pendingCount });
-  return { foundPattern: false, detail: { pendingCount } };
+  log.info('Sam: pipeline healthy, queue healthy', { hot_count, warm_count, queueDepth });
+  return { foundPattern: false, detail: { hot_count, warm_count, queueDepth } };
 }
 
 // ── Main loop ────────────────────────────────────────────────
@@ -280,7 +462,7 @@ async function run() {
       let processedCount = 0;
       for (const msg of msgs) {
         try {
-          const result = await processIncomingMessage(msg, messenger, runtime, log);
+          const result = await processIncomingMessage(msg, messenger, runtime, log, supabase);
           await messenger.ack(msg.id, { result });
           processedCount++;
         } catch (err) {
@@ -293,13 +475,13 @@ async function run() {
         log.info('Sam: processed inbound messages', { count: processedCount });
       }
 
-      // Autonomous queue scan
+      // Autonomous pipeline + queue scan
       const runCycle = await shouldRunAutonomously(messenger, msgs.length);
       if (runCycle) {
         try {
-          const result = await runAutonomousQueueScan(supabase, messenger, log);
+          const result = await runAutonomousCycle(supabase, messenger, log);
           if (result?.foundPattern) {
-            log.info('Sam: queue pressure detected', { detail: result.detail });
+            log.info('Sam: autonomous cycle detected pattern', { detail: result.detail });
           }
           await messenger.setState('last_run_at', new Date().toISOString());
         } catch (err) {
