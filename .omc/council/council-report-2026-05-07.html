@@ -1,0 +1,169 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<title>LLM Council — Empírika Aliveness Plan · 2026-05-07</title>
+<style>
+* { box-sizing: border-box; }
+body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; max-width: 820px; margin: 0 auto; padding: 32px 24px; color: #1a1a1a; line-height: 1.6; background: #fafafa; }
+h1 { font-size: 28px; margin: 0 0 8px; color: #0d2540; }
+h2 { font-size: 19px; margin: 28px 0 12px; color: #0d2540; border-bottom: 2px solid #e5e5e5; padding-bottom: 6px; }
+h3 { font-size: 15px; margin: 16px 0 6px; color: #444; }
+.meta { color: #666; font-size: 13px; margin-bottom: 24px; }
+.question { background: #fff7d6; border-left: 4px solid #f0c14b; padding: 14px 18px; border-radius: 4px; margin-bottom: 28px; }
+.verdict { background: #fff; border: 1px solid #ddd; border-radius: 8px; padding: 20px 24px; margin-bottom: 24px; box-shadow: 0 1px 4px rgba(0,0,0,0.04); }
+.verdict h2 { margin-top: 0; }
+.recommendation { background: #e7f4ff; border-left: 4px solid #2076d2; padding: 14px 18px; border-radius: 4px; margin: 16px 0; }
+.first-step { background: #d6f3dd; border-left: 4px solid #2e9e55; padding: 14px 18px; border-radius: 4px; margin: 16px 0; font-weight: 500; }
+.vote-grid { display: grid; grid-template-columns: 140px 1fr 80px; gap: 8px 14px; margin: 16px 0; align-items: center; font-size: 14px; }
+.vote-grid > div { padding: 8px 12px; border-radius: 4px; }
+.vote-row.queue { background: #d6f3dd; }
+.vote-row.realtime { background: #ffe1d4; }
+.vote-label { font-weight: 600; }
+.vote-tag { text-align: center; font-weight: 700; font-size: 13px; }
+details { margin: 12px 0; padding: 12px 16px; background: #fff; border: 1px solid #e5e5e5; border-radius: 6px; }
+details summary { cursor: pointer; font-weight: 600; color: #0d2540; padding: 4px 0; }
+details[open] summary { margin-bottom: 10px; }
+.advisor-name { font-size: 14px; font-weight: 600; color: #0d2540; margin-top: 16px; }
+.advisor-name:first-child { margin-top: 0; }
+.advisor-block { padding: 8px 0 4px; }
+.advisor-block p { margin: 4px 0; font-size: 14px; }
+.peer-review { padding: 12px 0; border-bottom: 1px dotted #ddd; font-size: 14px; }
+.peer-review:last-child { border-bottom: none; }
+.callout { background: #fff7d6; padding: 10px 14px; border-left: 4px solid #f0c14b; border-radius: 4px; margin: 12px 0; font-size: 14px; }
+ul { margin: 8px 0; padding-left: 22px; }
+ul li { margin: 4px 0; }
+footer { margin-top: 40px; padding-top: 16px; border-top: 1px solid #e5e5e5; color: #888; font-size: 12px; }
+code { font-family: SFMono-Regular, Consolas, monospace; background: #f0f0f0; padding: 1px 5px; border-radius: 3px; font-size: 13px; }
+</style>
+</head>
+<body>
+
+<h1>LLM Council — Empírika Aliveness Plan</h1>
+<p class="meta">Sesión: 2026-05-07 · Audiencia: Brian (owner Empírika) · Plan evaluado: arquitecto OMC con framework Hermes-inspired</p>
+
+<div class="question">
+<strong>La pregunta:</strong><br>
+Empírika tiene 11 agentes LLM autónomos (Angela, Manager, Helena, Kai, Sam, Carlos, Verifier, Scout, DaVinci, Estratega, Davinci). El cliente dijo "se sienten como código y cron jobs, no como algo vivo". El arquitecto propuso un plan en 3 fases (memoria → decisiones → reactividad) inspirado en Hermes-Agent (NousResearch) pero adaptado al stack Node.js + Supabase + Render. <strong>Forced binary del council:</strong> trigger reactivo vía Supabase Realtime (1-3s) o tabla Queue polled cada 15s (más lento, observable, replayable).
+</div>
+
+<div class="verdict">
+<h2>🎯 Veredicto del Council</h2>
+
+<h3>Voto del binary §6</h3>
+<div class="vote-grid">
+  <div class="vote-label vote-row queue">Contrarian</div><div class="vote-row queue">Pick boring. Realtime documentado-fragil en plan propio.</div><div class="vote-tag vote-row queue">QUEUE</div>
+  <div class="vote-label vote-row queue">First Principles</div><div class="vote-row queue">18s con trail legible &gt; 2s black box.</div><div class="vote-tag vote-row queue">QUEUE</div>
+  <div class="vote-label vote-row realtime">Expansionist</div><div class="vote-row realtime">Story over infra. "Sub-second" como arma comercial.</div><div class="vote-tag vote-row realtime">REALTIME</div>
+  <div class="vote-label vote-row queue">Outsider</div><div class="vote-row queue">15s vs 1s invisible al humano. Construye personalidades.</div><div class="vote-tag vote-row queue">QUEUE</div>
+  <div class="vote-label vote-row queue">Executor</div><div class="vote-row queue">Render mata WS. Migra ambas tablas el mismo PR.</div><div class="vote-tag vote-row queue">QUEUE</div>
+</div>
+<p style="text-align:center; font-size:18px; font-weight:600; margin: 18px 0 0;">Resultado: <span style="color:#2e9e55;">QUEUE 4</span> &nbsp;·&nbsp; <span style="color:#c54a3c;">REALTIME 1</span></p>
+<p style="text-align:center; font-size:13px; color:#666;">El único voto Realtime fue Expansionist — unánimemente flagueado como el blind-spot mayor en peer review.</p>
+</div>
+
+<h2>🤝 Donde el Council coincide</h2>
+<ul>
+<li><strong>Latencia NO es el cuello de botella.</strong> 15s vs 1-3s es invisible al observador real (Brian, demo, cliente final).</li>
+<li><strong>Observability y replayability son load-bearing</strong>, no nice-to-have. Render mata WebSockets. Queue sobrevive restarts; Realtime inventa una clase nueva de outage.</li>
+<li><strong>"Vivo" es un problema de PERCEPCIÓN, no de latencia.</strong> El path más barato a "se siente vivo" es una vista narrativa en primera persona sobre <code>agent_observations</code>, mandada en semana 1 (no semana 6).</li>
+<li><strong>Phase 1 es más chico de lo que escopó el arquitecto.</strong> 3-4 días, no una semana. Una sola migración con <code>agent_observations</code> + <code>pending_reactions</code> + el trigger de Postgres juntos.</li>
+</ul>
+
+<h2>⚔️ Donde el Council choca</h2>
+<p><strong>El único choque real es Expansionist vs todos los demás.</strong></p>
+<p>Expansionist votó Realtime con argumentos comerciales: Queue tope la historia que puedes contar ("polling cada 15 segundos" = techo eterno), y <code>agent_observations</code> es un asset vendible ("Empírika Intelligence", behavioral graph de negocios Latino).</p>
+<p>El read razonable: optimiza por <em>peso narrativo</em> — un Loom de Manager respondiendo a las 2am cierra cliente #2-#4; 60s vs 15s sí se siente categóricamente distinto en un demo grabado.</p>
+<div class="callout">
+<strong>Por qué 5/5 reviewers flaguearon a Expansionist como blind spot:</strong> está monetizando un grafo que aún no ha logueado su primera fila, sobre infraestructura (Render WS) que Contrarian y Executor flaguearon como frágil, para un negocio (agencia de marketing, no data product) que no calza con el scope inventado. Esquivó el binary técnico con argumentos narrativos.
+</div>
+<p>Choque secundario, menor: <strong>Contrarian vs el arquitecto sobre los skip guards.</strong> Contrarian dice que el trabajo de Scout ES descubrir — 30% skip = 30% menos leads sourcing. Nadie más engancha con esto. Merece un guardrail propio (skip-rate alarm, no solo ghost-skip detector) antes de que Phase 2 mergee.</p>
+
+<h2>🔍 Blind spots que el Council cazó (solo en peer review)</h2>
+<p>Estos son los hallazgos que de verdad importan:</p>
+<ol>
+<li><strong>Nadie preguntó quién LEE las observations.</strong> Sin un consumidor definido (dashboard del owner? otros agentes? demo grabado?), <code>agent_observations</code> se vuelve un log write-only — exactamente el modo de fallo "código + cron" que se intenta escapar. <em>El forced binary escondió la pregunta real: ¿quién es el observador?</em></li>
+<li><strong>El roster de 11 agentes lista DaVinci dos veces.</strong> Solo Outsider lo notó en la ronda original; Reviewers 1 y 4 escalaron. ¿Typo o son dos agentes? Cualquier respuesta, el roster está incoherente — y eso es un fix más urgente que la elección de infraestructura.</li>
+<li><strong>Renderiza el stream de <code>agent_events</code> existente como narrativa primera-persona ANTES de construir Phase 1.</strong> Si eso ya se siente vivo, Phase 1 es un problema de UI, no de schema. La falsificación más barata posible del plan completo.</li>
+<li><strong>Si los agentes leen las observations DE OTROS agentes, eso ES Phase 1.</strong> Helena en desacuerdo con Kai, Manager diciendo "ya intenté eso el martes y falló" — la "vivacidad" es inter-agente, no per-agente.</li>
+</ol>
+
+<div class="recommendation">
+<h2 style="margin-top:0;">✅ La Recomendación</h2>
+<p><strong>Construye el Queue. Manda la vista narrativa en semana 1, no semana 6.</strong></p>
+<p>Una sola migración: <code>agent_observations</code> + <code>pending_reactions</code> + el trigger de Postgres sobre <code>outreach_events</code>. Worker con <code>SELECT … FOR UPDATE SKIP LOCKED LIMIT 10</code> cada 15s. Son 150 líneas y sobrevive a restarts de Render.</p>
+<p>Inmediatamente — la misma semana — construye la vista <code>agent_narrative</code> en primera persona. El comprador real (vos, viewers de demo, clientes Empírika) no percibe la diferencia entre 2s y 18s, pero absolutamente percibe la diferencia entre "Scout firó a las 09:00" y <em>"Scout: skipeando — Helena ya enriqueció estos 14 leads en Miami ayer."</em></p>
+<p>Difiere la visión "Empírika Intelligence" de Expansionist. No está mal forever, está mal AHORA — tienes cero respuestas de qué presumir, y el council fue unánime que era la jugada más débil del tablero.</p>
+<p>Agrega el guardrail que pidió Contrarian: skip-rate alarm sobre Scout. Si skip &gt; 40% por 24h, paginar al owner. No esperar la dry week.</p>
+</div>
+
+<div class="first-step">
+<h2 style="margin-top:0;">🥇 Lo único a hacer primero</h2>
+<p style="margin-bottom: 0;"><strong>Antes de escribir la migración, renderiza los últimos 7 días de <code>agent_events</code> como un stream en primera persona y léelo en tu teléfono por 10 minutos.</strong> Si ya se siente vivo, todo el schema de Phase 1 es el fix equivocado y tienes un problema de UI. Si se siente como un log file, te ganaste la migración — y ahora sabes exactamente qué necesita registrar <code>agent_observations</code> para tapar el gap.</p>
+</div>
+
+<h2>📋 Respuestas completas (colapsable)</h2>
+
+<details>
+<summary>Los 5 advisors — respuestas individuales</summary>
+
+<div class="advisor-block">
+<div class="advisor-name">🧐 The Contrarian — Vote: QUEUE</div>
+<p>Plan no fixea aliveness — sigue siendo código + cron, mejor plumbed. Specific holes: (1) Métrica 80% recall es mentira — "references prior memory" pasa trivialmente si SELECT happened. Definir como <em>behavior changed because of memory</em>. (2) Skip guards en Scout/Helena son peligrosos — Scout existe para descubrir; "no new work" es el modo de falla. 30% skip = 30% menos leads. Ghost-skip detector reactivo; owner se entera después de una dry week. (3) Realtime documentado como frágil en plan propio. (4) Sin rollback para edits Phase 2. Vote: Queue. 15s latency está bien, observable, replayable, sobrevive Render restarts.</p>
+</div>
+
+<div class="advisor-block">
+<div class="advisor-name">🧠 The First Principles Thinker — Vote: QUEUE</div>
+<p>"Feels alive" es perception problem disfrazado de engineering. Plan toca continuity/reactivity/restraint, pero ¿el owner sentiría algo distinto después de 6 semanas? Probablemente no. "Alive" es downstream de <strong>visible inner life</strong>. Humano viendo <code>Scout fired at 09:00</code> siente maquinaria; humano viendo <em>"Scout: Skipping — Helena already enriched these 14 leads yesterday in Miami"</em> siente un colega. Mandar vista <code>agent_narrative</code> primera-persona en semana 1, no semana 6. Eso es 80% de "alive" por casi cero costo. Vote: Queue. 18s con trail legible &gt; 2s black box.</p>
+</div>
+
+<div class="advisor-block">
+<div class="advisor-name">🚀 The Expansionist — Vote: REALTIME</div>
+<p>Plan está construido como mantenimiento, debería ser launchpad. (1) <code>agent_observations</code> ES el producto — proprietary behavioral graph de negocios Latino-owned, vendible como "Empírika Intelligence" data layer. (2) Reactividad &lt;60s es category shift — record un Loom de Manager respondiendo a las 2am, eso cierra cliente #2-#4. (3) "Skipped — no new work" es vendible: agencias billan por actividad, vos billás por judgment. Vote: Realtime. Queue es la safe choice para un negocio que no existe todavía. "We poll every 15 seconds" es un techo eterno sobre la story que podés contar.</p>
+</div>
+
+<div class="advisor-block">
+<div class="advisor-name">👀 The Outsider — Vote: QUEUE</div>
+<p>Plan fixea latencia, no aliveness. No tengo idea quiénes son ninguno de los 11 agentes. Angela, Manager, Helena, Kai, Sam, Carlos, Verifier, Scout, DaVinci, Estratega, Davinci. <strong>DaVinci aparece dos veces — typo o son dos?</strong> "Alive" usualmente significa que cada uno tiene voz reconocible, opiniones, reacciones visibles. Ninguno de los 3 goals mide eso. Continuity con 80% memory references — un agente puede citar la nota de ayer y seguir sintiéndose script. Aliveness es cuando Helena no está de acuerdo con Kai, cuando Scout flaguea algo que nadie le pidió, cuando Manager dice "ya lo intenté el martes y falló." Vote: Queue. Construí el queue aburrido. Gastá las semanas ahorradas dándoles personalidades.</p>
+</div>
+
+<div class="advisor-block">
+<div class="advisor-name">⚙️ The Executor — Vote: QUEUE (no close)</div>
+<p>Lunes por la mañana concreto: Phase 1 son 3-4 días no una semana (CREATE TABLE + helpers + sprinkle). Phase 2 son guards de 5 líneas <code>SELECT count(*) FROM agent_observations WHERE agent=$1 AND created_at &gt; now() - interval '6 hours'</code>, ~2h por agente, los 4 en una semana. Phase 3 no son 2-3 semanas de código — son 150 líneas, un archivo, riesgo es operations. Vote: Queue, no close. Realtime sobre Render = WS long-lived que Render mata, reconnect storms, eventos perdidos, cero replay. Queue = trigger Postgres inserta row, worker hace <code>SELECT FOR UPDATE SKIP LOCKED LIMIT 10</code> cada 15s. Replayable, observable, sobrevive restarts. <strong>Primer PR el lunes:</strong> migración para <code>agent_observations</code> + <code>pending_reactions</code> + el trigger juntos.</p>
+</div>
+
+</details>
+
+<details>
+<summary>5 peer reviews (anonimizadas)</summary>
+
+<div class="peer-review">
+<strong>Reviewer 1:</strong> Strongest = First Principles (operacionaliza "alive" en artifact buildable lunes). Biggest blind spot = Expansionist (vendiendo "Empírika Intelligence" antes de que un solo reply convirtiera). Todos missed: nadie cuestionó los 11 agentes, nadie preguntó audiencia de "alive".
+</div>
+
+<div class="peer-review">
+<strong>Reviewer 2:</strong> Strongest = Executor (única respuesta que envía lunes). Biggest blind spot = Expansionist (monetizando un graph que no ha logueado su primera fila). Todos missed: renderizar el stream existente como narrativa primera-persona ANTES de construir Phase 1.
+</div>
+
+<div class="peer-review">
+<strong>Reviewer 3:</strong> Strongest = First Principles (testable esta semana, "18s con trail legible &gt; 2s black box" reframea el binary correctamente). Biggest blind spot = Expansionist (premature commercialization). Todos missed: ¿quién lee las observations?
+</div>
+
+<div class="peer-review">
+<strong>Reviewer 4:</strong> Strongest = First Principles (diagnostica category error correctamente). Biggest blind spot = Expansionist (scope inventado, esquiva el binary con argumentos narrativos). Todos missed: si DaVinci está duplicado el roster es incoherente; si los agentes leen observations DE OTROS agentes, eso ES Phase 1.
+</div>
+
+<div class="peer-review">
+<strong>Reviewer 5:</strong> Strongest = First Principles (artifact más barato concreto). Biggest blind spot = Expansionist (romantiza Realtime ignorando fragility). Todos missed: ¿quién es el observador? El forced binary escondió la pregunta real.
+</div>
+
+</details>
+
+<footer>
+Council generado 2026-05-07 · 5 advisors paralelos + 5 peer reviews paralelas + chairman synthesis<br>
+Metodología: <a href="https://x.com/karpathy">Andrej Karpathy LLM Council</a><br>
+Plan completo: <code>.omc/research/council/council-transcript-2026-05-07.md</code>
+</footer>
+
+</body>
+</html>
