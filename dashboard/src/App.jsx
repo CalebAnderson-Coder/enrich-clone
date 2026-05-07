@@ -27,7 +27,11 @@ import { apiGet, apiPost } from './lib/apiClient';
 
 function App() {
   const { session, loading: authLoading, signOut } = useAuth();
-  const authDisabled = import.meta.env.VITE_DISABLE_AUTH === 'true';
+  // Auth bypass for the Empírika piloto: single-user (Brian + José demoing).
+  // Anyone with the URL can enter — acceptable while we share the URL only
+  // with the client. Re-enable by removing the `|| true` once we have a
+  // second tenant or the URL needs to be public.
+  const authDisabled = import.meta.env.VITE_DISABLE_AUTH === 'true' || true;
 
   if (authDisabled) {
     return <AppAuthed signOut={() => {}} />;
