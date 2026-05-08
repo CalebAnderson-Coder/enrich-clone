@@ -48,7 +48,7 @@ import { angela } from '../agents/angela.js';
 import { davinci } from '../agents/davinci.js';
 import { estratega } from '../agents/estratega.js';
 import { atlas } from '../agents/atlas.js';
-import { runAtlasAudit } from '../lib/atlasAudit.js';
+import { runAtlasAudit, maybeGenerateDailyReport } from '../lib/atlasAudit.js';
 import { logger } from '../lib/logger.js';
 
 // ── Config ───────────────────────────────────────────────────
@@ -2053,15 +2053,21 @@ async function processAtlasMessage(msg, messenger, supabase, log) {
   }
 
   if (type === 'audit_now') {
-    const verdict = await runAtlasAudit({
-      supabase,
-      brandId: BRAND_ID,
-      messenger,
-      log,
-    });
-    await messenger.setState('last_audit_at', new Date().toISOString());
-    await messenger.setState('last_audit_verdict', verdict);
-    return { ok: true, type: 'audit_now', agent: 'Atlas', result: verdict };
+    try {
+      const verdict = await runAtlasAudit({
+        supabase,
+        brandId: BRAND_ID,
+        messenger,
+        log,
+      });
+      // audit_now does NOT advance the cooldown clock — keeps the next regular
+      // proactive cycle on schedule (auditor finding F11).
+      await messenger.setState('last_audit_verdict', verdict);
+      return { ok: true, type: 'audit_now', agent: 'Atlas', result: verdict };
+    } catch (err) {
+      log.error('Atlas: audit_now threw', { err: err.message });
+      return { ok: false, type: 'audit_now', agent: 'Atlas', error: err.message };
+    }
   }
 
   if (!type) throw new Error('unknown_message_type: ' + type);
@@ -2073,22 +2079,45 @@ async function processAtlasMessage(msg, messenger, supabase, log) {
  * Runs an audit every ATLAS_AUDIT_COOLDOWN_MS, persists verdict, and
  * (inside runAtlasAudit) alerts Manager if CRITICAL.
  */
-async function runAtlasAuditCycle(supabase, messenger, log) {
-  const lastAuditAt = await messenger.getState('last_audit_at');
-  if (lastAuditAt && Date.now() - new Date(lastAuditAt).getTime() < ATLAS_AUDIT_COOLDOWN_MS) {
-    log.debug('Atlas: audit skipped (within cooldown)', { lastAuditAt });
+async function runAtlasAuditCycle(supabase, runtime, messenger, log) {
+  // ── Wrap the entire cycle in a try/catch — auditor finding F3.
+  // Atlas can never crash the multiplexed worker that hosts the
+  // other 7 agents. If anything blows up, log it and move on.
+  try {
+    const lastAuditAt = await messenger.getState('last_audit_at');
+    if (lastAuditAt && Date.now() - new Date(lastAuditAt).getTime() < ATLAS_AUDIT_COOLDOWN_MS) {
+      log.debug('Atlas: audit skipped (within cooldown)', { lastAuditAt });
+      await messenger.setState('last_run_at', new Date().toISOString());
+      return;
+    }
+
+    const verdict = await runAtlasAudit({
+      supabase,
+      brandId: BRAND_ID,
+      messenger,
+      log,
+    });
+    await messenger.setState('last_audit_at', new Date().toISOString());
+    await messenger.setState('last_audit_verdict', verdict);
     await messenger.setState('last_run_at', new Date().toISOString());
-    return;
+
+    // Daily narrative report — opportunistic, never blocks the cycle.
+    try {
+      await maybeGenerateDailyReport({ supabase, brandId: BRAND_ID, runtime, messenger, log });
+    } catch (reportErr) {
+      log.warn('Atlas: daily report failed', { err: reportErr.message });
+    }
+  } catch (cycleErr) {
+    log.error('Atlas: cycle failed (contained — worker continues)', {
+      err: cycleErr.message,
+      stack: cycleErr.stack,
+    });
+    // Stamp last_run_at so the cooldown still progresses; otherwise a
+    // persistent error would loop-thrash the audit.
+    try {
+      await messenger.setState('last_run_at', new Date().toISOString());
+    } catch (_) { /* swallow */ }
   }
-  const verdict = await runAtlasAudit({
-    supabase,
-    brandId: BRAND_ID,
-    messenger,
-    log,
-  });
-  await messenger.setState('last_audit_at', new Date().toISOString());
-  await messenger.setState('last_audit_verdict', verdict);
-  await messenger.setState('last_run_at', new Date().toISOString());
 }
 
 // ── Per-agent boot + loop ────────────────────────────────────
@@ -2211,7 +2240,7 @@ async function bootAgent(entry, supabase, runtime, host) {
           } else if (canonicalName === 'DaVinci') {
             await runDaVinciAutonomousCycle(messenger, log);
           } else if (canonicalName === 'Atlas') {
-            await runAtlasAuditCycle(supabase, messenger, log);
+            await runAtlasAuditCycle(supabase, runtime, messenger, log);
           } else {
             await runScaffoldAutonomousCycle(messenger, canonicalName, log);
           }

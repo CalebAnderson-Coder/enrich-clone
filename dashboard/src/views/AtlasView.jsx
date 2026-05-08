@@ -72,7 +72,7 @@ export default function AtlasView() {
     async function fetchAudits() {
       try {
         const { data, error: err } = await supabaseAuth
-          .from('fleet_audits')
+          .from('fleet_audits_public')
           .select('id, status, alive_count, stale_count, crashed_count, stuck_messages, failed_1h, findings, metrics, alerted, created_at')
           .eq('brand_id', BRAND_ID)
           .order('created_at', { ascending: false })
@@ -89,23 +89,9 @@ export default function AtlasView() {
     }
     fetchAudits();
     const id = setInterval(fetchAudits, REFRESH_MS);
-
-    // Realtime: nuevas filas de fleet_audits aparecen al instante
-    const channel = supabaseAuth
-      .channel('atlas-audits')
-      .on('postgres_changes',
-        { event: 'INSERT', schema: 'public', table: 'fleet_audits', filter: `brand_id=eq.${BRAND_ID}` },
-        (payload) => {
-          if (!alive) return;
-          setAudits((prev) => [payload.new, ...prev].slice(0, 40));
-        }
-      )
-      .subscribe();
-
     return () => {
       alive = false;
       clearInterval(id);
-      supabaseAuth.removeChannel(channel);
     };
   }, []);
 
