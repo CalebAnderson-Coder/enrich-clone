@@ -21,6 +21,7 @@ import { assertSendAllowed, GuardrailBlocked } from './lib/guardrails.js';
 import { recordAgentEvent } from './lib/agentEventsSink.js';
 import { logOutreachEvent } from './tools/outreachEvents.js';
 import { sendSMS } from './scripts/twilio.js';
+import { ensureLeadMiniAudit, renderHallazgosBlock } from './lib/leadMiniAuditEnricher.js';
 
 dotenv.config();
 
@@ -361,10 +362,22 @@ export async function dispatchPendingOutreach(opts = {}) {
         try {
           // ── Sanitize lead data BEFORE prompt injection ──
           const safeLead = sanitizeLeadData(lead);
-          const prompt = `Escribe una SECUENCIA DE 3 TOQUES de outreach frío para un negocio de ${safeLead.industry || 'servicios'} llamado "${safeLead.business_name || 'su negocio'}" en ${safeLead.metro_area || 'USA'}.
+
+          // ── Run mini-audit (cached 7d) — hallazgos como gancho del email ──
+          let hallazgosBlock = '';
+          try {
+            const audit = await ensureLeadMiniAudit({ supabase, lead, log: logger });
+            hallazgosBlock = renderHallazgosBlock(audit);
+          } catch (auditErr) {
+            logger.warn('mini_audit failed (non-fatal — continuing without findings)', {
+              business: lead.business_name, err: auditErr.message,
+            });
+          }
+
+          const prompt = `Escribe una SECUENCIA DE 3 TOQUES de outreach frío para un negocio de ${safeLead.industry || 'servicios'} llamado "${safeLead.business_name || 'su negocio'}" en ${safeLead.metro_area || 'USA'}.${hallazgosBlock}
 Contexto: Nuestra agencia (Empírika) diseñó un concepto de página web profesional gratuito para ellos (magnet: website_screenshot).
 Marco narrativo obligatorio — Observation → Proof → Ask:
-- Touch 1 (días 0, angle=observation): notaste algo específico del negocio (review, foto, ausencia online). NUNCA CTA directo. Cerrar con pregunta abierta o comentario cálido.
+- Touch 1 (días 0, angle=observation): SI hay HALLAZGOS reales arriba, citá UNO de los 3 con el dato exacto (número, posición, keyword). Cerrá con CTA suave: "¿Te mando el mini-reporte completo en PDF? (1 página, gratis, sin compromiso)". SI NO hay hallazgos disponibles, abrí con observación específica del negocio (review, foto, ausencia online) y cerrá con pregunta abierta o comentario cálido.
 - Touch 2 (días 3, angle=proof): mini caso de éxito con un negocio similar (misma industria + metro si podés) con métrica concreta. CTA soft tipo "¿te cuento cómo?".
 - Touch 3 (días 4, angle=ask): cierre directo con fecha y hora específica en el CTA (ej: "jueves 24 a las 10am hora de ${safeLead.metro_area || 'Houston'}").
 

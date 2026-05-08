@@ -60,6 +60,17 @@ services:
       - key: API_SECRET_KEY
         sync: false
 
+      # DataForSEO API — used by lib/miniAudit.js for the per-lead SEO
+      # findings that Ángela cites in cold emails. Configure in Render
+      # dashboard: Settings → Environment → add the 3 keys with the
+      # values from console.dataforseo.com → API Access.
+      - key: DATAFORSEO_LOGIN
+        sync: false
+      - key: DATAFORSEO_PASSWORD
+        sync: false
+      - key: DATAFORSEO_AUTH_BASIC
+        sync: false
+
       # Multi-tenant: UUID of the brand this worker serves (Phase B single-tenant).
       # Default = Empírika. When onboarding a 2nd tenant, deploy a separate service
       # with a different BRAND_ID value.

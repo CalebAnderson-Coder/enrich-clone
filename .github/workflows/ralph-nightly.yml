@@ -58,6 +58,9 @@ jobs:
       VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
       VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
       VITE_API_SECRET_KEY: ${{ secrets.VITE_API_SECRET_KEY }}
+      DATAFORSEO_LOGIN: ${{ secrets.DATAFORSEO_LOGIN }}
+      DATAFORSEO_PASSWORD: ${{ secrets.DATAFORSEO_PASSWORD }}
+      DATAFORSEO_AUTH_BASIC: ${{ secrets.DATAFORSEO_AUTH_BASIC }}
       BRAND_ID: 'eca1d833-77e3-4690-8cf1-2a44db20dcf8'
 
     steps:
