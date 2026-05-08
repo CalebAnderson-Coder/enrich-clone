@@ -47,6 +47,8 @@ import { verifier } from '../agents/verifier.js';
 import { angela } from '../agents/angela.js';
 import { davinci } from '../agents/davinci.js';
 import { estratega } from '../agents/estratega.js';
+import { atlas } from '../agents/atlas.js';
+import { runAtlasAudit } from '../lib/atlasAudit.js';
 import { logger } from '../lib/logger.js';
 
 // ── Config ───────────────────────────────────────────────────
@@ -107,7 +109,14 @@ const FLEET = [
   { agentModule: angela,    canonicalName: 'Angela',          role: 'digital_strategy_consultant' },
   { agentModule: davinci,   canonicalName: 'DaVinci',         role: 'visual_generation' },
   { agentModule: estratega, canonicalName: 'Estratega',       role: 'strategic_analysis' },
+  { agentModule: atlas,     canonicalName: 'Atlas',           role: 'fleet_observability' },
 ];
+
+// Atlas runs more often than the rest of the fleet — every loop tick — but
+// also short-circuits internally if its own per-cycle cooldown hasn't
+// elapsed (default 5 min between actual audits). Manager-issued
+// `audit_now` messages bypass that cooldown.
+const ATLAS_AUDIT_COOLDOWN_MS = Number(process.env.ATLAS_AUDIT_COOLDOWN_MS ?? 5 * 60 * 1000);
 
 // ── Supabase client ──────────────────────────────────────────
 
@@ -2023,6 +2032,65 @@ async function runDaVinciAutonomousCycle(messenger, log) {
   await messenger.setState('last_run_at', new Date().toISOString());
 }
 
+// ── Atlas: fleet observability (deterministic) ───────────────
+
+/**
+ * Atlas inbound message handler.
+ * Supported types:
+ *   audit_now — run an audit immediately (bypasses Atlas cooldown).
+ *   any other type → ack with scaffold result.
+ */
+async function processAtlasMessage(msg, messenger, supabase, log) {
+  const { type } = msg.payload ?? {};
+  log.info('Atlas: agent_message_received', { msgId: msg.id, type });
+
+  await messenger.setState('last_inbound', {
+    type, msg_id: msg.id, received_at: new Date().toISOString(),
+  });
+
+  if (type === 'pause' || type === 'resume') {
+    return processIncomingMessage(msg, messenger, 'Atlas', log);
+  }
+
+  if (type === 'audit_now') {
+    const verdict = await runAtlasAudit({
+      supabase,
+      brandId: BRAND_ID,
+      messenger,
+      log,
+    });
+    await messenger.setState('last_audit_at', new Date().toISOString());
+    await messenger.setState('last_audit_verdict', verdict);
+    return { ok: true, type: 'audit_now', agent: 'Atlas', result: verdict };
+  }
+
+  if (!type) throw new Error('unknown_message_type: ' + type);
+  return { ok: true, scaffold: true, agent: 'Atlas', type };
+}
+
+/**
+ * Atlas autonomous cycle: heartbeat-frequency audit with internal cooldown.
+ * Runs an audit every ATLAS_AUDIT_COOLDOWN_MS, persists verdict, and
+ * (inside runAtlasAudit) alerts Manager if CRITICAL.
+ */
+async function runAtlasAuditCycle(supabase, messenger, log) {
+  const lastAuditAt = await messenger.getState('last_audit_at');
+  if (lastAuditAt && Date.now() - new Date(lastAuditAt).getTime() < ATLAS_AUDIT_COOLDOWN_MS) {
+    log.debug('Atlas: audit skipped (within cooldown)', { lastAuditAt });
+    await messenger.setState('last_run_at', new Date().toISOString());
+    return;
+  }
+  const verdict = await runAtlasAudit({
+    supabase,
+    brandId: BRAND_ID,
+    messenger,
+    log,
+  });
+  await messenger.setState('last_audit_at', new Date().toISOString());
+  await messenger.setState('last_audit_verdict', verdict);
+  await messenger.setState('last_run_at', new Date().toISOString());
+}
+
 // ── Per-agent boot + loop ────────────────────────────────────
 
 /**
@@ -2102,6 +2170,8 @@ async function bootAgent(entry, supabase, runtime, host) {
             result = await processKaiMessage(msg, messenger, runtime, log);
           } else if (canonicalName === 'DaVinci') {
             result = await processDaVinciMessage(msg, messenger, runtime, log);
+          } else if (canonicalName === 'Atlas') {
+            result = await processAtlasMessage(msg, messenger, supabase, log);
           } else {
             result = await processIncomingMessage(msg, messenger, canonicalName, log);
           }
@@ -2140,6 +2210,8 @@ async function bootAgent(entry, supabase, runtime, host) {
             await runKaiAutonomousCycle(messenger, log);
           } else if (canonicalName === 'DaVinci') {
             await runDaVinciAutonomousCycle(messenger, log);
+          } else if (canonicalName === 'Atlas') {
+            await runAtlasAuditCycle(supabase, messenger, log);
           } else {
             await runScaffoldAutonomousCycle(messenger, canonicalName, log);
           }

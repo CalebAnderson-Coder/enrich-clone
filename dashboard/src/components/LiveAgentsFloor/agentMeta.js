@@ -1,4 +1,4 @@
-import { Radar, Database, PenTool, TrendingUp, Zap, Phone, Palette, ShieldCheck, Crown, BarChart3 } from 'lucide-react';
+import { Radar, Database, PenTool, TrendingUp, Zap, Phone, Palette, ShieldCheck, Crown, BarChart3, Activity } from 'lucide-react';
 
 export const AGENT_META = {
   manager:   { display: 'Manager',   role: 'Orchestrator',     accent: '#fde047', Icon: Crown },
@@ -11,11 +11,12 @@ export const AGENT_META = {
   davinci:   { display: 'DaVinci',   role: 'Design',           accent: '#f87171', Icon: Palette },
   verifier:  { display: 'Verifier',  role: 'QA',               accent: '#e2e8f0', Icon: ShieldCheck },
   estratega: { display: 'Estratega', role: 'Strategic Analyst', accent: '#a3e635', Icon: BarChart3 },
+  atlas:     { display: 'Atlas',     role: 'Fleet Auditor',     accent: '#34d399', Icon: Activity },
 };
 
 export const AGENT_ORDER = [
   'manager', 'scout', 'helena', 'angela', 'sam',
-  'kai', 'carlos', 'davinci', 'verifier', 'estratega',
+  'kai', 'carlos', 'davinci', 'verifier', 'estratega', 'atlas',
 ];
 
 export function getAgentMeta(id) {

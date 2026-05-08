@@ -147,6 +147,19 @@ export const AGENT_PROFILES = {
       { name: 'weekly_strategy_review', desc: 'Auto cada 7d. Persiste weekly_review:${ISO_week} en agent_state.' },
     ],
   },
+  atlas: {
+    summary: 'Auditor del fleet. Cada 5 minutos verifica que todos los demás agentes estén funcionando al máximo: heartbeats, mensajes atascados, errores recientes, circuit breakers. 100% determinístico — cero alucinación.',
+    responsibilities: [
+      'Audita agent_processes (heartbeats > 5 min sin pulso = STALE, status=crashed = CRITICAL).',
+      'Detecta mensajes atascados en cola (status=claimed sin procesar > 10 min).',
+      'Cuenta mensajes fallidos por agente en última hora (>=5 fallos = CRITICAL).',
+      'Detecta circuit breakers de LLM abiertos (Gemini 429, fallback chains rotas).',
+      'Si CRITICAL: persiste audit + envía incident_detected a Manager con findings.',
+    ],
+    tools: [
+      { name: 'audit_fleet_health', desc: 'Audit completo: SQL determinístico contra agent_processes/messages/state. Devuelve verdicto HEALTHY/DEGRADED/CRITICAL + findings + alerta a Manager si crítico.' },
+    ],
+  },
 };
 
 export function getAgentProfile(id) {
