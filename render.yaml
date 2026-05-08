@@ -265,6 +265,53 @@ services:
       - key: FU_MAX_PER_HOUR
         value: "30"
 
+  # ── Reply → Mini-Report PDF cron ──
+  # Cuando un lead responde positivo ("sí, mandamelo") al primer email
+  # con el gancho del mini-audit, este cron clasifica intent, genera el
+  # PDF con los hallazgos cacheados, y lo envía con attachment.
+  # Cada 15 min. Ventana: replies de últimas 72h sin clasificar.
+  - type: cron
+    name: empirika-reply-to-report
+    env: node
+    region: ohio
+    schedule: "*/15 * * * *"
+    buildCommand: npm install --include=dev
+    startCommand: node workers/reply_to_report_cron.js
+    envVars:
+      - key: SUPABASE_URL
+        fromService:
+          type: web
+          name: agency-fleet-runtime
+          envVarKey: SUPABASE_URL
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        fromService:
+          type: web
+          name: agency-fleet-runtime
+          envVarKey: SUPABASE_SERVICE_ROLE_KEY
+      - key: SMTP_USER
+        fromService:
+          type: web
+          name: agency-fleet-runtime
+          envVarKey: SMTP_USER
+      - key: SMTP_PASS
+        fromService:
+          type: web
+          name: agency-fleet-runtime
+          envVarKey: SMTP_PASS
+      - key: SMTP_HOST
+        value: smtp.gmail.com
+      - key: SMTP_PORT
+        value: "587"
+      - key: NVIDIA_API_KEY
+        fromService:
+          type: web
+          name: agency-fleet-runtime
+          envVarKey: NVIDIA_API_KEY
+      - key: BRAND_ID
+        value: "eca1d833-77e3-4690-8cf1-2a44db20dcf8"
+      - key: REPLY_TO_REPORT_WINDOW_H
+        value: "72"
+
   # ── Helena Autonomous Worker — Phase 2 ──
   # Long-lived worker: SEO/Content specialist that processes seo_audit /
   # blog_write / keyword_research messages from the agent_messages queue,
