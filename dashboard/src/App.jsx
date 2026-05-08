@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import {
   MessageSquare, User, Calendar, Megaphone, Activity, FileText,
   Settings, Search, PlusCircle, CheckCircle, XCircle, Loader2, Send, LogOut,
-  LayoutDashboard, Target, Radio, HeartPulse, GitBranch, TrendingUp, ShieldCheck,
+  LayoutDashboard, Target, Radio, HeartPulse, GitBranch, TrendingUp, ShieldCheck, Inbox,
 } from 'lucide-react';
 // import { motion, AnimatePresence } from 'framer-motion';
 
@@ -22,6 +22,7 @@ import HeartbeatWallView from './views/HeartbeatWallView';
 import PipelineFlowView from './views/PipelineFlowView';
 import QualityTrendView from './views/QualityTrendView';
 import AtlasView from './views/AtlasView';
+import RepliesInboxView from './views/RepliesInboxView';
 import LoginView from './views/LoginView';
 import { useAuth } from './components/AuthProvider';
 import { apiGet, apiPost } from './lib/apiClient';
@@ -191,6 +192,7 @@ function AppAuthed({ signOut }) {
       case 'pipeline': return <div className="flex-1 overflow-y-auto h-full p-6"><PipelineFlowView /></div>;
       case 'quality': return <div className="flex-1 overflow-y-auto h-full p-6"><QualityTrendView /></div>;
       case 'atlas': return <div className="flex-1 overflow-y-auto h-full"><AtlasView /></div>;
+      case 'replies': return <div className="flex-1 overflow-y-auto h-full"><RepliesInboxView /></div>;
       case 'ghl': return <div className="flex-1 overflow-y-auto h-full"><GHLView /></div>;
       case 'leads': return <div className="flex-1 overflow-y-auto h-full"><LeadsView /></div>;
       case 'performance': return <div className="flex-1 overflow-y-auto h-full"><PerformanceView /></div>;
@@ -341,6 +343,7 @@ function AppAuthed({ signOut }) {
             <NavItem icon={GitBranch} label="Pipeline · Flow" isActive={currentView==='pipeline'} onClick={()=>{setCurrentView('pipeline'); setActiveChannel('pipeline');}} />
             <NavItem icon={TrendingUp} label="Calidad · Trend" isActive={currentView==='quality'} onClick={()=>{setCurrentView('quality'); setActiveChannel('quality');}} />
             <NavItem icon={ShieldCheck} label="Atlas · Salud Fleet" isActive={currentView==='atlas'} onClick={()=>{setCurrentView('atlas'); setActiveChannel('atlas');}} />
+            <NavItem icon={Inbox} label="Bandeja · Replies" isActive={currentView==='replies'} onClick={()=>{setCurrentView('replies'); setActiveChannel('replies');}} />
             <NavItem icon={Target} label="Go High Level" isActive={currentView==='ghl'} onClick={()=>{setCurrentView('ghl'); setActiveChannel('ghl');}} />
             <NavItem icon={MessageSquare} label="General" isActive={currentView==='chat' && activeChannel==='general'} onClick={()=>{setCurrentView('chat'); setActiveChannel('general');}} />
             <NavItem icon={Activity} label="Rendimiento" isActive={currentView==='performance'} onClick={()=>{setCurrentView('performance'); setActiveChannel('rendimiento');}} />

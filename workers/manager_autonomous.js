@@ -80,7 +80,7 @@ async function shouldRunAutonomously(messenger, inboundCount) {
  * Supported types: seo_audit_proposal, pattern_detected, delegate_request, pause
  * Anything else throws → caller nacks the message.
  */
-async function processIncomingMessage(msg, messenger, runtime, log) {
+export async function processIncomingMessage(msg, messenger, runtime, log) {
   const { type } = msg.payload ?? {};
 
   // ── Helper: set circuit breaker on rate-limit errors ────────
@@ -249,7 +249,7 @@ async function processIncomingMessage(msg, messenger, runtime, log) {
   // ── incident_detected ───────────────────────────────────────
   // Atlas reports a fleet-health incident. Manager records it so the
   // coordination cycle can de-prioritize work for impacted agents
-  // until the issue clears.
+  // until the issue clears, and emails Brian if severity=critical.
   if (type === 'incident_detected') {
     const { audit_id, severity, summary, findings, source } = msg.payload ?? {};
     log.warn('Manager: incident_detected from Atlas', { audit_id, severity, summary });
@@ -263,7 +263,29 @@ async function processIncomingMessage(msg, messenger, runtime, log) {
       impacted_agents: impactedAgents,
       findings,
     });
-    return { ok: true, acknowledged: true, type, audit_id, impacted_agents: impactedAgents };
+
+    // Out-of-band email alert for CRITICAL severity. Anti-spam via
+    // fingerprint match in agent_state inside sendIncidentEmail itself.
+    let emailResult = null;
+    if (severity === 'critical') {
+      try {
+        const { sendIncidentEmail } = await import('../lib/incidentAlerter.js');
+        emailResult = await sendIncidentEmail(msg.payload);
+        if (emailResult.sent) {
+          log.info('Manager: incident email sent', { audit_id, fingerprint: emailResult.fingerprint });
+        } else {
+          log.info('Manager: incident email skipped', { audit_id, reason: emailResult.reason });
+        }
+      } catch (mailErr) {
+        log.warn('Manager: incident email failed', { err: mailErr.message });
+      }
+    }
+
+    return {
+      ok: true, acknowledged: true, type, audit_id,
+      impacted_agents: impactedAgents,
+      email: emailResult,
+    };
   }
 
   throw new Error(`unknown_message_type: ${type}`);
@@ -521,8 +543,14 @@ async function run() {
 }
 
 // ── Entry point ──────────────────────────────────────────────
+// Only auto-run when invoked directly (so test suites can import
+// helpers without booting the whole worker).
 
-run().catch((err) => {
-  logger.error('Manager worker fatal error', err);
-  process.exit(1);
-});
+import { fileURLToPath } from 'url';
+const __isMain = process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1];
+if (__isMain) {
+  run().catch((err) => {
+    logger.error('Manager worker fatal error', err);
+    process.exit(1);
+  });
+}

@@ -81,7 +81,7 @@ async function shouldRunAutonomously(messenger, inboundCount) {
  * Supported types: outreach_batch_proposal, paid_ads_request, pause
  * Anything else throws → caller nacks the message.
  */
-async function processIncomingMessage(msg, messenger, runtime, log, supabase) {
+export async function processIncomingMessage(msg, messenger, runtime, log, supabase) {
   const { type } = msg.payload ?? {};
 
   // ── Helper: set circuit breaker on rate-limit errors ────────
@@ -523,8 +523,14 @@ async function run() {
 }
 
 // ── Entry point ──────────────────────────────────────────────
+// Only auto-run when invoked directly so importers (tests, tools)
+// don't accidentally boot the whole worker.
 
-run().catch((err) => {
-  logger.error('Sam worker fatal error', err);
-  process.exit(1);
-});
+import { fileURLToPath } from 'url';
+const __isMain = process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1];
+if (__isMain) {
+  run().catch((err) => {
+    logger.error('Sam worker fatal error', err);
+    process.exit(1);
+  });
+}

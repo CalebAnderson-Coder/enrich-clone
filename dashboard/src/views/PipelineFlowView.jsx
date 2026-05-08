@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { motion, useMotionValue, useTransform, animate } from 'framer-motion';
-import { Workflow, Send, Reply, ArrowRightLeft } from 'lucide-react';
+import { Workflow, Send, Reply, ArrowRightLeft, ChevronRight } from 'lucide-react';
 import { supabaseAuth } from '../lib/supabaseAuthClient';
 import StageColumn from '../components/PipelineFlow/StageColumn';
 
@@ -157,6 +157,86 @@ export default function PipelineFlowView() {
     return { total, sent7d, replyRate, transitions24h };
   }, [leads, events]);
 
+  // ── Funnel de Conversión · ventana 30d ──
+  // Etapas: NUEVO → CONTACTADO → INTERESADO → CITA → CERRADO
+  // Cada etapa muestra count + drop-off rate vs anterior. Cuando una
+  // etapa todavía no es trackeable (no hay event_type correspondiente
+  // ni columna), se muestra como '—' con explicación.
+  const funnel = useMemo(() => {
+    const cut = Date.now() - 30 * 24 * 3600 * 1000;
+    const recentLeads = leads.filter((l) => l.created_at && new Date(l.created_at).getTime() >= cut);
+    const recentLeadIds = new Set(recentLeads.map((l) => l.id));
+
+    const nuevo = recentLeads.length;
+    const contactados = new Set();
+    const respondieron = new Set();
+    const citas = new Set();
+    const cerrados = 0; // no trackeado todavía
+
+    for (const e of events) {
+      if (!recentLeadIds.has(e.lead_id)) continue;
+      if (e.event_type === 'sent') contactados.add(e.lead_id);
+      if (e.event_type === 'replied') respondieron.add(e.lead_id);
+      if (e.event_type === 'meeting_booked' || e.event_type === 'meeting_scheduled') citas.add(e.lead_id);
+    }
+
+    const stages = [
+      { key: 'NUEVO',       count: nuevo,                  trackeada: true  },
+      { key: 'CONTACTADO',  count: contactados.size,       trackeada: contactados.size > 0 || nuevo > 0 },
+      { key: 'INTERESADO',  count: respondieron.size,      trackeada: respondieron.size > 0,
+        emptyHint: 'Aparecerá cuando los leads respondan emails (event_type=replied)' },
+      { key: 'CITA',        count: citas.size,             trackeada: citas.size > 0,
+        emptyHint: 'Se trackeará cuando se agenden citas (event_type=meeting_booked)' },
+      { key: 'CERRADO',     count: cerrados,               trackeada: false,
+        emptyHint: 'Se trackeará cuando se marquen ventas ganadas en GHL' },
+    ];
+
+    // Drop-off rate vs etapa previa
+    let prev = nuevo || 1;
+    return stages.map((s, i) => {
+      const dropPct = i === 0 ? null : (prev > 0 ? Math.round((s.count / prev) * 100) : 0);
+      const result = { ...s, dropPct };
+      if (s.trackeada) prev = Math.max(s.count, 1);
+      return result;
+    });
+  }, [leads, events]);
+
+  const FUNNEL_COLORS = ['#34d399', '#60a5fa', '#a78bfa', '#f472b6', '#fb7185'];
+
+  // ── Predicción "A este ritmo" — proyección 30 días basada en últimos 7 ──
+  const projection = useMemo(() => {
+    const sevenDaysAgo = Date.now() - 7 * 24 * 3600 * 1000;
+    const leads7d = leads.filter((l) => l.created_at && new Date(l.created_at).getTime() >= sevenDaysAgo).length;
+
+    let sent7d = 0, replied7d = 0;
+    for (const e of events) {
+      const ts = e.occurred_at ? new Date(e.occurred_at).getTime() : 0;
+      if (ts < sevenDaysAgo) continue;
+      if (e.event_type === 'sent') sent7d++;
+      if (e.event_type === 'replied') replied7d++;
+    }
+
+    if (leads7d < 3) {
+      return { insufficient: true, leads7d };
+    }
+
+    const leadsPerDay   = leads7d   / 7;
+    const sentPerDay    = sent7d    / 7;
+    const repliedPerDay = replied7d / 7;
+
+    return {
+      insufficient: false,
+      leads_30d:   Math.round(leadsPerDay   * 30),
+      sent_30d:    Math.round(sentPerDay    * 30),
+      replied_30d: Math.round(repliedPerDay * 30),
+      perDay: {
+        leads:   leadsPerDay.toFixed(1),
+        sent:    sentPerDay.toFixed(1),
+        replied: repliedPerDay.toFixed(1),
+      },
+    };
+  }, [leads, events]);
+
   return (
     <div className="min-h-full w-full p-6 lg:p-8 bg-gradient-to-br from-surface-950 via-[#0b0b1a] to-surface-950 text-white">
       <motion.div
@@ -231,6 +311,114 @@ export default function PipelineFlowView() {
             ))}
           </div>
         )}
+      </div>
+
+      {/* ── Predicción "A este ritmo" · proyección 30 días ── */}
+      <motion.div
+        initial={{ opacity: 0, y: -4 }}
+        animate={{ opacity: 1, y: 0 }}
+        className={`${GLASS} p-5 mb-6`}
+        style={{
+          background: 'linear-gradient(135deg, rgba(96,165,250,0.10) 0%, rgba(255,255,255,0.04) 100%)',
+          borderColor: 'rgba(96,165,250,0.30)',
+        }}
+      >
+        <div className="flex items-center justify-between mb-3">
+          <h3 className="text-sm font-semibold text-white tracking-tight flex items-center gap-2">
+            <TrendingUp size={14} className="text-sky-400" />
+            Proyección a 30 días · al ritmo actual
+          </h3>
+          <span className="text-[10px] uppercase tracking-widest text-white/45">
+            basado en últimos 7 días
+          </span>
+        </div>
+
+        {projection.insufficient ? (
+          <p className="text-sm text-white/55">
+            Necesito más datos para proyectar (mínimo 3 leads/semana). Actualmente: {projection.leads7d} en últimos 7 días.
+          </p>
+        ) : (
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+            {[
+              { label: 'Leads contactados', value: projection.sent_30d,    perDay: projection.perDay.sent,    accent: '#60a5fa' },
+              { label: 'Respuestas',         value: projection.replied_30d, perDay: projection.perDay.replied, accent: '#a78bfa' },
+              { label: 'Leads nuevos',       value: projection.leads_30d,   perDay: projection.perDay.leads,   accent: '#34d399' },
+            ].map((x) => (
+              <div key={x.label} style={{
+                padding: '14px 16px', borderRadius: '12px',
+                background: 'rgba(255,255,255,0.04)',
+                border: '1px solid rgba(255,255,255,0.08)',
+              }}>
+                <div style={{ fontSize: '0.65rem', letterSpacing: '0.12em', textTransform: 'uppercase', color: 'rgba(255,255,255,0.55)', fontWeight: 600 }}>
+                  {x.label}
+                </div>
+                <div className="mt-1 text-3xl font-semibold text-white">
+                  {x.value.toLocaleString('es-MX')}
+                </div>
+                <div className="text-[11px] text-white/45 mt-1">{x.perDay}/día actual</div>
+                <div className="mt-2 h-[2px] w-10 rounded" style={{ background: x.accent }} />
+              </div>
+            ))}
+          </div>
+        )}
+      </motion.div>
+
+      {/* ── Funnel de Conversión · 30d ── */}
+      <div className={`${GLASS} p-5 mb-6`}>
+        <div className="flex items-center justify-between mb-1">
+          <h3 className="text-sm font-semibold text-white tracking-tight">Funnel de Conversión · 30 días</h3>
+          <span className="text-[10px] uppercase tracking-widest text-white/50">
+            drop-off vs etapa anterior
+          </span>
+        </div>
+        <p className="text-xs text-white/45 mb-4">
+          Cuántos leads pasan de una etapa a la siguiente en los últimos 30 días.
+        </p>
+
+        <div className="flex items-stretch gap-2 flex-wrap lg:flex-nowrap">
+          {funnel.map((s, i) => {
+            const color = FUNNEL_COLORS[i] || '#94a3b8';
+            const isTracked = s.trackeada;
+            return (
+              <React.Fragment key={s.key}>
+                <motion.div
+                  initial={{ opacity: 0, y: 8 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  transition={{ delay: i * 0.07 }}
+                  className="flex-1 min-w-[120px]"
+                  style={{
+                    padding: '14px 16px',
+                    borderRadius: '12px',
+                    background: `linear-gradient(135deg, ${color}1F 0%, rgba(255,255,255,0.03) 100%)`,
+                    border: `1px solid ${isTracked ? color + '55' : 'rgba(255,255,255,0.08)'}`,
+                    opacity: isTracked ? 1 : 0.55,
+                  }}
+                  title={!isTracked && s.emptyHint ? s.emptyHint : ''}
+                >
+                  <div style={{ fontSize: '0.65rem', fontWeight: 700, letterSpacing: '0.14em', color, textTransform: 'uppercase' }}>
+                    {s.key}
+                  </div>
+                  <div className="mt-1 flex items-baseline gap-2">
+                    <span className="text-3xl font-semibold text-white">
+                      {isTracked ? s.count.toLocaleString('es-MX') : '—'}
+                    </span>
+                    {s.dropPct != null && isTracked && (
+                      <span className="text-xs text-white/55">{s.dropPct}% del anterior</span>
+                    )}
+                  </div>
+                  {!isTracked && s.emptyHint && (
+                    <div className="text-[11px] text-white/45 mt-2 leading-tight">{s.emptyHint}</div>
+                  )}
+                </motion.div>
+                {i < funnel.length - 1 && (
+                  <div className="hidden lg:flex items-center text-white/20 px-1">
+                    <ChevronRight size={20} />
+                  </div>
+                )}
+              </React.Fragment>
+            );
+          })}
+        </div>
       </div>
 
       <div className="text-center text-[10px] uppercase tracking-[0.3em] text-white/30 pt-4 pb-2">

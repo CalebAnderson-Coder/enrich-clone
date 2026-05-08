@@ -25,7 +25,7 @@
         "Estilo glassmorphism consistente con AtlasView.jsx, sin emojis decorativos.",
         "El build de Vite pasa sin warnings nuevos: `cd dashboard && npm run build` exit 0."
       ],
-      "passes": false,
+      "passes": true,
       "priority": 1
     },
     {
@@ -42,7 +42,7 @@
         "Build pasa: `cd dashboard && npm run build` exit 0.",
         "Lectura via supabaseAuth client (no apiGet)."
       ],
-      "passes": false,
+      "passes": true,
       "priority": 2
     },
     {
@@ -58,7 +58,7 @@
         "Build pasa.",
         "Datos reales — verificable visitando producción y comparando con SELECT count del SQL equivalente."
       ],
-      "passes": false,
+      "passes": true,
       "priority": 3
     },
     {
@@ -74,7 +74,7 @@
         "Las 3 proyecciones se muestran en el card como '420 leads', '21 respuestas', '5 citas' (o lo que dé), con la métrica diaria como subtexto pequeño.",
         "Build pasa."
       ],
-      "passes": false,
+      "passes": true,
       "priority": 4
     },
     {
@@ -89,7 +89,7 @@
         "Test deterministic local: `node --input-type=module -e \"import('./lib/incidentAlerter.js').then(m => m.sendIncidentEmail({audit_id: 999, summary: 'TEST · simulación', findings: [{kind: 'process_crashed', agent: 'TestAgent', severity: 'critical', detail: 'simulación de prueba'}], severity: 'critical'}))\"` envía un email real a Brian con el body esperado.",
         "Si SMTP_USER no está configurado, log un warning y skip (no crashea el handler)."
       ],
-      "passes": false,
+      "passes": true,
       "priority": 5
     },
     {
@@ -106,7 +106,7 @@
         "El test corre con `node --test tests/smoke_outbound_loop.test.js` y exit 0.",
         "El test es self-contained: crea su propio brand_id de test (UUID random), no contamina datos reales de Empírika."
       ],
-      "passes": false,
+      "passes": true,
       "priority": 6
     }
   ]
