@@ -214,6 +214,58 @@ async function processIncomingMessage(msg, messenger, runtime, log) {
     return { ok: true, type: 'pause', result: { duration_ms } };
   }
 
+  // ── paid_ads_strategy_ready ─────────────────────────────────
+  // Sam reports a paid-ads strategy is ready. Manager records it for
+  // future planning cycles (no immediate action — proposals queue for
+  // human review through the dashboard).
+  if (type === 'paid_ads_strategy_ready') {
+    const fromAgent = msg.from_agent ?? 'sam';
+    const { brand_id, count, tier, full_strategy_state_key, strategy_preview } = msg.payload ?? {};
+    log.info('Manager: handling paid_ads_strategy_ready', { from: fromAgent, brand_id, count, tier });
+    await messenger.setState(`last_paid_ads_strategy:${brand_id ?? 'default'}`, {
+      from: fromAgent,
+      received_at: new Date().toISOString(),
+      count, tier, full_strategy_state_key,
+      preview: typeof strategy_preview === 'string' ? strategy_preview.slice(0, 600) : null,
+    });
+    return { ok: true, acknowledged: true, type, from: fromAgent };
+  }
+
+  // ── sourcing_completed ──────────────────────────────────────
+  // Scout reports a sourcing run finished. Manager records the result
+  // so the next coordination cycle can verify the pipeline grew.
+  if (type === 'sourcing_completed') {
+    const fromAgent = msg.from_agent ?? 'scout';
+    const { industry, metro_area, leads_inserted, leads_attempted, source } = msg.payload ?? {};
+    log.info('Manager: handling sourcing_completed', { from: fromAgent, industry, metro_area, leads_inserted });
+    await messenger.setState('last_sourcing_completed', {
+      from: fromAgent,
+      received_at: new Date().toISOString(),
+      industry, metro_area, leads_inserted, leads_attempted, source,
+    });
+    return { ok: true, acknowledged: true, type, from: fromAgent, leads_inserted };
+  }
+
+  // ── incident_detected ───────────────────────────────────────
+  // Atlas reports a fleet-health incident. Manager records it so the
+  // coordination cycle can de-prioritize work for impacted agents
+  // until the issue clears.
+  if (type === 'incident_detected') {
+    const { audit_id, severity, summary, findings, source } = msg.payload ?? {};
+    log.warn('Manager: incident_detected from Atlas', { audit_id, severity, summary });
+    const impactedAgents = Array.from(new Set(
+      (findings || []).map((f) => f?.agent).filter(Boolean)
+    ));
+    await messenger.setState('last_atlas_incident', {
+      from: source ?? 'atlas',
+      received_at: new Date().toISOString(),
+      audit_id, severity, summary,
+      impacted_agents: impactedAgents,
+      findings,
+    });
+    return { ok: true, acknowledged: true, type, audit_id, impacted_agents: impactedAgents };
+  }
+
   throw new Error(`unknown_message_type: ${type}`);
 }
 
