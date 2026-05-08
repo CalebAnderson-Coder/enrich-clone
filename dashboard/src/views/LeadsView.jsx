@@ -1,16 +1,19 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { Link } from 'react-router-dom';
 import './LeadsView.css';
 import OutreachReviewModal from '../components/OutreachReviewModal';
 import LinkCell from '../components/LinkCell';
 import { apiGet, apiPost } from '../lib/apiClient';
+import { supabaseAuth } from '../lib/supabaseAuthClient';
+
+const BRAND_ID = 'eca1d833-77e3-4690-8cf1-2a44db20dcf8';
 
 export default function LeadsView() {
   const [leads, setLeads] = useState([]);
   const [loading, setLoading] = useState(true);
   const [selectedLead, setSelectedLead] = useState(null);
   const [isModalOpen, setIsModalOpen] = useState(false);
-  const [activeTab, setActiveTab] = useState('pendientes');
+  const [activeTab, setActiveTab] = useState('todos');
   const [searchQuery, setSearchQuery] = useState('');
   const [lightboxUrl, setLightboxUrl] = useState(null);
   const [lightboxLabel, setLightboxLabel] = useState('');
@@ -61,17 +64,29 @@ export default function LeadsView() {
 
   const fetchLeads = async () => {
     try {
-      const res = await apiGet('/leads?limit=500');
-      if (!res.ok) {
-        console.error(`Error fetching /api/leads: ${res.status}`);
+      // Direct Supabase read (Vercel demo has no Express backend).
+      // Pulls leads + the most recent outbound_drafts row per lead so the
+      // approval modal can still surface the email body.
+      const { data: leadRows, error } = await supabaseAuth
+        .from('leads')
+        .select('id, business_name, owner_name, phone, email, email_address, website, rating, review_count, google_maps_url, metro_area, industry, qualification_score, lead_tier, score_breakdown, mega_profile, facebook_url, instagram_url, linkedin_url, outreach_status, scraped_by, profiled_by, first_contact_date, last_contact_date, created_at, brand_id')
+        .eq('brand_id', BRAND_ID)
+        .order('created_at', { ascending: false })
+        .limit(500);
+      if (error) {
+        console.error('[LeadsView] supabase error:', error);
         return;
       }
-      const payload = await res.json();
-      const backendLeads = payload.leads || [];
+      const backendLeads = leadRows || [];
 
       const joinedLeads = backendLeads.map(lead => {
         const campArray = lead.campaign_enriched_data || [];
-        const camp = campArray[0] || null;
+        // Synthesize a minimal `camp` from the lead row so the legacy
+        // status helper still detects SENT / APPROVED / REJECTED without a
+        // backend join.
+        const camp = campArray[0] || (lead.outreach_status
+          ? { outreach_status: lead.outreach_status }
+          : null);
         const mega = lead.mega_profile || {};
 
         // Normalize outreach copy: check magnetData JSONB first (where dispatcher writes),
@@ -172,6 +187,61 @@ export default function LeadsView() {
   };
 
   const filteredLeads = leads.filter(l => matchesTab(l) && matchesSearch(l));
+
+  // ── Leads/día por agente — KPI strip ──
+  // Reads created_at (ISO) + scraped_by from each lead row. Buckets into
+  // "today" (NY tz local-day) and "last 7d" (rolling). Aggregates per agent.
+  const leadFlowKpis = useMemo(() => {
+    const tzOffsetMs = 4 * 60 * 60 * 1000; // EDT — close enough for KPIs
+    const now = Date.now();
+    const localNow = new Date(now - tzOffsetMs);
+    const startOfTodayLocal = new Date(localNow.getFullYear(), localNow.getMonth(), localNow.getDate()).getTime() + tzOffsetMs;
+    const sevenDaysAgo = now - 7 * 24 * 3600 * 1000;
+    const oneDayAgo = now - 24 * 3600 * 1000;
+
+    const byAgentToday = new Map();
+    const byAgent7d = new Map();
+    let today = 0, yesterday = 0, last7d = 0;
+
+    for (const l of leads) {
+      if (!l.created_at) continue;
+      const t = new Date(l.created_at).getTime();
+      const agent = l.scraped_by || 'unknown';
+      if (t >= startOfTodayLocal) {
+        today++;
+        byAgentToday.set(agent, (byAgentToday.get(agent) || 0) + 1);
+      } else if (t >= startOfTodayLocal - 24 * 3600 * 1000) {
+        yesterday++;
+      }
+      if (t >= sevenDaysAgo) {
+        last7d++;
+        byAgent7d.set(agent, (byAgent7d.get(agent) || 0) + 1);
+      }
+    }
+    const topAgents7d = [...byAgent7d.entries()]
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 4);
+    return { today, yesterday, last7d, total: leads.length, byAgentToday, topAgents7d };
+  }, [leads]);
+
+  // Friendly label for scraper agent names. Apify run IDs collapse into "Apify".
+  const prettyAgent = (raw) => {
+    if (!raw || raw === 'unknown') return 'Sin etiquetar';
+    if (raw.startsWith('apify_')) return 'Apify · GMaps';
+    if (raw.startsWith('scout_recovered')) return 'Scout (legacy)';
+    if (raw.startsWith('scout')) return 'Scout';
+    if (raw.startsWith('scrapling')) return 'Scrapling';
+    if (raw.startsWith('phase_')) return 'QA · E2E';
+    return raw;
+  };
+  const agentColor = (raw) => {
+    if (!raw || raw === 'unknown') return '#64748b';
+    if (raw.startsWith('apify_')) return '#a78bfa';
+    if (raw.startsWith('scout')) return '#34d399';
+    if (raw.startsWith('scrapling')) return '#f472b6';
+    if (raw.startsWith('phase_')) return '#facc15';
+    return '#60a5fa';
+  };
 
   // Tab counts ignore search so the user sees total per-tab volumes regardless of query.
   const tabCounts = {
@@ -311,6 +381,85 @@ export default function LeadsView() {
           )}
         </div>
       </div>
+
+      {/* ── Leads/día · KPI strip + agente del día ── */}
+      <div style={{
+        display: 'grid',
+        gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))',
+        gap: '10px',
+        marginBottom: '12px',
+      }}>
+        {[
+          { label: 'Hoy', value: leadFlowKpis.today, accent: '#34d399', sub: leadFlowKpis.today === 1 ? 'lead nuevo' : 'leads nuevos' },
+          { label: 'Ayer', value: leadFlowKpis.yesterday, accent: '#60a5fa', sub: 'capturados' },
+          { label: 'Últimos 7 días', value: leadFlowKpis.last7d, accent: '#a78bfa', sub: 'rolling 7d' },
+          { label: 'Total pipeline', value: leadFlowKpis.total, accent: '#f59e0b', sub: 'precalificados' },
+        ].map((card) => (
+          <div key={card.label} style={{
+            background: 'rgba(255,255,255,0.04)',
+            border: '1px solid rgba(255,255,255,0.08)',
+            borderRadius: '12px',
+            padding: '12px 14px',
+            position: 'relative',
+            overflow: 'hidden',
+          }}>
+            <div style={{ fontSize: '0.7rem', letterSpacing: '0.12em', textTransform: 'uppercase', color: 'rgba(255,255,255,0.55)', fontWeight: 600 }}>
+              {card.label}
+            </div>
+            <div style={{ fontSize: '1.6rem', color: '#fff', fontWeight: 600, marginTop: '4px' }}>
+              {card.value.toLocaleString('es-MX')}
+            </div>
+            <div style={{ fontSize: '0.72rem', color: 'rgba(255,255,255,0.45)', marginTop: '2px' }}>{card.sub}</div>
+            <div style={{ position: 'absolute', left: 14, bottom: 10, height: 2, width: 28, background: card.accent, borderRadius: 2 }} />
+          </div>
+        ))}
+      </div>
+
+      {/* Quién está trayendo leads — top agentes 7d */}
+      {leadFlowKpis.topAgents7d.length > 0 && (
+        <div style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: '10px',
+          flexWrap: 'wrap',
+          background: 'rgba(255,255,255,0.03)',
+          border: '1px solid rgba(255,255,255,0.06)',
+          borderRadius: '10px',
+          padding: '8px 12px',
+          marginBottom: '16px',
+          fontSize: '0.78rem',
+        }}>
+          <span style={{ color: 'rgba(255,255,255,0.55)', letterSpacing: '0.08em', textTransform: 'uppercase', fontWeight: 600 }}>
+            ¿Quién trae leads? · 7d
+          </span>
+          {leadFlowKpis.topAgents7d.map(([agent, count]) => {
+            const todayCount = leadFlowKpis.byAgentToday.get(agent) || 0;
+            const c = agentColor(agent);
+            return (
+              <span key={agent} style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '6px',
+                padding: '4px 10px',
+                borderRadius: '999px',
+                background: `${c}1A`,
+                border: `1px solid ${c}55`,
+                color: c,
+                fontWeight: 600,
+              }}>
+                <span style={{ width: 6, height: 6, borderRadius: '50%', background: c, display: 'inline-block' }} />
+                {prettyAgent(agent)}
+                <span style={{ color: 'rgba(255,255,255,0.85)' }}>{count}</span>
+                {todayCount > 0 && (
+                  <span style={{ color: '#fff', background: c, padding: '0 6px', borderRadius: '6px', fontSize: '0.7rem' }}>
+                    +{todayCount} hoy
+                  </span>
+                )}
+              </span>
+            );
+          })}
+        </div>
+      )}
 
       {/* Search bar — client requested (2026-04-21) */}
       <div style={{

@@ -76,9 +76,9 @@ export default function PipelineFlowView() {
         const since = new Date(Date.now() - 28 * 24 * 3600 * 1000).toISOString();
         const eventRes = await supabaseAuth
           .from('outreach_events')
-          .select('id, lead_id, event_type, created_at')
+          .select('id, lead_id, event_type, occurred_at')
           .eq('brand_id', BRAND_ID)
-          .gte('created_at', since)
+          .gte('occurred_at', since)
           .limit(5000);
         if (eventRes.error) throw eventRes.error;
 
@@ -146,7 +146,7 @@ export default function PipelineFlowView() {
 
     let sent7d = 0, replied7d = 0, transitions24h = 0;
     for (const e of events) {
-      const ts = new Date(e.created_at).getTime();
+      const ts = new Date(e.occurred_at).getTime();
       if (e.event_type === 'sent' && ts >= sevenDays) sent7d++;
       if (e.event_type === 'replied' && ts >= sevenDays) replied7d++;
       if (ts >= oneDay && (e.event_type === 'sent' || e.event_type === 'replied' || e.event_type === 'followup_sent')) {
