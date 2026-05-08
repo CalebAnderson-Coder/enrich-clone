@@ -1,112 +1,115 @@
 {
-  "title": "Empírika SaaS — backlog de mejoras 24/7",
+  "title": "Empírika SaaS — Sprint 2 (Ralph nightly)",
   "owner": "Brian Anderson",
-  "context": "Plataforma multi-agente que prospecta, califica y contacta leads latino-owned para Empírika (cliente piloto José Sánchez). Stack: Node fleet workers (Render) + Supabase + dashboard React/Vite (Vercel). Atlas v2 acaba de quedar como agente #11 auditor del fleet. Brian quiere que Ralph trabaje contra este backlog para que el SaaS se mejore solo. Hablar siempre español al usuario final; el código va en inglés.",
+  "context": "Sprint 1 cerrado (commits 247f517 → 31f9dab). Atlas v2 vivo + 6 features de UI. Sprint 2 enfocado en (a) preparación para cliente #2 sin romper Empírika, (b) reducir bundle del dashboard, (c) cerrar el loop de replies hasta GHL, (d) trackear costos reales por lead, (e) consolidar las métricas de auto-recovery de Atlas. Ralph trabaja cada noche en GitHub Actions y abre un PR; Brian aprueba por la mañana.",
   "constraints": [
     "IRON RULE: 100% mensajes outbound de Empírika en español. Cero inglés.",
     "Scout NUNCA remueve disqualifier Latino-owned.",
     "No tocar lógica del Verifier ni saltear su gate.",
-    "Cold-email queda en outreach_status=NUEVO, no CONTACTADO. CONTACTADO solo para 1:1 reales.",
-    "No introducir backwards-compat para código no usado — eliminarlo. (estilo de Brian)",
-    "El dashboard ya está deployado en https://enrich-dashboard-seven.vercel.app — toda mejora UI debe seguir el sistema de glassmorphism + tailwind ya presente en src/views/AtlasView.jsx.",
+    "Cold-email queda en outreach_status=NUEVO, no CONTACTADO.",
+    "No introducir backwards-compat para código no usado — eliminarlo.",
+    "Toda mejora UI sigue el sistema glassmorphism + tailwind ya presente en src/views/AtlasView.jsx.",
     "Migrations nuevas se aplican via supabase MCP execute_sql + se escriben en migrations/0XX_*.sql.",
-    "Anon role del dashboard tiene SELECT sobre vistas filtradas (fleet_audits_public). No exponer raw process_id ni mensajes de error crudos."
+    "Anon role del dashboard tiene SELECT sobre vistas filtradas. No exponer process_id ni mensajes de error crudos.",
+    "Brand_id hardcoded 'eca1d833-77e3-4690-8cf1-2a44db20dcf8' es Empírika. Cualquier mejora multi-tenant debe seguir funcionando para Empírika sin cambios.",
+    "Ralph nocturno: si una historia tarda > 90 minutos, marcar passes:false con una nota de bloqueo en progress.txt y pasar a la siguiente."
   ],
   "stories": [
     {
-      "id": "US-001",
-      "title": "Reporte Diario de Atlas visible en /atlas",
-      "description": "Atlas ya genera un párrafo narrativo en español cada 24h via maybeGenerateDailyReport (lib/atlasAudit.js) y lo persiste en agent_state como key='last_daily_report'. Falta UI en el dashboard que lo muestre. Es valor inmediato para el pitch (cliente José ve un resumen humano, no datos crudos) y operacional (Brian sabe cómo estuvo el día).",
+      "id": "US-007",
+      "title": "Lazy-load de vistas pesadas — reducir bundle inicial",
+      "description": "El bundle actual del dashboard pesa 722kB (213kB gzipped). El warning de Vite sugiere code-splitting. Convertir las 6 vistas más pesadas a React.lazy + Suspense para que el primer load del dashboard sea más rápido. Las vistas críticas para pitch (Cockpit, Atlas, Pipeline) deben cargar primero; las secundarias (FilesView, IntegrationsView, HistoryView, CalendarView) se lazy-load.",
       "acceptanceCriteria": [
-        "Dashboard /atlas muestra un card/banner prominente arriba del hero verdict con el último Reporte Diario.",
-        "El card lee la columna `value` de agent_state donde brand_id='eca1d833-77e3-4690-8cf1-2a44db20dcf8', agent_name='Atlas', key='last_daily_report' y renderiza la propiedad `narrative` del JSON.",
-        "Si no hay reporte aún (primer día post-deploy), muestra fallback 'Atlas está acumulando datos. Primer reporte en menos de 24h.' sin romper la página.",
-        "Muestra timestamp relativo (ej: 'Hace 4 horas') usando la propiedad `generated_at`.",
-        "Estilo glassmorphism consistente con AtlasView.jsx, sin emojis decorativos.",
-        "El build de Vite pasa sin warnings nuevos: `cd dashboard && npm run build` exit 0."
+        "src/App.jsx usa React.lazy() para AtlasView, PipelineFlowView, NewsroomView, HeartbeatWallView, QualityTrendView, RepliesInboxView, CockpitView, GHLView, LeadsView (ya existentes).",
+        "Cada vista lazy-loaded está envuelta en <Suspense fallback={<div>cargando…</div>}>.",
+        "El bundle principal (assets/index-*.js) baja al menos 100kB en gzip respecto al actual (213kB → <115kB ideal).",
+        "El dashboard sigue funcionando: navegar a cada vista la carga sin error.",
+        "Build pasa sin warnings nuevos: cd dashboard && npm run build exit 0.",
+        "El warning de chunk size de Vite desaparece o reduce significativamente."
       ],
-      "passes": true,
+      "passes": false,
       "priority": 1
     },
     {
-      "id": "US-002",
-      "title": "Bandeja de Replies — vista única para Brian/José",
-      "description": "Hoy nadie sabe rápidamente quién respondió emails. Hay que abrir lead por lead. Una bandeja agrega valor enorme: lista cronológica de leads con event_type='replied' en últimas 72h, con preview del mensaje, score, ciudad, industria, link directo al detalle. Esto se demuestra en pitch y le sirve a José para responder rápido a leads calientes.",
+      "id": "US-008",
+      "title": "Sync de replies a GHL — cerrar loop comercial",
+      "description": "Cuando un lead responde un email, hoy queda solo en outreach_events. José tiene que abrirlo manualmente para responderlo desde GHL. Necesitamos: cuando llega un evento replied, escribir una nota en el contacto de GHL con el preview del mensaje, y mover el lead a la etapa INTERESADO del pipeline GHL automáticamente.",
       "acceptanceCriteria": [
-        "Nuevo NavItem en App.jsx llamado 'Bandeja · Replies' (ícono Inbox de lucide-react), debajo del item Atlas.",
-        "Vista nueva en src/views/RepliesInboxView.jsx que lee de outreach_events JOIN leads donde event_type='replied' AND occurred_at >= now()-72h, ordenado desc.",
-        "Cada fila muestra: business_name, industry, metro_area, score, hace cuánto fue el reply, preview del metadata (si existe campo de mensaje).",
-        "Link 'Abrir detalle →' navega a /leads/{lead_id}.",
-        "Filtro tab: 'Todas (X)' / 'Sin responder de mi parte (Y)' — el segundo cuenta replies sin un follow-up event posterior del mismo lead_id.",
-        "Si la query supabase devuelve [], muestra empty-state amistoso 'Sin replies en las últimas 72 horas. Tu equipo sigue contactando.'",
-        "Build pasa: `cd dashboard && npm run build` exit 0.",
-        "Lectura via supabaseAuth client (no apiGet)."
+        "Nuevo cron o handler en workers/ que cada 5 min lee outreach_events nuevos con event_type='replied' y status sin sincronizar (agregar columna metadata.ghl_synced=true tras procesar, o tabla separada).",
+        "Para cada reply: usa fetch a GHL API (services.leadconnectorhq.com) — endpoints /contacts/{id}/notes (POST) y /opportunities/{id} (PUT pipelineStageId al stage INTERESADO).",
+        "GHL stage INTERESADO ID y pipeline ID deben venir de env vars GHL_STAGE_INTERESADO_ID y GHL_PIPELINE_ID (NO hardcodear nuevo en código).",
+        "Si la nota falla (timeout, 4xx), retry una vez tras 30s. Si falla otra vez, log warning y marcar el evento con error pero NO romper el cron.",
+        "Test deterministic: tests/smoke_reply_to_ghl.test.js que stubea fetch, verifica que con un evento replied de prueba se llama a /notes con el body correcto.",
+        "El cron NO procesa replies de más de 24h (evitar backfill masivo).",
+        "Cleanup: borra los rows de prueba al final."
       ],
-      "passes": true,
+      "passes": false,
       "priority": 2
     },
     {
-      "id": "US-003",
-      "title": "Funnel de Conversión — visualización para el pitch",
-      "description": "El cliente y Brian necesitan ver el funnel completo: cuántos leads pasan de NUEVO → CONTACTADO → INTERESADO → CITA → CERRADO. Hoy PipelineFlowView muestra etapas pero no como funnel ni con drop-off rates. Esta vista responde la pregunta del cliente: '¿qué % de leads termina convirtiendo?'.",
+      "id": "US-009",
+      "title": "Tracker de costos por lead — visibilidad ROI real",
+      "description": "Hoy no sabemos cuánto cuesta cada lead que entra al pipeline. Sumar cuesto de tokens LLM (NVIDIA + Gemini), Apify (sourcing), Scrapling (enrichment), SMTP (mínimo). Mostrar en cockpit un card 'Costo promedio por lead' y otro 'Costo total este mes'.",
       "acceptanceCriteria": [
-        "Nueva vista o sección en /pipeline llamada 'Funnel de Conversión' (puede agregarse a PipelineFlowView.jsx existente).",
-        "Renderiza un funnel bar horizontal con 5 etapas: NUEVO (count), CONTACTADO (count), INTERESADO (count, derivado de outreach_events.event_type='replied' >= 1), CITA (count, derivado de event_type='meeting_booked' o equivalente — investigar), CERRADO (count, derivado de outreach_status='WON' o equivalente).",
-        "Cada etapa muestra: número absoluto + % de la etapa anterior (drop-off rate).",
-        "Ventana temporal: últimos 30 días (filtro vía leads.created_at).",
-        "Si una etapa no tiene data clara en BD, muestra '—' en lugar de 0 con tooltip explicando qué falta para empezar a trackearla.",
-        "Build pasa.",
-        "Datos reales — verificable visitando producción y comparando con SELECT count del SQL equivalente."
+        "Migración 020_lead_costs.sql — tabla lead_costs (lead_id, source ENUM 'llm_tokens'|'apify'|'scrapling'|'smtp', amount_usd numeric, occurred_at, metadata jsonb).",
+        "lib/costTracker.js con función trackCost({lead_id, source, amount_usd, metadata}). Importable desde cualquier worker.",
+        "Hook mínimo: cuando AgentRuntime.run() retorna, calcula amount_usd según prompt+completion tokens × precio del modelo (NVIDIA ~$0.6/M input, Gemini Flash ~$0.075/M input — usar tabla constante en lib/llmPricing.js).",
+        "Vista pública fleet_audits_public no afectada — esto es analítica separada.",
+        "Dashboard nuevo card 'Costo este mes' en CockpitView leyendo SUM(amount_usd) WHERE occurred_at >= date_trunc('month', now()).",
+        "Card 'Costo promedio por lead': SUM(amount_usd) / COUNT(DISTINCT lead_id) últimos 30 días.",
+        "Si no hay datos, fallback amistoso 'Empezando a trackear costos — datos disponibles tras la primera operación'.",
+        "Test: tests/smoke_cost_tracker.test.js que valida trackCost inserta correctamente."
       ],
-      "passes": true,
+      "passes": false,
       "priority": 3
     },
     {
-      "id": "US-004",
-      "title": "Predicción 'A este ritmo' — proyección 30 días",
-      "description": "Card pequeño en CockpitView que proyecte linealmente lo que el equipo va a producir en los próximos 30 días basado en los últimos 7. Tres números: leads contactados, replies recibidos, citas agendadas. Es WOW para pitch ('a este ritmo, en un mes tendrás X reuniones') y mantiene a Brian alerta sobre tendencias.",
+      "id": "US-010",
+      "title": "Métricas de auto-recovery de Atlas — visibilidad de impacto",
+      "description": "Atlas v2 ya recupera mensajes huérfanos automáticamente. Ya recuperó 2 en producción. Pero hoy ese número está enterrado en metrics.recovered_orphans del último audit. Crear una vista en el dashboard que muestre 'cuántos mensajes ha rescatado Atlas en últimos 7d / 30d' como prueba tangible de que el agente trabaja.",
       "acceptanceCriteria": [
-        "Card nuevo en CockpitView (o una de las vistas con KPIs) titulado 'Proyección a 30 días · al ritmo actual'.",
-        "Calcula leads_per_day promedio últimos 7 días desde leads.created_at; multiplica × 30. Muestra entero.",
-        "Calcula replies_per_day promedio últimos 7 días desde outreach_events event_type='replied'; multiplica × 30.",
-        "Calcula sent_per_day promedio últimos 7 días desde outreach_events event_type='sent'; multiplica × 30.",
-        "Si los últimos 7 días tienen <3 leads (data insuficiente), muestra fallback 'Necesito más datos para proyectar (mínimo 3 leads/semana)'.",
-        "Las 3 proyecciones se muestran en el card como '420 leads', '21 respuestas', '5 citas' (o lo que dé), con la métrica diaria como subtexto pequeño.",
-        "Build pasa."
+        "En /atlas, agregar 2 KPI cards al strip principal: 'Recuperados · 7d' y 'Recuperados · 30d' con SUM de metrics->>'recovered_orphans'.",
+        "Las cards reading from fleet_audits_public (vista pública anon).",
+        "Si la SUM es 0, muestra '0' sin trampa (es legítimo — significa que no hubo huérfanos).",
+        "Tooltip al hacer hover en la card: 'Atlas detecta mensajes que un agente abandonó y los devuelve a la cola. Cada número aquí es un mensaje que se hubiera perdido sin Atlas.'",
+        "Build pasa.",
+        "El número coincide con SELECT SUM((metrics->>'recovered_orphans')::int) FROM fleet_audits WHERE created_at >= now() - INTERVAL '7 days' (verificable manualmente)."
       ],
-      "passes": true,
+      "passes": false,
       "priority": 4
     },
     {
-      "id": "US-005",
-      "title": "Alerta por email a Brian cuando Atlas detecta CRITICAL",
-      "description": "Hoy Atlas alerta a Manager via incident_detected. Manager registra pero Brian no se entera fuera del dashboard. Hay que mandarle email a brian@doublemybookings.com cuando severity=critical. Esto cierra el loop operacional: Brian sabe en su bandeja cuando algo está mal, sin tener que mirar el dashboard.",
+      "id": "US-011",
+      "title": "Multi-tenant prep — eliminar 5 brand_id hardcoded del dashboard",
+      "description": "El dashboard tiene 'eca1d833-77e3-4690-8cf1-2a44db20dcf8' hardcoded en al menos 5 archivos (PipelineFlowView, AtlasView, RepliesInboxView, LeadsView, HeartbeatWallView, QualityTrendView). Cuando llegue cliente #2, hay que cambiarlos uno a uno. Refactor: leer brand_id de un único contexto React (BrandContext) que para Empírika sigue siendo el mismo UUID por default.",
       "acceptanceCriteria": [
-        "Nuevo handler en workers/manager_autonomous.js dentro de processManagerMessage para tipo 'incident_detected' (ya existe — extenderlo, no duplicar): si severity === 'critical', llama a una función nueva sendIncidentEmail(payload).",
-        "sendIncidentEmail vive en lib/incidentAlerter.js — usa nodemailer con SMTP_USER/SMTP_PASS env vars (mismo SMTP que Angela).",
-        "Email enviado a 'brian@doublemybookings.com' con subject 'Empírika · INCIDENT CRITICAL detectado por Atlas' y body en español con: timestamp, summary del payload, lista de impacted_agents, link al dashboard /atlas.",
-        "Anti-spam: usa el mismo fingerprint logic de Atlas — si el último incident_email enviado en agent_state.atlas:last_incident_email_fingerprint coincide y fue hace <60min, NO envía.",
-        "Test deterministic local: `node --input-type=module -e \"import('./lib/incidentAlerter.js').then(m => m.sendIncidentEmail({audit_id: 999, summary: 'TEST · simulación', findings: [{kind: 'process_crashed', agent: 'TestAgent', severity: 'critical', detail: 'simulación de prueba'}], severity: 'critical'}))\"` envía un email real a Brian con el body esperado.",
-        "Si SMTP_USER no está configurado, log un warning y skip (no crashea el handler)."
+        "Nuevo src/contexts/BrandContext.jsx con createContext + Provider que envuelve App. Default value: { id: 'eca1d833-77e3-4690-8cf1-2a44db20dcf8', name: 'Empírika' }.",
+        "Hook useBrand() exportado desde el mismo archivo.",
+        "Reemplazar TODA aparición de la string 'eca1d833-77e3-4690-8cf1-2a44db20dcf8' en src/views/* y src/components/* por const BRAND_ID = useBrand().id.",
+        "El dashboard sigue funcionando idéntico para Empírika — verificable visitando producción y comparando counters con un audit SQL.",
+        "Cuando el día 2026-XX-XX llegue cliente #2, el cambio será UN PUSH al BrandContext default + toggle UI, no 5 ediciones de archivos.",
+        "Build pasa.",
+        "grep -r 'eca1d833-77e3-4690-8cf1-2a44db20dcf8' dashboard/src/ devuelve solo el archivo BrandContext.jsx."
       ],
-      "passes": true,
+      "passes": false,
       "priority": 5
     },
     {
-      "id": "US-006",
-      "title": "Tests E2E del outbound loop completo",
-      "description": "Cero coverage hoy en el flow Manager → Sam → outreach_batch_proposal → paid_ads_strategy_ready → Manager. Cuando arreglamos el bug del Manager (commit 016598e) lo validamos con SQL manual. Necesitamos test que asegure que ese flow no se vuelva a romper en futuros commits. Smoke test, no exhaustivo.",
+      "id": "US-012",
+      "title": "Aprobaciones manuales — pasarela para José antes del envío",
+      "description": "Hoy Empírika autosenda emails una vez Verifier aprueba. José pidió en una conversación que CIERTAS industrias (HVAC enterprise > 100 reviews) requieran SU aprobación antes de salir. Implementar gate opcional por industria: si lead.industry está en una lista de 'requiere_aprobacion_humana', el dispatcher pausa el envío y crea una entrada en una tabla de approvals_queue. Dashboard nuevo /aprobaciones para ver y aprobar.",
       "acceptanceCriteria": [
-        "Archivo nuevo tests/smoke_outbound_loop.test.js (Node test runner — ya hay otros smoke_*.js en tests/).",
-        "El test crea un mensaje pending Manager → Sam con type='outreach_batch_proposal' usando un Supabase test client (puede ser SUPABASE_SERVICE_ROLE_KEY del .env local).",
-        "Mock: stubear runtime.run('Sam', ...) para que devuelva 'Strategy mock OK' sin llamar al LLM real.",
-        "Disparar processSamMessage del worker — verificar que: ack se haya llamado con result.persisted=true, agent_state tenga key paid_ads_strategy:{brand_id}, y un nuevo mensaje from='sam' to='manager' type='paid_ads_strategy_ready' aparezca en agent_messages.",
-        "Disparar processManagerMessage sobre ese paid_ads_strategy_ready — verificar que ack se haya llamado con acknowledged=true (NO unknown_message_type).",
-        "Limpieza: borra todos los rows de agent_messages y agent_state que el test creó al final.",
-        "El test corre con `node --test tests/smoke_outbound_loop.test.js` y exit 0.",
-        "El test es self-contained: crea su propio brand_id de test (UUID random), no contamina datos reales de Empírika."
+        "Migración 021_approvals_queue.sql — tabla approvals_queue (id, lead_id, brand_id, draft_subject, draft_body, status ENUM 'pending'|'approved'|'rejected', requested_at, decided_at, decided_by, notes).",
+        "Brand profile nuevo campo approval_required_industries (array text). Empírika empieza con [] vacío para no romper flow actual.",
+        "Dispatcher (workers/outreach_dispatcher.js o equivalente) checkea: si lead.industry IN brand.approval_required_industries, INSERT en approvals_queue + STOP envío.",
+        "Vista nueva /aprobaciones (ApprovalsView.jsx) lista pending con: business_name, industry, draft_subject, preview_body, botones [Aprobar] [Rechazar].",
+        "Botones llaman a un endpoint /api/approvals/{id} (en backend Express; agregar route) que UPDATE status + decided_at + decided_by='manual'.",
+        "Si aprobado: dispatcher en próximo cycle envía el email pendiente.",
+        "Si rechazado: marca outreach_status='REJECTED_BY_HUMAN' en lead.",
+        "Build dashboard pasa.",
+        "Test smoke: tests/smoke_approvals_gate.test.js valida que un lead con industry en approval_required_industries NO se envía y SÍ aparece en queue."
       ],
-      "passes": true,
+      "passes": false,
       "priority": 6
     }
   ]

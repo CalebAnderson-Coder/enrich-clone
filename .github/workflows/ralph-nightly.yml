@@ -1,0 +1,189 @@
+# ============================================================
+# .github/workflows/ralph-nightly.yml
+#
+# Ralph (loop persistente de Claude Code) corre cada noche contra
+# el backlog en .omc/prd.json. Trabaja una historia por vez con
+# verificación independiente. Cuando termina (o cuando llega al
+# tope de tiempo), abre un Pull Request contra master para que
+# Brian apruebe por la mañana.
+#
+# Trigger:
+#   - Programado: 04:00 UTC (12 AM ET / 1 AM ART)
+#   - Manual: workflow_dispatch desde la pestaña Actions
+#
+# Costo: limitado por max_turns + tope de tiempo del runner GitHub.
+# Aproximado: $5-15 USD por corrida usando Claude Sonnet 4.6.
+# ============================================================
+
+name: Ralph nocturno · construir SaaS
+
+on:
+  schedule:
+    # 04:00 UTC = 11 PM ET = 1 AM ART. Ajustá la franja horaria
+    # editando este cron — formato POSIX (m h dom mon dow).
+    - cron: '0 4 * * *'
+  workflow_dispatch:
+    inputs:
+      max_turns:
+        description: 'Máximo de turnos de conversación que Ralph puede usar'
+        required: false
+        default: '60'
+      story_filter:
+        description: 'Si querés que Ralph solo trabaje una historia específica (ej US-007). Vacío = todas.'
+        required: false
+        default: ''
+
+# Solo una corrida a la vez — evitamos que dos Ralph compitan por el repo.
+concurrency:
+  group: ralph-nightly
+  cancel-in-progress: false
+
+permissions:
+  contents: write       # crear branch + commits
+  pull-requests: write  # abrir PR
+  issues: write         # comentar si la corrida falla
+
+jobs:
+  ralph:
+    runs-on: ubuntu-latest
+    timeout-minutes: 240   # tope duro 4h por corrida
+
+    env:
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+      VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
+      VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
+      VITE_API_SECRET_KEY: ${{ secrets.VITE_API_SECRET_KEY }}
+      BRAND_ID: 'eca1d833-77e3-4690-8cf1-2a44db20dcf8'
+
+    steps:
+      - name: Verificar API key configurada
+        run: |
+          if [ -z "${{ secrets.ANTHROPIC_API_KEY }}" ]; then
+            echo "::error::Falta el secret ANTHROPIC_API_KEY. Configurarlo en Settings → Secrets and variables → Actions."
+            exit 1
+          fi
+
+      - name: Checkout repo
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Setup Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install repo deps
+        run: |
+          npm ci || npm install
+          (cd dashboard && (npm ci || npm install))
+
+      - name: Crear rama de trabajo
+        id: branch
+        run: |
+          BRANCH="ralph-night/$(date -u +%Y-%m-%d-%H%M)"
+          git config user.name 'ralph-night[bot]'
+          git config user.email 'ralph-night@users.noreply.github.com'
+          git checkout -b "$BRANCH"
+          echo "branch=$BRANCH" >> "$GITHUB_OUTPUT"
+
+      - name: Ejecutar Ralph
+        id: ralph
+        uses: anthropics/claude-code-base-action@beta
+        with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          model: claude-sonnet-4-6
+          max_turns: ${{ github.event.inputs.max_turns || '60' }}
+          allowed_tools: Bash,Read,Write,Edit,Glob,Grep,WebFetch
+          prompt: |
+            Estás en un GitHub Action corriendo Ralph para el SaaS Empírika.
+
+            Tu único trabajo: leer .omc/prd.json y trabajar las historias con `passes: false`
+            en orden de prioridad. Cada historia tiene `acceptanceCriteria` específicos —
+            los criterios son tu contrato de "terminado".
+
+            Reglas estrictas:
+            1. Trabajá UNA historia por vez. No mezcles cambios entre historias.
+            2. Después de cada historia: build (`cd dashboard && npm run build`) y test
+               (`node --test tests/`) deben pasar. Si no pasan, fixeálo antes de seguir.
+            3. Marcá `passes: true` en .omc/prd.json solo cuando TODOS los criterios de
+               aceptación están verificados con evidencia real.
+            4. Hacé un commit por historia con mensaje `feat(US-XXX): <título corto>`.
+            5. Si una historia no la podés cerrar en 90 minutos, marcá una nota en
+               progress.txt explicando el bloqueo y pasá a la siguiente.
+            6. Constraints en el PRD son inmutables — IRON RULE español, no tocar Verifier,
+               etc. Si una historia te empuja a violar uno, marcá la historia como
+               bloqueada y explicá por qué en progress.txt.
+            7. NO toques el archivo .github/workflows/ralph-nightly.yml.
+            8. NO hagas push a master directamente — solo a la rama actual.
+            9. Si vas a hacer una migration de DB, escribila como archivo SQL en
+               migrations/0XX_*.sql pero NO la apliques a la DB de producción —
+               eso lo hace Brian manualmente cuando aprueba el PR.
+
+            Filter: ${{ github.event.inputs.story_filter }}
+            (Si no está vacío, trabajá SOLO esa historia.)
+
+            Empezá leyendo .omc/prd.json y .omc/COMO_ARRANCAR_RALPH.md, después
+            ejecutá la primera historia con passes:false.
+
+      - name: Push a rama
+        if: always()
+        run: |
+          git add -A
+          if git diff --staged --quiet; then
+            echo "::notice::Ralph no produjo cambios — saltando push y PR."
+            exit 0
+          fi
+          git commit -m "chore(ralph-night): snapshot final de la corrida" || true
+          git push -u origin "${{ steps.branch.outputs.branch }}"
+
+      - name: Abrir Pull Request
+        if: success()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # Solo si hay diff vs master
+          if [ -z "$(git log origin/master..HEAD --oneline)" ]; then
+            echo "::notice::Sin commits nuevos — no se abre PR."
+            exit 0
+          fi
+          BODY=$(cat <<'EOF'
+          # Ralph nocturno — resumen del run
+
+          Esta rama contiene el trabajo que Ralph completó automáticamente esta noche
+          contra el backlog en `.omc/prd.json`. Cada commit corresponde a una historia
+          (`feat(US-XXX): ...`).
+
+          ## Antes de mergear
+
+          - [ ] Revisar diff de `.omc/prd.json` — historias marcadas `passes: true` son las completadas.
+          - [ ] Confirmar que el build de Vercel preview pasó verde (debería arrancar solo).
+          - [ ] Si hay archivos nuevos en `migrations/`, aplicarlos manualmente vía Supabase.
+          - [ ] Leer `progress.txt` si existe — Ralph deja notas de bloqueos ahí.
+
+          ## Si algo no te gusta
+
+          Mergeá solo los commits que querés y descarteá el resto. La rama no toca master
+          hasta que apretás el merge.
+          EOF
+          )
+          gh pr create \
+            --base master \
+            --head "${{ steps.branch.outputs.branch }}" \
+            --title "Ralph nocturno · $(date -u +%Y-%m-%d)" \
+            --body "$BODY" \
+            --label "ralph-night" || true
+
+      - name: Notificar fallo
+        if: failure()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh issue create \
+            --title "Ralph nocturno falló · $(date -u +%Y-%m-%d)" \
+            --body "El run nocturno se cortó. Ver logs en https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
+            --label "ralph-night,bug" || true
