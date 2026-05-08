@@ -67,6 +67,8 @@ export default function AtlasView() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [dailyReport, setDailyReport] = useState(null);
+  const [recovered7d, setRecovered7d] = useState(0);
+  const [recovered30d, setRecovered30d] = useState(0);
 
   useEffect(() => {
     let alive = true;
@@ -81,6 +83,28 @@ export default function AtlasView() {
         if (err) throw err;
         if (!alive) return;
         setAudits(data || []);
+
+        // Calculate recovered orphans for 7d and 30d windows
+        const now = Date.now();
+        const cut7d = now - 7 * 24 * 3600 * 1000;
+        const cut30d = now - 30 * 24 * 3600 * 1000;
+
+        const recovered7dCount = (data || [])
+          .filter((a) => new Date(a.created_at).getTime() >= cut7d)
+          .reduce((sum, a) => {
+            const recovered = parseInt(a.metrics?.recovered_orphans || '0', 10);
+            return sum + (Number.isFinite(recovered) ? recovered : 0);
+          }, 0);
+
+        const recovered30dCount = (data || [])
+          .filter((a) => new Date(a.created_at).getTime() >= cut30d)
+          .reduce((sum, a) => {
+            const recovered = parseInt(a.metrics?.recovered_orphans || '0', 10);
+            return sum + (Number.isFinite(recovered) ? recovered : 0);
+          }, 0);
+
+        setRecovered7d(recovered7dCount);
+        setRecovered30d(recovered30dCount);
         setError(null);
       } catch (e) {
         if (alive) setError(e.message || 'Error cargando auditorías');
