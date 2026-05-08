@@ -265,6 +265,43 @@ services:
       - key: FU_MAX_PER_HOUR
         value: "30"
 
+  # ── Inbox → outreach_events.replied cron ──
+  # Cada 5 min se conecta por IMAP al inbox de Empírika, busca emails
+  # que sean respuesta a outreach previo, los matchea contra leads via
+  # message_id header o from_email, y los inserta como event_type=
+  # 'replied' (o 'bounced' si es notificación de mailer-daemon) para
+  # que el dashboard /replies y el cron reply_to_report los vean.
+  - type: cron
+    name: empirika-inbox-reply
+    env: node
+    region: ohio
+    schedule: "*/5 * * * *"
+    buildCommand: npm install --include=dev
+    startCommand: node workers/inbox_reply_cron.js
+    envVars:
+      - key: SUPABASE_URL
+        fromService:
+          type: web
+          name: agency-fleet-runtime
+          envVarKey: SUPABASE_URL
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        fromService:
+          type: web
+          name: agency-fleet-runtime
+          envVarKey: SUPABASE_SERVICE_ROLE_KEY
+      - key: SMTP_USER
+        fromService:
+          type: web
+          name: agency-fleet-runtime
+          envVarKey: SMTP_USER
+      - key: SMTP_PASS
+        fromService:
+          type: web
+          name: agency-fleet-runtime
+          envVarKey: SMTP_PASS
+      - key: BRAND_ID
+        value: "eca1d833-77e3-4690-8cf1-2a44db20dcf8"
+
   # ── Reply → Mini-Report PDF cron ──
   # Cuando un lead responde positivo ("sí, mandamelo") al primer email
   # con el gancho del mini-audit, este cron clasifica intent, genera el
