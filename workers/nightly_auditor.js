@@ -540,6 +540,159 @@ export async function runNightlyAudit({ brandId, client } = {}) {
     });
   });
 
+  // ── BK-010: v5 self-improve metrics (graceful degradation) ──
+  //
+  // Tables `selfimprove_loop_sessions` and `candidate_decisions` are
+  // declared in autonomy-3layer-v5.md §B.1 but not yet landed in
+  // production. Each metric below uses a tableExists() precheck against
+  // PostgREST and writes a green row with details.note='table_missing_
+  // pending_v5_landing' when the backing table is absent. Once the
+  // tables land, the same code starts producing real values without
+  // changes.
+  //
+  // Why a precheck instead of catching errors: supabase-js HEAD-count
+  // queries return {count:null, error:null} silently against missing
+  // tables, so a catch-and-classify pattern misses the most common
+  // metric shape. A column SELECT with limit 0 DOES surface PostgREST's
+  // "Could not find the table … in the schema cache" error.
+  const _tableExistsCache = new Map();
+  const tableExists = async (tbl) => {
+    if (_tableExistsCache.has(tbl)) return _tableExistsCache.get(tbl);
+    const { error } = await supa.from(tbl).select('id').limit(0);
+    const msg = String(error?.message || '');
+    const missing = !!error && (
+      error.code === '42P01' ||
+      /could not find the table|schema cache|does not exist|relation .* does not exist|undefined.*table/i.test(msg)
+    );
+    const present = !error || (error && !missing);
+    _tableExistsCache.set(tbl, present);
+    return present;
+  };
+  const insertTableMissingRow = (metric_name) =>
+    insertRow({
+      metric_name,
+      severity: 'green',
+      details: { note: 'table_missing_pending_v5_landing' },
+    });
+
+  // 20. selfimprove_loops_completed_7d — v5 §B.1 #20
+  await runMetric('selfimprove_loops_completed_7d', async () => {
+    if (!(await tableExists('selfimprove_loop_sessions'))) {
+      return insertTableMissingRow('selfimprove_loops_completed_7d');
+    }
+    const { count, error } = await supa
+      .from('selfimprove_loop_sessions')
+      .select('id', { count: 'exact', head: true })
+      .eq('brand_id', brandId)
+      .eq('status', 'completed')
+      .gte('ended_at', sinceISO(24 * 7));
+    if (error) throw error;
+    const value = count ?? 0;
+    const severity = value >= 1 ? 'green' : 'yellow';
+    await insertRow({
+      metric_name: 'selfimprove_loops_completed_7d',
+      value,
+      severity,
+      suggested_action: severity === 'yellow' ? 'CHECK_SELFIMPROVE_LOOP_STALE' : null,
+      threshold_hit: severity,
+    });
+  });
+
+  // 21. selfimprove_winners_merged_7d — v5 §B.1 #21
+  await runMetric('selfimprove_winners_merged_7d', async () => {
+    if (!(await tableExists('selfimprove_loop_sessions'))) {
+      return insertTableMissingRow('selfimprove_winners_merged_7d');
+    }
+    const { count: total, error: e1 } = await supa
+      .from('selfimprove_loop_sessions')
+      .select('id', { count: 'exact', head: true })
+      .eq('brand_id', brandId)
+      .gte('ended_at', sinceISO(24 * 7));
+    if (e1) throw e1;
+    const { count: winners, error: e2 } = await supa
+      .from('selfimprove_loop_sessions')
+      .select('id', { count: 'exact', head: true })
+      .eq('brand_id', brandId)
+      .eq('status', 'completed')
+      .not('winner_candidate_id', 'is', null)
+      .gte('ended_at', sinceISO(24 * 7));
+    if (e2) throw e2;
+    const value = winners ?? 0;
+    const loopCount = total ?? 0;
+    let severity = 'green';
+    if (value === 0 && loopCount >= 3) severity = 'red';
+    else if (value === 0 && loopCount >= 1) severity = 'yellow';
+    await insertRow({
+      metric_name: 'selfimprove_winners_merged_7d',
+      value,
+      severity,
+      suggested_action: severity === 'red' ? 'INVESTIGATE_SELFIMPROVE_WINNERS' : null,
+      threshold_hit: severity,
+      details: { loops_total_7d: loopCount, winners_7d: value },
+    });
+  });
+
+  // 22. selfimprove_post_merge_regression — v5 §B.1 #22 (Fisher exact
+  // implementation deferred until a winner-merge lands; placeholder for now).
+  await runMetric('selfimprove_post_merge_regression', async () => {
+    if (!(await tableExists('selfimprove_loop_sessions'))) {
+      return insertTableMissingRow('selfimprove_post_merge_regression');
+    }
+    const { data, error } = await supa
+      .from('selfimprove_loop_sessions')
+      .select('ended_at, notes')
+      .eq('brand_id', brandId)
+      .eq('status', 'completed')
+      .not('winner_candidate_id', 'is', null)
+      .order('ended_at', { ascending: false })
+      .limit(1);
+    if (error) throw error;
+    if (!data || data.length === 0) {
+      await insertRow({
+        metric_name: 'selfimprove_post_merge_regression',
+        severity: 'green',
+        details: { note: 'no_winner_merge_yet' },
+      });
+      return;
+    }
+    const lastMerge = data[0].ended_at;
+    await insertRow({
+      metric_name: 'selfimprove_post_merge_regression',
+      severity: 'green',
+      details: {
+        note: 'insufficient_volume_or_pending_fisher_impl',
+        last_winner_merge_at: lastMerge,
+      },
+    });
+  });
+
+  // 23. candidate_decisions_applied_30d — v5 §B.1 #23
+  await runMetric('candidate_decisions_applied_30d', async () => {
+    if (!(await tableExists('candidate_decisions'))) {
+      return insertTableMissingRow('candidate_decisions_applied_30d');
+    }
+    const { count, error } = await supa
+      .from('candidate_decisions')
+      .select('id', { count: 'exact', head: true })
+      .eq('brand_id', brandId)
+      .eq('applied', true)
+      .gte('created_at', sinceISO(24 * 30));
+    if (error) throw error;
+    const value = count ?? 0;
+    let severity = 'green';
+    if (value > 200) severity = 'red';
+    else if (value > 50) severity = 'yellow';
+    await insertRow({
+      metric_name: 'candidate_decisions_applied_30d',
+      value,
+      severity,
+      suggested_action: severity === 'red'
+        ? 'REVIEW_CANDIDATE_DECISIONS_BACKLOG'
+        : (severity === 'yellow' ? 'MONITOR_CANDIDATE_DECISIONS_VOLUME' : null),
+      threshold_hit: severity,
+    });
+  });
+
   // ── Retention prune (acknowledged rows only, >90d) ──────────
   try {
     const cutoff = new Date(Date.now() - RETENTION_DAYS * 86400_000).toISOString();
