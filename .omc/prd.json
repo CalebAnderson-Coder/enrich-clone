@@ -1,0 +1,113 @@
+{
+  "title": "Empírika SaaS — backlog de mejoras 24/7",
+  "owner": "Brian Anderson",
+  "context": "Plataforma multi-agente que prospecta, califica y contacta leads latino-owned para Empírika (cliente piloto José Sánchez). Stack: Node fleet workers (Render) + Supabase + dashboard React/Vite (Vercel). Atlas v2 acaba de quedar como agente #11 auditor del fleet. Brian quiere que Ralph trabaje contra este backlog para que el SaaS se mejore solo. Hablar siempre español al usuario final; el código va en inglés.",
+  "constraints": [
+    "IRON RULE: 100% mensajes outbound de Empírika en español. Cero inglés.",
+    "Scout NUNCA remueve disqualifier Latino-owned.",
+    "No tocar lógica del Verifier ni saltear su gate.",
+    "Cold-email queda en outreach_status=NUEVO, no CONTACTADO. CONTACTADO solo para 1:1 reales.",
+    "No introducir backwards-compat para código no usado — eliminarlo. (estilo de Brian)",
+    "El dashboard ya está deployado en https://enrich-dashboard-seven.vercel.app — toda mejora UI debe seguir el sistema de glassmorphism + tailwind ya presente en src/views/AtlasView.jsx.",
+    "Migrations nuevas se aplican via supabase MCP execute_sql + se escriben en migrations/0XX_*.sql.",
+    "Anon role del dashboard tiene SELECT sobre vistas filtradas (fleet_audits_public). No exponer raw process_id ni mensajes de error crudos."
+  ],
+  "stories": [
+    {
+      "id": "US-001",
+      "title": "Reporte Diario de Atlas visible en /atlas",
+      "description": "Atlas ya genera un párrafo narrativo en español cada 24h via maybeGenerateDailyReport (lib/atlasAudit.js) y lo persiste en agent_state como key='last_daily_report'. Falta UI en el dashboard que lo muestre. Es valor inmediato para el pitch (cliente José ve un resumen humano, no datos crudos) y operacional (Brian sabe cómo estuvo el día).",
+      "acceptanceCriteria": [
+        "Dashboard /atlas muestra un card/banner prominente arriba del hero verdict con el último Reporte Diario.",
+        "El card lee la columna `value` de agent_state donde brand_id='eca1d833-77e3-4690-8cf1-2a44db20dcf8', agent_name='Atlas', key='last_daily_report' y renderiza la propiedad `narrative` del JSON.",
+        "Si no hay reporte aún (primer día post-deploy), muestra fallback 'Atlas está acumulando datos. Primer reporte en menos de 24h.' sin romper la página.",
+        "Muestra timestamp relativo (ej: 'Hace 4 horas') usando la propiedad `generated_at`.",
+        "Estilo glassmorphism consistente con AtlasView.jsx, sin emojis decorativos.",
+        "El build de Vite pasa sin warnings nuevos: `cd dashboard && npm run build` exit 0."
+      ],
+      "passes": false,
+      "priority": 1
+    },
+    {
+      "id": "US-002",
+      "title": "Bandeja de Replies — vista única para Brian/José",
+      "description": "Hoy nadie sabe rápidamente quién respondió emails. Hay que abrir lead por lead. Una bandeja agrega valor enorme: lista cronológica de leads con event_type='replied' en últimas 72h, con preview del mensaje, score, ciudad, industria, link directo al detalle. Esto se demuestra en pitch y le sirve a José para responder rápido a leads calientes.",
+      "acceptanceCriteria": [
+        "Nuevo NavItem en App.jsx llamado 'Bandeja · Replies' (ícono Inbox de lucide-react), debajo del item Atlas.",
+        "Vista nueva en src/views/RepliesInboxView.jsx que lee de outreach_events JOIN leads donde event_type='replied' AND occurred_at >= now()-72h, ordenado desc.",
+        "Cada fila muestra: business_name, industry, metro_area, score, hace cuánto fue el reply, preview del metadata (si existe campo de mensaje).",
+        "Link 'Abrir detalle →' navega a /leads/{lead_id}.",
+        "Filtro tab: 'Todas (X)' / 'Sin responder de mi parte (Y)' — el segundo cuenta replies sin un follow-up event posterior del mismo lead_id.",
+        "Si la query supabase devuelve [], muestra empty-state amistoso 'Sin replies en las últimas 72 horas. Tu equipo sigue contactando.'",
+        "Build pasa: `cd dashboard && npm run build` exit 0.",
+        "Lectura via supabaseAuth client (no apiGet)."
+      ],
+      "passes": false,
+      "priority": 2
+    },
+    {
+      "id": "US-003",
+      "title": "Funnel de Conversión — visualización para el pitch",
+      "description": "El cliente y Brian necesitan ver el funnel completo: cuántos leads pasan de NUEVO → CONTACTADO → INTERESADO → CITA → CERRADO. Hoy PipelineFlowView muestra etapas pero no como funnel ni con drop-off rates. Esta vista responde la pregunta del cliente: '¿qué % de leads termina convirtiendo?'.",
+      "acceptanceCriteria": [
+        "Nueva vista o sección en /pipeline llamada 'Funnel de Conversión' (puede agregarse a PipelineFlowView.jsx existente).",
+        "Renderiza un funnel bar horizontal con 5 etapas: NUEVO (count), CONTACTADO (count), INTERESADO (count, derivado de outreach_events.event_type='replied' >= 1), CITA (count, derivado de event_type='meeting_booked' o equivalente — investigar), CERRADO (count, derivado de outreach_status='WON' o equivalente).",
+        "Cada etapa muestra: número absoluto + % de la etapa anterior (drop-off rate).",
+        "Ventana temporal: últimos 30 días (filtro vía leads.created_at).",
+        "Si una etapa no tiene data clara en BD, muestra '—' en lugar de 0 con tooltip explicando qué falta para empezar a trackearla.",
+        "Build pasa.",
+        "Datos reales — verificable visitando producción y comparando con SELECT count del SQL equivalente."
+      ],
+      "passes": false,
+      "priority": 3
+    },
+    {
+      "id": "US-004",
+      "title": "Predicción 'A este ritmo' — proyección 30 días",
+      "description": "Card pequeño en CockpitView que proyecte linealmente lo que el equipo va a producir en los próximos 30 días basado en los últimos 7. Tres números: leads contactados, replies recibidos, citas agendadas. Es WOW para pitch ('a este ritmo, en un mes tendrás X reuniones') y mantiene a Brian alerta sobre tendencias.",
+      "acceptanceCriteria": [
+        "Card nuevo en CockpitView (o una de las vistas con KPIs) titulado 'Proyección a 30 días · al ritmo actual'.",
+        "Calcula leads_per_day promedio últimos 7 días desde leads.created_at; multiplica × 30. Muestra entero.",
+        "Calcula replies_per_day promedio últimos 7 días desde outreach_events event_type='replied'; multiplica × 30.",
+        "Calcula sent_per_day promedio últimos 7 días desde outreach_events event_type='sent'; multiplica × 30.",
+        "Si los últimos 7 días tienen <3 leads (data insuficiente), muestra fallback 'Necesito más datos para proyectar (mínimo 3 leads/semana)'.",
+        "Las 3 proyecciones se muestran en el card como '420 leads', '21 respuestas', '5 citas' (o lo que dé), con la métrica diaria como subtexto pequeño.",
+        "Build pasa."
+      ],
+      "passes": false,
+      "priority": 4
+    },
+    {
+      "id": "US-005",
+      "title": "Alerta por email a Brian cuando Atlas detecta CRITICAL",
+      "description": "Hoy Atlas alerta a Manager via incident_detected. Manager registra pero Brian no se entera fuera del dashboard. Hay que mandarle email a brian@doublemybookings.com cuando severity=critical. Esto cierra el loop operacional: Brian sabe en su bandeja cuando algo está mal, sin tener que mirar el dashboard.",
+      "acceptanceCriteria": [
+        "Nuevo handler en workers/manager_autonomous.js dentro de processManagerMessage para tipo 'incident_detected' (ya existe — extenderlo, no duplicar): si severity === 'critical', llama a una función nueva sendIncidentEmail(payload).",
+        "sendIncidentEmail vive en lib/incidentAlerter.js — usa nodemailer con SMTP_USER/SMTP_PASS env vars (mismo SMTP que Angela).",
+        "Email enviado a 'brian@doublemybookings.com' con subject 'Empírika · INCIDENT CRITICAL detectado por Atlas' y body en español con: timestamp, summary del payload, lista de impacted_agents, link al dashboard /atlas.",
+        "Anti-spam: usa el mismo fingerprint logic de Atlas — si el último incident_email enviado en agent_state.atlas:last_incident_email_fingerprint coincide y fue hace <60min, NO envía.",
+        "Test deterministic local: `node --input-type=module -e \"import('./lib/incidentAlerter.js').then(m => m.sendIncidentEmail({audit_id: 999, summary: 'TEST · simulación', findings: [{kind: 'process_crashed', agent: 'TestAgent', severity: 'critical', detail: 'simulación de prueba'}], severity: 'critical'}))\"` envía un email real a Brian con el body esperado.",
+        "Si SMTP_USER no está configurado, log un warning y skip (no crashea el handler)."
+      ],
+      "passes": false,
+      "priority": 5
+    },
+    {
+      "id": "US-006",
+      "title": "Tests E2E del outbound loop completo",
+      "description": "Cero coverage hoy en el flow Manager → Sam → outreach_batch_proposal → paid_ads_strategy_ready → Manager. Cuando arreglamos el bug del Manager (commit 016598e) lo validamos con SQL manual. Necesitamos test que asegure que ese flow no se vuelva a romper en futuros commits. Smoke test, no exhaustivo.",
+      "acceptanceCriteria": [
+        "Archivo nuevo tests/smoke_outbound_loop.test.js (Node test runner — ya hay otros smoke_*.js en tests/).",
+        "El test crea un mensaje pending Manager → Sam con type='outreach_batch_proposal' usando un Supabase test client (puede ser SUPABASE_SERVICE_ROLE_KEY del .env local).",
+        "Mock: stubear runtime.run('Sam', ...) para que devuelva 'Strategy mock OK' sin llamar al LLM real.",
+        "Disparar processSamMessage del worker — verificar que: ack se haya llamado con result.persisted=true, agent_state tenga key paid_ads_strategy:{brand_id}, y un nuevo mensaje from='sam' to='manager' type='paid_ads_strategy_ready' aparezca en agent_messages.",
+        "Disparar processManagerMessage sobre ese paid_ads_strategy_ready — verificar que ack se haya llamado con acknowledged=true (NO unknown_message_type).",
+        "Limpieza: borra todos los rows de agent_messages y agent_state que el test creó al final.",
+        "El test corre con `node --test tests/smoke_outbound_loop.test.js` y exit 0.",
+        "El test es self-contained: crea su propio brand_id de test (UUID random), no contamina datos reales de Empírika."
+      ],
+      "passes": false,
+      "priority": 6
+    }
+  ]
+}
