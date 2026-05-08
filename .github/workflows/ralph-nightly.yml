@@ -8,26 +8,29 @@
 # Brian apruebe por la mañana.
 #
 # Trigger:
-#   - Programado: 04:00 UTC (12 AM ET / 1 AM ART)
+#   - Programado: lunes/miércoles/viernes 04:00 UTC (12 AM ET / 1 AM ART)
 #   - Manual: workflow_dispatch desde la pestaña Actions
 #
-# Costo: limitado por max_turns + tope de tiempo del runner GitHub.
-# Aproximado: $5-15 USD por corrida usando Claude Sonnet 4.6.
+# Costo bajo por diseño:
+#   - Modelo: Claude Haiku 4.5 (≈70% más barato que Sonnet 4.6)
+#   - Turnos máx: 40 (cap duro evita gasto desbocado)
+#   - 3 noches/semana en vez de 7
+#   - Estimado: $0.50-$2 USD por corrida → $1.50-$6/semana → ~$10-25/mes
 # ============================================================
 
 name: Ralph nocturno · construir SaaS
 
 on:
   schedule:
-    # 04:00 UTC = 11 PM ET = 1 AM ART. Ajustá la franja horaria
-    # editando este cron — formato POSIX (m h dom mon dow).
-    - cron: '0 4 * * *'
+    # Lunes / Miércoles / Viernes a las 04:00 UTC.
+    # Cron POSIX: m h dom mon dow (dow 0=domingo). 1=Mon, 3=Wed, 5=Fri.
+    - cron: '0 4 * * 1,3,5'
   workflow_dispatch:
     inputs:
       max_turns:
-        description: 'Máximo de turnos de conversación que Ralph puede usar'
+        description: 'Máximo de turnos que Ralph puede usar (cap de costo)'
         required: false
-        default: '60'
+        default: '40'
       story_filter:
         description: 'Si querés que Ralph solo trabaje una historia específica (ej US-007). Vacío = todas.'
         required: false
@@ -96,8 +99,10 @@ jobs:
         uses: anthropics/claude-code-base-action@beta
         with:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
-          model: claude-sonnet-4-6
-          max_turns: ${{ github.event.inputs.max_turns || '60' }}
+          # Haiku 4.5 — ≈70% más barato que Sonnet, suficiente para historias
+          # con acceptance criteria explícitos como las del PRD Sprint 2.
+          model: claude-haiku-4-5-20251001
+          max_turns: ${{ github.event.inputs.max_turns || '40' }}
           allowed_tools: Bash,Read,Write,Edit,Glob,Grep,WebFetch
           prompt: |
             Estás en un GitHub Action corriendo Ralph para el SaaS Empírika.

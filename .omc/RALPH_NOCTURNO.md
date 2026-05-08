@@ -26,7 +26,7 @@ Listo. A partir de la próxima medianoche (UTC), Ralph trabaja solo.
 
 ## Cómo funciona la madrugada
 
-A las **04:00 UTC** (1 AM Argentina, 12 AM Miami):
+**Lunes, miércoles y viernes a las 04:00 UTC** (1 AM Argentina, 12 AM Miami):
 
 1. GitHub levanta una máquina nueva.
 2. Bajá el repo, instala las dependencias.
@@ -42,7 +42,20 @@ A la mañana entrás a tu mail o a GitHub y vas a tener un PR esperando con todo
 
 ## Costo estimado
 
-Cada noche cuesta entre **$5 y $15 USD** dependiendo de cuántas historias avanza. Sale de tu cuenta de Anthropic (no de la suscripción Pro/Max que usás vos). Si querés bajarlo, hay alternativas (Claude Max Proxy que descubrimos antes) — avisame y te lo configuro.
+Configuración actual (Haiku 4.5 + 3 noches/semana + cap 40 turnos):
+
+| Concepto | Estimado |
+|---|---|
+| Por corrida | $0.50 — $2 USD |
+| Por semana (3 corridas) | $1.50 — $6 USD |
+| Por mes | **$10 — $25 USD** |
+
+Si querés bajarlo todavía más:
+
+- **Reducir a 1 noche/semana** (sólo lunes): cambiar el cron en `.github/workflows/ralph-nightly.yml` de `1,3,5` a `1`. Costo cae a ~$3-8/mes.
+- **Claude Max Proxy** (avanzado): si tenés suscripción Claude Pro/Max ($20/mes que ya pagás), hay un proxy que la usa en lugar de pagar API. Costo extra: $0. Riesgo: viola los términos de Anthropic — si te detectan abuso, te suspenden la cuenta. Opción para piloto, no producción.
+
+Para apagar gasto inmediato sin tocar nada: Settings → Actions → **Disable Actions**.
 
 ## Para arrancarlo manualmente sin esperar la noche
 
