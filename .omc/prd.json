@@ -60,7 +60,7 @@
         "Si no hay datos, fallback amistoso 'Empezando a trackear costos — datos disponibles tras la primera operación'.",
         "Test: tests/smoke_cost_tracker.test.js que valida trackCost inserta correctamente."
       ],
-      "passes": false,
+      "passes": true,
       "priority": 3
     },
     {
