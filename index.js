@@ -29,6 +29,7 @@ import { processIdleMagnets } from './lead_magnet_worker.js';
 import { startTranscriptionWorker } from './workers/transcription_worker.js';
 import { dispatchPendingOutreach, dispatchApprovedMultichannel, dispatchApprovedEmail } from './outreach_dispatcher.js';
 import { runEmailEnrichment } from './workers/email_enrichment_worker.js';
+import { syncRepliesToGHL } from './workers/reply_sync_ghl.js';
 import { startManagerDaemon, start as startAutonomyDaemon } from './agents/manager-daemon.js';
 import { runPipelineForBrand, runEnrichForLead } from './workers/pipelineRunner.js';
 import { logOutreachEvent, LEARNING_ENABLED } from './tools/outreachEvents.js';
@@ -1873,6 +1874,14 @@ setInterval(async () => {
   try { await dispatchApprovedEmail(); }
   catch (e) { console.error('Interval error (approved-email):', e.message); }
 }, 10 * 60_000);
+
+// Sprint 2: Reply sync to GHL — every 5 minutes. Watches for 'replied'
+// events and syncs them to GHL as notes + pipeline stage moves. Gated
+// behind GHL_API_KEY and GHL_STAGE_INTERESADO_ID (see workers/reply_sync_ghl.js).
+setInterval(async () => {
+  try { await syncRepliesToGHL(); }
+  catch (e) { console.error('Interval error (reply-sync-ghl):', e.message); }
+}, 5 * 60_000);
 
 // Email enrichment — kickoff inmediato + cada 6 horas
 // Kickoff arranca al boot/redeploy para no esperar 6h tras cada restart.
