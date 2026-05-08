@@ -1,6 +1,6 @@
 import React, { useEffect, useState, useMemo } from 'react';
 import { motion } from 'framer-motion';
-import { ShieldCheck, ShieldAlert, ShieldX, Activity, AlertTriangle, Clock } from 'lucide-react';
+import { ShieldCheck, ShieldAlert, ShieldX, Activity, AlertTriangle, Clock, BookOpenText } from 'lucide-react';
 import { supabaseAuth } from '../lib/supabaseAuthClient';
 
 const BRAND_ID = 'eca1d833-77e3-4690-8cf1-2a44db20dcf8';
@@ -66,6 +66,7 @@ export default function AtlasView() {
   const [audits, setAudits] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+  const [dailyReport, setDailyReport] = useState(null);
 
   useEffect(() => {
     let alive = true;
@@ -87,8 +88,23 @@ export default function AtlasView() {
         if (alive) setLoading(false);
       }
     }
+    async function fetchDailyReport() {
+      try {
+        const { data } = await supabaseAuth
+          .from('agent_state')
+          .select('value, updated_at')
+          .eq('brand_id', BRAND_ID)
+          .eq('agent_name', 'Atlas')
+          .eq('key', 'last_daily_report')
+          .maybeSingle();
+        if (alive && data?.value) setDailyReport(data.value);
+      } catch (_) {
+        // Silent — el card tiene fallback amistoso
+      }
+    }
     fetchAudits();
-    const id = setInterval(fetchAudits, REFRESH_MS);
+    fetchDailyReport();
+    const id = setInterval(() => { fetchAudits(); fetchDailyReport(); }, REFRESH_MS);
     return () => {
       alive = false;
       clearInterval(id);
@@ -128,6 +144,55 @@ export default function AtlasView() {
         <p className="text-sm text-white/50 mt-1">
           El agente Atlas audita continuamente al resto de la flota para garantizar máximo rendimiento
         </p>
+      </motion.div>
+
+      {/* ── Reporte Diario · narrativa que Atlas escribe cada 24h ── */}
+      <motion.div
+        initial={{ opacity: 0, y: -6 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ duration: 0.35 }}
+        className={`${GLASS} p-6 mb-6 relative overflow-hidden`}
+        style={{
+          background: 'linear-gradient(135deg, rgba(167,139,250,0.10) 0%, rgba(255,255,255,0.04) 100%)',
+          borderColor: 'rgba(167,139,250,0.35)',
+        }}
+      >
+        <div className="flex items-start gap-4">
+          <div style={{
+            width: 44, height: 44, borderRadius: '12px',
+            background: 'rgba(167,139,250,0.18)',
+            border: '1px solid rgba(167,139,250,0.40)',
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            flexShrink: 0,
+          }}>
+            <BookOpenText size={20} style={{ color: '#c4b5fd' }} />
+          </div>
+          <div className="flex-1 min-w-0">
+            <div className="flex items-baseline gap-3 flex-wrap mb-2">
+              <div style={{
+                fontSize: '0.66rem', fontWeight: 700, letterSpacing: '0.16em',
+                color: '#c4b5fd', textTransform: 'uppercase',
+              }}>
+                Reporte diario · Atlas
+              </div>
+              {dailyReport?.generated_at && (
+                <div className="text-xs text-white/45">
+                  Actualizado {timeAgo(dailyReport.generated_at)}
+                </div>
+              )}
+            </div>
+            {dailyReport?.narrative ? (
+              <p className="text-sm md:text-[0.95rem] text-white/85 leading-relaxed">
+                {dailyReport.narrative}
+              </p>
+            ) : (
+              <p className="text-sm text-white/55 leading-relaxed">
+                Atlas está acumulando datos. El primer reporte estará disponible en menos de 24 horas.
+                Mientras tanto, podés revisar el estado actual del fleet abajo.
+              </p>
+            )}
+          </div>
+        </div>
       </motion.div>
 
       {loading && <div className="text-white/40 text-sm py-12 text-center">cargando auditorías…</div>}
