@@ -211,6 +211,36 @@ export async function runNightlyAudit({ brandId, client } = {}) {
     }
   });
 
+  // ── 6b. scout_run_count_24h (BK-012, v5 §B.1 #5 reactivated) ─
+  // Counts agent_events rows from scout in the last 24h. Red only when
+  // AUTONOMY_ENABLED=true and count is 0 (scout is supposed to run);
+  // otherwise informational (no autonomy → no scheduled scout runs).
+  await runMetric('scout_run_count_24h', async () => {
+    const { count, error } = await supa
+      .from('agent_events')
+      .select('id', { count: 'exact', head: true })
+      .eq('brand_id', brandId)
+      .eq('agent', 'scout')
+      .gte('created_at', sinceISO(24));
+    if (error) throw error;
+    const value = count ?? 0;
+    const autonomyOn = process.env.AUTONOMY_ENABLED === 'true';
+    let severity;
+    if (autonomyOn) {
+      severity = value >= 3 ? 'green' : value >= 1 ? 'yellow' : 'red';
+    } else {
+      severity = 'green'; // informational only when autonomy is off
+    }
+    await insertRow({
+      metric_name: 'scout_run_count_24h',
+      value,
+      severity,
+      suggested_action: severity === 'red' ? 'INVESTIGATE_SCOUT_LOOP' : null,
+      threshold_hit: severity,
+      details: { autonomy_enabled: autonomyOn },
+    });
+  });
+
   // ── 7. scrapling_latency_p95_24h ─────────────────────────────
   await runMetric('scrapling_latency_p95_24h', async () => {
     const { data, error } = await supa
