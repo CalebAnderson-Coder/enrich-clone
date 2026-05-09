@@ -22,6 +22,7 @@ import { recordAgentEvent } from './lib/agentEventsSink.js';
 import { logOutreachEvent } from './tools/outreachEvents.js';
 import { sendSMS } from './scripts/twilio.js';
 import { ensureLeadMiniAudit, renderHallazgosBlock } from './lib/leadMiniAuditEnricher.js';
+import { enrichLeadEmail, isLeadEmailVerified }      from './lib/emailEnricherCombined.js';
 
 dotenv.config();
 
@@ -360,6 +361,31 @@ export async function dispatchPendingOutreach(opts = {}) {
 
       if (magnetData.magnet_type === 'website_screenshot') {
         try {
+          // ── Pre-send guard: NO mandar a emails no verificados ──
+          // Bloquea el patrón previo "info@dominio adivinado" que nos
+          // costó 8 bounces. Si no está verificado, intenta enriquecer
+          // ahora; si sigue sin haber email real, skip.
+          if (!isLeadEmailVerified(lead)) {
+            const enriched = await enrichLeadEmail({ lead, supabase, log: logger });
+            if (!enriched) {
+              logger.warn('outreach_dispatcher: lead skipped — no verified email after enrichment', {
+                business: lead.business_name, lead_id: lead.id,
+              });
+              await supabase.from('campaign_enriched_data')
+                .update({ outreach_status: 'SKIPPED_NO_VERIFIED_EMAIL' })
+                .eq('id', record.id);
+              stats.skipped++;
+              continue;
+            }
+            // Update local lead reference with the freshly enriched email
+            lead.email = enriched.email;
+            lead.email_address = enriched.email;
+            lead.mega_profile = { ...(lead.mega_profile || {}), email_source: enriched.source };
+            logger.info('outreach_dispatcher: lead enriched on the fly', {
+              business: lead.business_name, source: enriched.source, persona: enriched.persona_name,
+            });
+          }
+
           // ── Sanitize lead data BEFORE prompt injection ──
           const safeLead = sanitizeLeadData(lead);
 

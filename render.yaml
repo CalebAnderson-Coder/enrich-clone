@@ -265,6 +265,36 @@ services:
       - key: FU_MAX_PER_HOUR
         value: "30"
 
+  # ── Email enrichment cron (cascade Hunter → scraping → NO_EMAIL) ──
+  # Cada hora enriquece leads HOT/WARM sin email verificado. Reemplaza
+  # el patrón "guess info@dominio" que generó 8 bounces. Si el cascade
+  # no encuentra email real, marca el lead NO_EMAIL para que el
+  # outreach_dispatcher lo skipee automáticamente.
+  - type: cron
+    name: empirika-email-enrichment
+    env: node
+    region: ohio
+    schedule: "15 * * * *"
+    buildCommand: npm install --include=dev
+    startCommand: node workers/email_enrichment_cron.js
+    envVars:
+      - key: SUPABASE_URL
+        fromService:
+          type: web
+          name: agency-fleet-runtime
+          envVarKey: SUPABASE_URL
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        fromService:
+          type: web
+          name: agency-fleet-runtime
+          envVarKey: SUPABASE_SERVICE_ROLE_KEY
+      - key: HUNTER_API_KEY
+        sync: false
+      - key: BRAND_ID
+        value: "eca1d833-77e3-4690-8cf1-2a44db20dcf8"
+      - key: EMAIL_ENRICH_BATCH
+        value: "25"
+
   # ── Inbox → outreach_events.replied cron ──
   # Cada 5 min se conecta por IMAP al inbox de Empírika, busca emails
   # que sean respuesta a outreach previo, los matchea contra leads via
