@@ -265,6 +265,65 @@ services:
       - key: FU_MAX_PER_HOUR
         value: "30"
 
+  # ── Lead-magnet outreach cron — Ángela autónoma ──
+  # 3 ventanas comerciales por día (9am, 1pm, 5pm ET = 13/17/21 UTC).
+  # Pull HOT leads con email verificado + mini-audit cargado +
+  # outreach_status=PENDING/sin contactar. Para cada uno: Ángela
+  # escribe email lead-magnet, SMTP send, marca lead NUEVO. Caps:
+  # batch_size=5/cycle, daily_cap=15. Lun-vie únicamente.
+  - type: cron
+    name: empirika-lead-magnet
+    env: node
+    region: ohio
+    schedule: "0 13,17,21 * * 1-5"
+    buildCommand: npm install --include=dev
+    startCommand: node workers/lead_magnet_dispatcher.js
+    envVars:
+      - key: SUPABASE_URL
+        fromService:
+          type: web
+          name: agency-fleet-runtime
+          envVarKey: SUPABASE_URL
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        fromService:
+          type: web
+          name: agency-fleet-runtime
+          envVarKey: SUPABASE_SERVICE_ROLE_KEY
+      - key: SMTP_USER
+        fromService:
+          type: web
+          name: agency-fleet-runtime
+          envVarKey: SMTP_USER
+      - key: SMTP_PASS
+        fromService:
+          type: web
+          name: agency-fleet-runtime
+          envVarKey: SMTP_PASS
+      - key: SMTP_FROM_NAME
+        value: "Ángela · Empírika"
+      - key: SMTP_HOST
+        value: smtp.gmail.com
+      - key: SMTP_PORT
+        value: "587"
+      - key: NVIDIA_API_KEY
+        fromService:
+          type: web
+          name: agency-fleet-runtime
+          envVarKey: NVIDIA_API_KEY
+      - key: HUNTER_API_KEY
+        fromService:
+          type: web
+          name: agency-fleet-runtime
+          envVarKey: HUNTER_API_KEY
+      - key: BRAND_ID
+        value: "eca1d833-77e3-4690-8cf1-2a44db20dcf8"
+      - key: LEAD_MAGNET_BATCH_SIZE
+        value: "5"
+      - key: LEAD_MAGNET_DAILY_CAP
+        value: "15"
+      - key: LEAD_MAGNET_REPLY_TO
+        value: "jsanchez@empirikagroup.com"
+
   # ── Email enrichment cron (cascade Hunter → scraping → NO_EMAIL) ──
   # Cada hora enriquece leads HOT/WARM sin email verificado. Reemplaza
   # el patrón "guess info@dominio" que generó 8 bounces. Si el cascade
