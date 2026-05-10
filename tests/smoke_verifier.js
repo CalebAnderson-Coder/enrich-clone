@@ -71,6 +71,7 @@ const leadContext = {
   industry: 'Roofing',
   metro: 'Miami FL',
   tier: 'HOT',
+  brandId: process.env.BRAND_ID || 'eca1d833-77e3-4690-8cf1-2a44db20dcf8', // Empírika fixture
 };
 
 // ── Helpers ────────────────────────────────────────────────────

@@ -653,14 +653,23 @@ export const readBrandProfile = new Tool({
     }
 
     try {
+      // Brand profile data lives in brands.brand_profile (JSONB column),
+      // not in the dropped brand_profiles table (BK-003 / migration 021).
       const { data, error } = await supabase
-        .from('brand_profiles')
-        .select('*')
+        .from('brands')
+        .select('id, name, industry, website, brand_profile')
         .eq('id', brand_id)
         .single();
 
       if (error) return JSON.stringify({ error: error.message });
-      return JSON.stringify(data);
+      const profile = (data && typeof data.brand_profile === 'object') ? data.brand_profile : {};
+      return JSON.stringify({
+        id:       data?.id,
+        name:     data?.name,
+        industry: data?.industry,
+        website:  data?.website,
+        ...profile,
+      });
     } catch (err) {
       return JSON.stringify({ error: err.message });
     }

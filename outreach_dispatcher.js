@@ -445,7 +445,7 @@ Devolvé SOLO un objeto JSON con esta forma exacta (validado con Zod, orden estr
 }
 Reglas: subject 30-60 chars, preview_text 40-90 chars, body min 80 chars, todo en español. En el call_script cada campo SPIN entre 30 y 400 chars, objection_handlers con 2-3 items.`;
           logger.info('Asking Angela for multi-channel 3-touch sequence', { business: lead.business_name });
-          const aiResult = await runtime.run('Angela', prompt, { maxIterations: 3 });
+          const aiResult = await runtime.run('Angela', prompt, { maxIterations: 3, brandId: lead.brand_id });
 
           // ── Parse with new sequence schema, fall back to legacy ──
           let parseResult = AgentRuntime.safeParseLLMOutput(aiResult.response, outreachSequenceSchema);
@@ -487,6 +487,7 @@ Reglas: subject 30-60 chars, preview_text 40-90 chars, body min 80 chars, todo e
                 industry:     lead.industry || '',
                 metro:        lead.metro_area || '',
                 tier:         '',
+                brandId:      lead.brand_id,
               };
               const gateResult = await verifyAndRewrite(draftPayload, leadContext, runtime);
 

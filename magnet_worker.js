@@ -84,7 +84,7 @@ Responde SOLO con el objeto JSON.
 
             // Simulamos a los agentes. Aquí el runtime orquestra al manager y los subagentes.
             // Para asegurar respuesta JSON estricta, enviamos al manager.
-            const resultMsg = await runtime.run([manager], prompt);
+            const resultMsg = await runtime.run([manager], prompt, { brandId: lead.brand_id || lead.leads?.brand_id });
             const rawOutput = resultMsg.content;
             
             let magnetData = {};
