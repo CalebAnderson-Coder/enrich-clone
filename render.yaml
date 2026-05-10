@@ -14,6 +14,10 @@ services:
 
       - key: GEMINI_API_KEY
         sync: false
+      # NVIDIA NIM (LLaMA) primary LLM. Was set manually in Render
+      # dashboard prior to BK-032; declared here so IaC tracks it.
+      - key: NVIDIA_API_KEY
+        sync: false
       - key: GROQ_API_KEY
         sync: false
 

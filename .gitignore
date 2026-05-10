@@ -60,3 +60,15 @@ _mint_magic.mjs
 # Apify sourcing snapshots (raw + filtered JSON dumps from scripts/source_*.js).
 # Generated data — kept locally for review, never committed.
 .omc/research/
+
+# Local Docker volumes (mounted into containers, never tracked)
+.docker-data/
+
+# Benchmark output artifacts (50+ JSON results per run; only the
+# REPORT.md + summary.json are valuable — those are tracked manually).
+experiments/scrapling_bench/results/
+
+# OMC ephemeral session state (Ralph/autopilot/etc.). Plans, audits,
+# and prd-master.json under .omc/ ARE tracked when committed; only the
+# session-scoped state files are ignored.
+.omc/state/
