@@ -342,15 +342,9 @@ services:
     startCommand: node workers/email_enrichment_cron.js
     envVars:
       - key: SUPABASE_URL
-        fromService:
-          type: web
-          name: agency-fleet-runtime
-          envVarKey: SUPABASE_URL
+        sync: false
       - key: SUPABASE_SERVICE_ROLE_KEY
-        fromService:
-          type: web
-          name: agency-fleet-runtime
-          envVarKey: SUPABASE_SERVICE_ROLE_KEY
+        sync: false
       - key: HUNTER_API_KEY
         sync: false
       - key: BRAND_ID

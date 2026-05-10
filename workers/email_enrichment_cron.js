@@ -38,15 +38,19 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 async function pickLeadsToEnrich(supabase) {
   // Pull HOT/WARM leads with website but unverified email source.
-  // Priorize HOT first since they're closest to outreach.
+  // - Excluye los terminales NO_EMAIL/BOUNCED/REJECTED.
+  // - Incluye SENT (necesitan email verificado para futuros toques)
+  //   y outreach_status=NULL (NUEVO leads sin estado todavía).
+  // - Postgres .in() no matchea NULL real, por eso usamos .or() con
+  //   un set de status válidos + NULL explícito.
   const { data: leads, error } = await supabase
     .from('leads')
     .select('id, business_name, website, email_address, email, mega_profile, lead_tier, outreach_status')
     .eq('brand_id', BRAND_ID)
     .not('website', 'is', null)
     .neq('website', '')
-    .in('outreach_status', ['PENDING', 'DRAFT', 'APPROVED', null])
-    .or('lead_tier.eq.HOT,lead_tier.eq.WARM')
+    .in('lead_tier', ['HOT', 'WARM'])
+    .or('outreach_status.is.null,outreach_status.in.(PENDING,DRAFT,APPROVED,SENT,NUEVO,DRAFT_PHONE)')
     .order('lead_tier', { ascending: true })  // HOT before WARM
     .order('qualification_score', { ascending: false, nullsFirst: false })
     .limit(BATCH_SIZE * 3);  // overfetch — filter in JS
