@@ -8,6 +8,7 @@ import { updateJobStatus } from '../lib/supabase.js';
 import { sendEmail } from './email.js';
 import { updateLeadOutreach } from './database.js';
 import { approvalInputSchema } from '../lib/schemas.js';
+import { notifyApprovalRequest } from '../lib/notify.js';
 
 const BASE_URL = process.env.BASE_URL || 'http://localhost:3000';
 
@@ -86,8 +87,17 @@ export const requestApproval = new Tool({
     console.log(`❌ Reject:  ${rejectLink}`);
     console.log(`${'═'.repeat(60)}\n`);
 
-    // TODO: Send actual notification via email/Slack/Telegram
-    // await sendNotification({ type: 'approval_request', job_id, approveLink, rejectLink });
+    // BK-027: Multi-channel notification (lib/notify.js). Channels are
+    // independent — Telegram and Slack only fire when their env vars are
+    // set; console always fires. Fire-and-forget; never blocks the tool
+    // response on a remote API.
+    notifyApprovalRequest({
+      jobId: job_id,
+      contentType: content_type,
+      summary,
+      approveLink,
+      rejectLink,
+    }).catch(err => console.warn(`[approvals] notify failed: ${err.message}`));
 
     return JSON.stringify({
       status: 'AWAITING_APPROVAL',
