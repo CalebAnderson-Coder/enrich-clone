@@ -34,6 +34,7 @@ import { runPipelineForBrand, runEnrichForLead } from './workers/pipelineRunner.
 import { logOutreachEvent, LEARNING_ENABLED } from './tools/outreachEvents.js';
 import crypto from 'crypto';
 import { decodeTrackingToken } from './lib/openTracker.js';
+import { setPanelFieldByLeadId } from './lib/ghlPanelSync.js';
 
 
 import path from 'path';
@@ -391,17 +392,23 @@ app.get('/api/track/open/:trackingId', (req, res) => {
       const ua = String(req.headers['user-agent'] || '').slice(0, 180);
       const ip = (req.headers['x-forwarded-for'] || req.ip || '').toString().split(',')[0].trim();
 
+      const openedAt = new Date().toISOString();
       await supabaseClient.from('outreach_events').insert({
         brand_id: lead.brand_id,
         lead_id,
         channel: 'email',
         event_type: 'opened',
         message_id,
-        occurred_at: new Date().toISOString(),
+        occurred_at: openedAt,
         metadata: { user_agent: ua, ip },
       });
 
       console.info('[tracking pixel] open registered', { lead_id, message_id });
+
+      // Live sync to GHL Cockpit: writes empirika_email_opened_at on the
+      // contact panel so Caleb sees the open in real time. Fire-and-forget.
+      setPanelFieldByLeadId(lead_id, 'empirika_email_opened_at', openedAt)
+        .catch(err => console.warn('[tracking pixel] GHL sync failed', err.message));
     } catch (err) {
       console.error('[tracking pixel] error', err.message);
     }

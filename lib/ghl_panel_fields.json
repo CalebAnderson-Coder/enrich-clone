@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-04-25T10:34:17.227Z",
+  "generated_at": "2026-05-11T17:38:55.628Z",
   "location_id": "uQPxZOmT4zVlMHfOGRw2",
   "fields": {
     "emprika__website_url": {
@@ -71,6 +71,16 @@
       "id": "WhXrbUkaBIocKL3vFV5R",
       "dataType": "TEXT",
       "name": "Empírika · Outreach Path"
+    },
+    "emprika__email_opened_at": {
+      "id": "OsgYJvi1pYU2EJNzss75",
+      "dataType": "DATE",
+      "name": "Empírika · Email Opened At"
+    },
+    "emprika__followup_touch_2_at": {
+      "id": "Zew104lvKdXOFpF6kI9I",
+      "dataType": "DATE",
+      "name": "Empírika · Follow-up Touch 2 At"
     }
   }
 }
