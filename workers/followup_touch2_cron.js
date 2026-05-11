@@ -24,6 +24,7 @@ import nodemailer from 'nodemailer';
 import { AgentRuntime } from '../lib/AgentRuntime.js';
 import { angela } from '../agents/angela.js';
 import { logger } from '../lib/logger.js';
+import { setPanelFieldByLeadId } from '../lib/ghlPanelSync.js';
 
 const BRAND_ID       = process.env.BRAND_ID ?? 'eca1d833-77e3-4690-8cf1-2a44db20dcf8';
 const BATCH_SIZE     = Number(process.env.FU_TOUCH2_BATCH_SIZE ?? 5);
@@ -276,13 +277,14 @@ async function processOneLead(supabase, runtime, smtp, candidate) {
   });
 
   // Registrar evento en outreach_events
+  const sentAt = new Date().toISOString();
   const { error: insertErr } = await supabase.from('outreach_events').insert({
     brand_id: BRAND_ID,
     lead_id: lead.id,
     channel: 'email',
     event_type: 'sent',
     message_id: newMessageId,
-    occurred_at: new Date().toISOString(),
+    occurred_at: sentAt,
     metadata: {
       campaign: 'lead-magnet-followup2',
       followup_touch: 2,
@@ -300,6 +302,14 @@ async function processOneLead(supabase, runtime, smtp, candidate) {
       err: insertErr.message,
     });
   }
+
+  // Live sync to GHL Cockpit: writes empirika_followup_touch_2_at so the
+  // contact panel shows the follow-up timestamp in real time. Fire-and-forget.
+  setPanelFieldByLeadId(lead.id, 'empirika_followup_touch_2_at', sentAt)
+    .catch(err => logger.warn('followup_touch2_cron: GHL panel sync failed', {
+      lead_id: lead.id,
+      err: err.message,
+    }));
 
   return { ok: true, business: lead.business_name, to, subject, messageId: newMessageId };
 }

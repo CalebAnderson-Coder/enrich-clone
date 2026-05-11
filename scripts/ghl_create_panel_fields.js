@@ -52,6 +52,9 @@ const DESIRED_FIELDS = [
   { name: 'Empírika · Attack Angle',        dataType: 'LARGE_TEXT',  fallback: null,   hint: 'empirika_attack_angle' },
   { name: 'Empírika · Last Email Sent At',  dataType: 'DATE',        fallback: 'TEXT', hint: 'empirika_last_email_sent_at' },
   { name: 'Empírika · Outreach Path',       dataType: 'TEXT',        fallback: null,   hint: 'empirika_outreach_path' },
+  // ── Sprint 2026-05-09 additions (pixel tracking + follow-up touch 2) ──
+  { name: 'Empírika · Email Opened At',     dataType: 'DATE',        fallback: 'TEXT', hint: 'empirika_email_opened_at' },
+  { name: 'Empírika · Follow-up Touch 2 At',dataType: 'DATE',        fallback: 'TEXT', hint: 'empirika_followup_touch2_at' },
 ];
 
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
