@@ -33,6 +33,7 @@ import { startManagerDaemon, start as startAutonomyDaemon } from './agents/manag
 import { runPipelineForBrand, runEnrichForLead } from './workers/pipelineRunner.js';
 import { logOutreachEvent, LEARNING_ENABLED } from './tools/outreachEvents.js';
 import crypto from 'crypto';
+import { decodeTrackingToken } from './lib/openTracker.js';
 
 
 import path from 'path';
@@ -337,6 +338,74 @@ app.post('/webhook/twilio-status', async (req, res) => {
     console.error('[Twilio Status Webhook] error:', err.message);
     return res.status(500).json({ error: err.message });
   }
+});
+
+// ============================================================
+// Open tracking pixel — /api/track/open/:trackingId
+// PUBLIC (no auth). Must be registered BEFORE authMiddleware.
+// ============================================================
+
+// 1x1 transparent GIF — used by the lead-magnet open tracking pixel.
+const PIXEL = Buffer.from('R0lGODlhAQABAIAAAP///wAAACH5BAEAAAAALAAAAAABAAEAAAICRAEAOw==', 'base64');
+
+/**
+ * GET /api/track/open/:trackingId
+ * Decodes base64url(leadId|messageId), records the first open event
+ * in outreach_events idempotently, and always returns the 1x1 GIF.
+ * The DB insert is fire-and-forget so the image loads instantly.
+ */
+app.get('/api/track/open/:trackingId', (req, res) => {
+  // Serve the GIF immediately — never block on DB.
+  res.set('Content-Type', 'image/gif');
+  res.set('Cache-Control', 'no-store, no-cache, must-revalidate, max-age=0');
+  res.set('Pragma', 'no-cache');
+  res.set('Expires', '0');
+  res.status(200).end(PIXEL);
+
+  // Fire-and-forget: decode + idempotent insert.
+  (async () => {
+    try {
+      const decoded = decodeTrackingToken(req.params.trackingId);
+      if (!decoded) return; // invalid token — ignore silently
+
+      const { lead_id, message_id } = decoded;
+      if (!supabaseClient) return;
+
+      // Idempotency check: skip if an 'opened' event already exists for this message_id.
+      const { data: existing } = await supabaseClient
+        .from('outreach_events')
+        .select('id')
+        .eq('event_type', 'opened')
+        .eq('message_id', message_id)
+        .maybeSingle();
+      if (existing) return;
+
+      // Resolve brand_id from lead (needed for outreach_events row).
+      const { data: lead } = await supabaseClient
+        .from('leads')
+        .select('brand_id')
+        .eq('id', lead_id)
+        .maybeSingle();
+      if (!lead?.brand_id) return;
+
+      const ua = String(req.headers['user-agent'] || '').slice(0, 180);
+      const ip = (req.headers['x-forwarded-for'] || req.ip || '').toString().split(',')[0].trim();
+
+      await supabaseClient.from('outreach_events').insert({
+        brand_id: lead.brand_id,
+        lead_id,
+        channel: 'email',
+        event_type: 'opened',
+        message_id,
+        occurred_at: new Date().toISOString(),
+        metadata: { user_agent: ua, ip },
+      });
+
+      console.info('[tracking pixel] open registered', { lead_id, message_id });
+    } catch (err) {
+      console.error('[tracking pixel] error', err.message);
+    }
+  })();
 });
 
 app.use('/api', authMiddleware);

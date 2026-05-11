@@ -38,6 +38,7 @@ import { AgentRuntime } from '../lib/AgentRuntime.js';
 import { angela } from '../agents/angela.js';
 import { isLeadEmailVerified } from '../lib/emailEnricherCombined.js';
 import { logger } from '../lib/logger.js';
+import { buildTrackingUrl, wrapTextWithPixel } from '../lib/openTracker.js';
 
 const BRAND_ID         = process.env.BRAND_ID ?? 'eca1d833-77e3-4690-8cf1-2a44db20dcf8';
 const BATCH_SIZE       = Number(process.env.LEAD_MAGNET_BATCH_SIZE ?? 5);
@@ -172,12 +173,16 @@ async function processOneLead(supabase, runtime, smtp, lead) {
     return { ok: true, dryRun: true, business: lead.business_name, to: lead.email_address, subject: draft.subject };
   }
 
+  const trackingUrl = buildTrackingUrl(lead.id, messageId);
+  const html = wrapTextWithPixel(draft.body, trackingUrl);
+
   const sendResult = await smtp.sendMail({
     from: `"${SMTP_FROM_NAME}" <${process.env.SMTP_USER}>`,
     replyTo: REPLY_TO,
     to: lead.email_address,
     subject: draft.subject,
-    text: draft.body,
+    text: draft.body,   // fallback texto plano
+    html,                // versión HTML con pixel
     messageId,
     headers: { 'X-Empirika-Campaign': 'lead-magnet-auto' },
   });

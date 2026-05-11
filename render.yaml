@@ -124,6 +124,8 @@ services:
         value: "true"
       - key: PIXEL_BASE_URL
         sync: false
+      - key: TRACK_BASE_URL
+        value: "https://agency-fleet-runtime.onrender.com"
       - key: GHL_WEBHOOK_SECRET
         sync: false
 
@@ -322,8 +324,61 @@ services:
       - key: BRAND_ID
         value: "eca1d833-77e3-4690-8cf1-2a44db20dcf8"
       - key: LEAD_MAGNET_BATCH_SIZE
-        value: "5"
+        value: "8"
       - key: LEAD_MAGNET_DAILY_CAP
+        value: "25"
+      - key: LEAD_MAGNET_REPLY_TO
+        value: "jsanchez@empirikagroup.com"
+
+  # ── Follow-up touch 2 cron — soft bump del playbook lead-magnet ──
+  # 30 min después de cada ventana lead-magnet (10:30am, 2:30pm,
+  # 6:30pm ET). Detecta leads que recibieron touch 1 hace 72h-7d,
+  # NO respondieron, NO bouncearon, y manda un follow-up corto en
+  # el mismo thread del email original (In-Reply-To + References).
+  - type: cron
+    name: empirika-followup-touch2
+    env: node
+    region: ohio
+    schedule: "30 14,18,22 * * 1-5"
+    buildCommand: npm install --include=dev
+    startCommand: node workers/followup_touch2_cron.js
+    envVars:
+      - key: SUPABASE_URL
+        fromService:
+          type: web
+          name: agency-fleet-runtime
+          envVarKey: SUPABASE_URL
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        fromService:
+          type: web
+          name: agency-fleet-runtime
+          envVarKey: SUPABASE_SERVICE_ROLE_KEY
+      - key: SMTP_USER
+        fromService:
+          type: web
+          name: agency-fleet-runtime
+          envVarKey: SMTP_USER
+      - key: SMTP_PASS
+        fromService:
+          type: web
+          name: agency-fleet-runtime
+          envVarKey: SMTP_PASS
+      - key: SMTP_FROM_NAME
+        value: "Ángela · Empírika"
+      - key: SMTP_HOST
+        value: smtp.gmail.com
+      - key: SMTP_PORT
+        value: "587"
+      - key: NVIDIA_API_KEY
+        fromService:
+          type: web
+          name: agency-fleet-runtime
+          envVarKey: NVIDIA_API_KEY
+      - key: BRAND_ID
+        value: "eca1d833-77e3-4690-8cf1-2a44db20dcf8"
+      - key: FU_TOUCH2_BATCH_SIZE
+        value: "5"
+      - key: FU_TOUCH2_DAILY_CAP
         value: "15"
       - key: LEAD_MAGNET_REPLY_TO
         value: "jsanchez@empirikagroup.com"
