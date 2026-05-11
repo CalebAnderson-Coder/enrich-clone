@@ -1950,13 +1950,20 @@ setInterval(async () => {
   catch (e) { console.error('Interval error (approved-email):', e.message); }
 }, 10 * 60_000);
 
-// Email enrichment — kickoff inmediato + cada 6 horas
-// Kickoff arranca al boot/redeploy para no esperar 6h tras cada restart.
-runEmailEnrichment().catch(e => console.error('Startup error (email enrichment):', e.message));
-setInterval(async () => {
-  try { await runEmailEnrichment(); }
-  catch (e) { console.error('Interval error (email enrichment):', e.message); }
-}, 6 * 60 * 60_000);
+// Email enrichment — MOVIDO a cron separado workers/email_enrichment_cron.js
+// (schedule "15 * * * *" en render.yaml). El kickoff al boot estaba tumbando
+// el web service entero en Render porque runEmailEnrichment → scraplingFetch
+// → spawn(python) y Python no existe en Render Node containers. Esa cadena
+// rompió 5 servicios simultáneamente el 2026-05-10 (incluido este web
+// service y los 4 workers que heredan env vars vía fromService).
+// El cron horario hace exactamente lo mismo SIN bloquear el boot.
+if (process.env.LEGACY_BOOT_ENRICHMENT === 'true') {
+  runEmailEnrichment().catch(e => console.error('Startup error (email enrichment):', e.message));
+  setInterval(async () => {
+    try { await runEmailEnrichment(); }
+    catch (e) { console.error('Interval error (email enrichment):', e.message); }
+  }, 6 * 60 * 60_000);
+}
 
 startTranscriptionWorker();
 
