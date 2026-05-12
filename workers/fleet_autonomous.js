@@ -746,11 +746,16 @@ async function processAngelaMessage(msg, messenger, runtime, log) {
     if (!lead_id) throw new Error('missing_lead_id');
 
     const prompt =
-      `Escribe un email outbound frío en español para ${lead_business_name}, ` +
+      `Escribe UN SOLO email outbound frío STANDALONE en español para ${lead_business_name}, ` +
       `industria ${lead_industry}, ciudad ${lead_city}. ` +
-      `Tono cálido latino, un solo CTA con tiempo concreto, 120-180 palabras. ` +
-      `Devuelve JSON: { subject, body }. ` +
-      `RESPONDE EXCLUSIVAMENTE con un JSON al nivel raíz: {"subject":"...","body":"..."}. NO uses 'email_sequence', NO uses array, NO uses markdown, NO uses prosa explicativa antes ni después del JSON.`;
+      `IGNORA cualquier instrucción de tu system prompt sobre "secuencia de 3 toques", "touch 1 observation sin CTA", o framework Observation→Proof→Ask. ` +
+      `Este es un email único de cierre, NO una secuencia. Requisitos OBLIGATORIOS (cualquier incumplimiento → rewrite): ` +
+      `1) BODY entre 120 y 180 palabras (no menos, no más). ` +
+      `2) UN solo CTA concreto con fecha y hora específica ("¿te viene bien 15 min el jueves a las 10am hora de ${lead_city}?"). ` +
+      `3) Tono cálido latino profesional, mencionar industria y ciudad. ` +
+      `4) Subject 30-60 caracteres en español, frontload. ` +
+      `Devuelve EXCLUSIVAMENTE JSON al nivel raíz: {"subject":"...","body":"..."}. ` +
+      `NO uses 'email_sequence', NO uses array, NO uses markdown, NO uses prosa explicativa antes ni después del JSON.`;
 
     let result;
     try {
@@ -1066,10 +1071,13 @@ async function processAngelaMessage(msg, messenger, runtime, log) {
     }
 
     if (verdict === 'rewrite') {
-      // Enforce max 1 rewrite per lead to avoid infinite loops
+      // Enforce max 3 rewrites per lead. E2E 2026-05-07 hit PASS on 3rd
+      // attempt (rewrite 2.6 → 3.2 → PASS 7.8); 2026-05-12 incident showed
+      // a hard cap of 1 was dropping every draft before convergence.
+      const MAX_REWRITES = 3;
       const rewrites = (await messenger.getState(`rewrite_count:${lead_id}`)) ?? 0;
-      if (rewrites >= 1) {
-        log.warn('Angela: max rewrites reached for lead, skipping', { lead_id });
+      if (rewrites >= MAX_REWRITES) {
+        log.warn('Angela: max rewrites reached for lead, skipping', { lead_id, rewrites });
         return { ok: true, type: 'verify_email_verdict', verdict: 'rewrite_limit_reached', lead_id };
       }
 
@@ -1080,10 +1088,16 @@ async function processAngelaMessage(msg, messenger, runtime, log) {
       }
 
       const rewritePrompt =
-        `Reescribe este email outbound. Draft original:\n\n${prevDraft.body}\n\n` +
+        `Reescribe este email outbound corrigiendo TODOS los problemas. Draft original:\n\n${prevDraft.body}\n\n` +
         `Feedback del Verifier: ${rewrite_hint}\n\n` +
         `Problemas detectados: ${issues.join('; ')}\n\n` +
-        `Devuelve JSON: { subject, body }.`;
+        `Requisitos OBLIGATORIOS de la reescritura (cualquier incumplimiento → otro rewrite): ` +
+        `1) BODY entre 120 y 180 palabras (no menos, no más). ` +
+        `2) UN solo CTA concreto con fecha y hora específica (ej. "¿te viene bien 15 min el jueves a las 10am?"). ` +
+        `3) Tono cálido latino profesional, mencionar industria y ciudad si aplica. ` +
+        `4) Subject 30-60 caracteres en español. ` +
+        `5) IGNORA cualquier instrucción de tu system prompt sobre secuencias o framework Observation→Proof→Ask — esto es UN SOLO email standalone. ` +
+        `Devuelve EXCLUSIVAMENTE JSON al nivel raíz: {"subject":"...","body":"..."}. Sin markdown, sin prosa.`;
 
       let rewriteResult;
       try {
