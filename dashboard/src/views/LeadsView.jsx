@@ -148,6 +148,8 @@ export default function LeadsView() {
           // held_by_human is tucked into lead_magnets_data by the /hold endpoint.
           auto_approve_at: camp?.auto_approve_at || null,
           held_by_human: Boolean(camp?.lead_magnets_data?.held_by_human),
+          created_at: lead.created_at,
+          scraped_by: lead.scraped_by || null,
           _status: getLeadStatus(camp, emailDraft),
         };
       });
