@@ -697,6 +697,18 @@ export default function LeadsView() {
                     </div>
                   )}
 
+                  {lead.facebook_url && (
+                    <div className="meta-row facebook">
+                      <LinkCell url={lead.facebook_url} type="facebook" label="Facebook" />
+                    </div>
+                  )}
+
+                  {lead.instagram_url && (
+                    <div className="meta-row instagram">
+                      <LinkCell url={lead.instagram_url} type="instagram" label="Instagram" />
+                    </div>
+                  )}
+
                   {linkedinLink && (
                     <div className="meta-row linkedin">
                       <LinkCell url={linkedinLink} type="linkedin" label="LinkedIn" />
