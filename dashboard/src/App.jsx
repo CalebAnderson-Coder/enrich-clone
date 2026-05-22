@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, Suspense } from 'react';
 import {
   MessageSquare, User, Calendar, Megaphone, Activity, FileText,
   Settings, Search, PlusCircle, CheckCircle, XCircle, Loader2, Send, LogOut,
@@ -6,26 +6,28 @@ import {
 } from 'lucide-react';
 // import { motion, AnimatePresence } from 'framer-motion';
 
-// Import Views
-import PerformanceView from './views/PerformanceView';
-import CalendarView from './views/CalendarView';
-import IntegrationsView from './views/IntegrationsView';
-import FilesView from './views/FilesView';
-import ProfileView from './views/ProfileView';
-import HistoryView from './views/HistoryView';
-import LeadsView from './views/LeadsView';
-import CampaignView from './views/CampaignView';
-import CockpitView from './views/CockpitView';
-import GHLView from './views/GHLView';
-import NewsroomView from './views/NewsroomView';
-import HeartbeatWallView from './views/HeartbeatWallView';
-import PipelineFlowView from './views/PipelineFlowView';
-import QualityTrendView from './views/QualityTrendView';
-import AtlasView from './views/AtlasView';
-import RepliesInboxView from './views/RepliesInboxView';
+// Import Views — Critical path (synchronous)
 import LoginView from './views/LoginView';
+import CockpitView from './views/CockpitView';
 import { useAuth } from './components/AuthProvider';
 import { apiGet, apiPost } from './lib/apiClient';
+
+// Lazy-loaded secondary views
+const PerformanceView = React.lazy(() => import('./views/PerformanceView'));
+const CalendarView = React.lazy(() => import('./views/CalendarView'));
+const IntegrationsView = React.lazy(() => import('./views/IntegrationsView'));
+const FilesView = React.lazy(() => import('./views/FilesView'));
+const ProfileView = React.lazy(() => import('./views/ProfileView'));
+const HistoryView = React.lazy(() => import('./views/HistoryView'));
+const LeadsView = React.lazy(() => import('./views/LeadsView'));
+const CampaignView = React.lazy(() => import('./views/CampaignView'));
+const GHLView = React.lazy(() => import('./views/GHLView'));
+const NewsroomView = React.lazy(() => import('./views/NewsroomView'));
+const HeartbeatWallView = React.lazy(() => import('./views/HeartbeatWallView'));
+const PipelineFlowView = React.lazy(() => import('./views/PipelineFlowView'));
+const QualityTrendView = React.lazy(() => import('./views/QualityTrendView'));
+const AtlasView = React.lazy(() => import('./views/AtlasView'));
+const RepliesInboxView = React.lazy(() => import('./views/RepliesInboxView'));
 
 function App() {
   const { session, loading: authLoading, signOut } = useAuth();
@@ -184,24 +186,33 @@ function AppAuthed({ signOut }) {
     </div>
   );
 
+  const SuspenseFallback = () => (
+    <div className="flex-1 overflow-y-auto h-full flex items-center justify-center bg-surface-950">
+      <div className="flex flex-col items-center gap-3">
+        <Loader2 size={28} className="animate-spin text-primary-400" />
+        <span className="text-sm font-medium text-surface-400">cargando…</span>
+      </div>
+    </div>
+  );
+
   const renderMainContent = () => {
     switch (currentView) {
       case 'cockpit': return <div className="flex-1 overflow-y-auto h-full"><CockpitView /></div>;
-      case 'newsroom': return <div className="flex-1 overflow-y-auto h-full p-6"><NewsroomView /></div>;
-      case 'heartbeat': return <div className="flex-1 overflow-y-auto h-full p-6"><HeartbeatWallView /></div>;
-      case 'pipeline': return <div className="flex-1 overflow-y-auto h-full p-6"><PipelineFlowView /></div>;
-      case 'quality': return <div className="flex-1 overflow-y-auto h-full p-6"><QualityTrendView /></div>;
-      case 'atlas': return <div className="flex-1 overflow-y-auto h-full"><AtlasView /></div>;
-      case 'replies': return <div className="flex-1 overflow-y-auto h-full"><RepliesInboxView /></div>;
-      case 'ghl': return <div className="flex-1 overflow-y-auto h-full"><GHLView /></div>;
-      case 'leads': return <div className="flex-1 overflow-y-auto h-full"><LeadsView /></div>;
-      case 'performance': return <div className="flex-1 overflow-y-auto h-full"><PerformanceView /></div>;
-      case 'campaign': return <div className="flex-1 overflow-y-auto h-full"><CampaignView /></div>;
-      case 'calendar': return <div className="flex-1 overflow-y-auto h-full"><CalendarView /></div>;
-      case 'files': return <div className="flex-1 overflow-y-auto h-full"><FilesView /></div>;
-      case 'profile': return <div className="flex-1 overflow-y-auto h-full"><ProfileView /></div>;
-      case 'integrations': return <div className="flex-1 overflow-y-auto h-full"><IntegrationsView /></div>;
-      case 'history': return <div className="flex-1 overflow-y-auto h-full"><HistoryView /></div>;
+      case 'newsroom': return <Suspense fallback={<SuspenseFallback />}><div className="flex-1 overflow-y-auto h-full p-6"><NewsroomView /></div></Suspense>;
+      case 'heartbeat': return <Suspense fallback={<SuspenseFallback />}><div className="flex-1 overflow-y-auto h-full p-6"><HeartbeatWallView /></div></Suspense>;
+      case 'pipeline': return <Suspense fallback={<SuspenseFallback />}><div className="flex-1 overflow-y-auto h-full p-6"><PipelineFlowView /></div></Suspense>;
+      case 'quality': return <Suspense fallback={<SuspenseFallback />}><div className="flex-1 overflow-y-auto h-full p-6"><QualityTrendView /></div></Suspense>;
+      case 'atlas': return <Suspense fallback={<SuspenseFallback />}><div className="flex-1 overflow-y-auto h-full"><AtlasView /></div></Suspense>;
+      case 'replies': return <Suspense fallback={<SuspenseFallback />}><div className="flex-1 overflow-y-auto h-full"><RepliesInboxView /></div></Suspense>;
+      case 'ghl': return <Suspense fallback={<SuspenseFallback />}><div className="flex-1 overflow-y-auto h-full"><GHLView /></div></Suspense>;
+      case 'leads': return <Suspense fallback={<SuspenseFallback />}><div className="flex-1 overflow-y-auto h-full"><LeadsView /></div></Suspense>;
+      case 'performance': return <Suspense fallback={<SuspenseFallback />}><div className="flex-1 overflow-y-auto h-full"><PerformanceView /></div></Suspense>;
+      case 'campaign': return <Suspense fallback={<SuspenseFallback />}><div className="flex-1 overflow-y-auto h-full"><CampaignView /></div></Suspense>;
+      case 'calendar': return <Suspense fallback={<SuspenseFallback />}><div className="flex-1 overflow-y-auto h-full"><CalendarView /></div></Suspense>;
+      case 'files': return <Suspense fallback={<SuspenseFallback />}><div className="flex-1 overflow-y-auto h-full"><FilesView /></div></Suspense>;
+      case 'profile': return <Suspense fallback={<SuspenseFallback />}><div className="flex-1 overflow-y-auto h-full"><ProfileView /></div></Suspense>;
+      case 'integrations': return <Suspense fallback={<SuspenseFallback />}><div className="flex-1 overflow-y-auto h-full"><IntegrationsView /></div></Suspense>;
+      case 'history': return <Suspense fallback={<SuspenseFallback />}><div className="flex-1 overflow-y-auto h-full"><HistoryView /></div></Suspense>;
       case 'chat':
       default:
         return (

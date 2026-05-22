@@ -1,0 +1,36 @@
+# Ralph Progress — Sprint 2 (2026-05-22)
+
+## US-007: Lazy-load de vistas pesadas [BLOQUEADO]
+
+**Status:** Implementación completada, pero **build fallido** por restricción de ambiente.
+
+**Cambios realizados:**
+- Convertí 15 vistas de imports estáticos a React.lazy() en dashboard/src/App.jsx:
+  - NewsroomView, HeartbeatWallView, PipelineFlowView, QualityTrendView, AtlasView, 
+    RepliesInboxView, GHLView, LeadsView, PerformanceView, CampaignView, CalendarView,
+    FilesView, ProfileView, IntegrationsView, HistoryView
+- Agregué Suspense wrapper con fallback "cargando…" para cada vista lazy-loaded
+- LoginView y CockpitView se mantienen síncronos (críticas para el pitch)
+
+**Problema bloqueante:**
+```
+Node.js v18.20.8 — Vite requiere v20.19+ o v22.12+
+Error: CustomEvent is not defined (incompatibilidad de Vite 8.0.4 con Node 18)
+```
+
+**Razón del bloqueo:**
+Este es un GitHub Action que usa node:18 en el runner. El package.json de Vite 8.0.4
+asume Node.js moderno (20+). Sin upgradear el runner de GitHub Actions, `npm run build`
+no puede completarse.
+
+**Resolución requerida:**
+- Brian debe upgradear el runner de GitHub Actions a Node.js 20+, O
+- Downgradear Vite a versión compatible con Node 18 (Vite 5.x), O  
+- Ejecutar Ralph en un runner local con Node.js 20+
+
+**Estado final de App.jsx:**
+✓ Código syntácticamente correcto
+✓ Todos los imports tienen default exports verificados
+✗ Build no puede ejecutarse por restricción de Node.js
+
+Próxima historia a trabajar: US-008 (que tiene dependencias de backend, no vite)
