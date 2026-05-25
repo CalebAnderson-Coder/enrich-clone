@@ -90,6 +90,8 @@ export function getMockStats() {
       tokens_in: 120000 + Math.floor(Math.random() * 5000),
       tokens_out: 35000 + Math.floor(Math.random() * 2000),
       estimated_usd: 0.42 + Math.random() * 0.1,
+      total_month_usd: 45.32 + Math.random() * 15,
+      avg_per_lead_usd: 0.31 + Math.random() * 0.08,
     },
     memory: {
       total_rows: 37 + Math.floor(Math.random() * 2),

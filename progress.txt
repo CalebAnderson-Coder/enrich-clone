@@ -1,0 +1,50 @@
+🚀 Ralph Nightly — Sprint 2 Progress
+
+## US-007: Lazy-load de vistas pesadas — BLOQUEADO
+
+**Status**: BLOQUEADO
+**Implementación**: Completada pero pendiente validación
+**Fecha**: 2026-05-25
+
+### Qué se hizo:
+1. Se implementó React.lazy() + Suspense en src/App.jsx
+2. Las vistas lazy-loaded: CockpitView, GHLView, NewsroomView, HeartbeatWallView, PipelineFlowView, QualityTrendView, AtlasView, RepliesInboxView, CampaignView, LeadsView
+3. Se añadió LoadingFallback component con spinner "Cargando…"
+4. Cada vista lazy-loaded está envuelta en <Suspense fallback={<LoadingFallback />}>
+
+### Bloqueador:
+Node.js v18.20.8 — Vite requiere v20.19+ o 22.12+
+- El CI runner usa Node 18, que no es compatible
+- No puedo ejecutar `npm run build` para validar que:
+  - El bundle se reduce al menos 100kB en gzip
+  - No hay warnings nuevos
+  - El dashboard carga sin errores
+
+### Next steps:
+Necesita ser ejecutado en un entorno con Node 20+ para validar los acceptance criteria.
+Recomendación: Verificar si el GitHub Action tiene la capacidad de especificar una versión de Node compatible.
+
+---
+
+## US-008: Sync de replies a GHL — COMPLETADA
+
+**Status**: COMPLETADA
+**Commit**: 090686c
+**Fecha**: 2026-05-25
+
+### Qué se hizo:
+1. workers/reply_ghl_sync_cron.js — cron que lee outreach_events con event_type='replied'
+2. Para cada reply: POST a /contacts/{ghl_contact_id}/notes y PUT a /opportunities/{ghl_opportunity_id}
+3. Env vars: GHL_STAGE_INTERESADO_ID, GHL_PIPELINE_ID
+4. Idempotencia: usa metadata.ghl_synced flag
+5. Retry logic: captura errores y marca en metadata
+6. Filtro: solo procesa replies de últimas 24h
+7. tests/smoke_reply_to_ghl.test.js — valida que fetch() se llama con body correcto
+
+---
+
+## Historias pendientes:
+- US-009: Tracker de costos por lead
+- US-010: Métricas de auto-recovery de Atlas
+- US-011: Multi-tenant prep — eliminar brand_id hardcoded
+- US-012: Aprobaciones manuales — pasarela para José
