@@ -35,6 +35,7 @@ import { logOutreachEvent, LEARNING_ENABLED } from './tools/outreachEvents.js';
 import crypto from 'crypto';
 import { decodeTrackingToken } from './lib/openTracker.js';
 import { setPanelFieldByLeadId } from './lib/ghlPanelSync.js';
+import { syncRepliesToGHL } from './workers/reply_to_ghl_sync.js';
 
 
 import path from 'path';
