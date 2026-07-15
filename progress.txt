@@ -1,0 +1,26 @@
+RALPH NIGHTLY - Progress Report
+================================
+
+## US-007: Lazy-load de vistas pesadas — reducir bundle inicial
+**Status**: BLOCKED
+**Reason**: Environment constraint — Node.js v18.20.8 in GitHub Actions
+
+### Issue:
+The GitHub Actions runner has Node v18.20.8, but:
+- Vite 8.x requires Node 20.19+ or 22.12+
+- react-router-dom@7 requires Node 20+
+- Cannot execute: `cd dashboard && npm run build`
+
+### Why this matters for Lazy-load:
+To verify the bundle reduction (goal: 213kB gzipped → <115kB), must:
+1. Build with vite (requires Node 20+)
+2. Measure dist/assets/index-*.js size
+3. Verify 100kB+ reduction in gzip
+
+### Solution required:
+Update GitHub Actions Node version from 18.20.8 to 20.x or 22.x in .github/workflows/ralph-nightly.yml
+
+---
+
+## Next story to work: US-008
+Cannot proceed until Node 20+ is available in the runner.

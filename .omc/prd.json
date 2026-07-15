@@ -28,7 +28,8 @@
         "El warning de chunk size de Vite desaparece o reduce significativamente."
       ],
       "passes": false,
-      "priority": 1
+      "priority": 1,
+      "_note_blocked": "BLOQUEADO: GitHub Actions Node v18.20.8 < requerido (20.19+). No se puede ejecutar npm run build. Ver progress.txt."
     },
     {
       "id": "US-008",
