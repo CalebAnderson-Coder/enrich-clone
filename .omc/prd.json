@@ -43,7 +43,7 @@
         "El cron NO procesa replies de más de 24h (evitar backfill masivo).",
         "Cleanup: borra los rows de prueba al final."
       ],
-      "passes": false,
+      "passes": true,
       "priority": 2
     },
     {
